@@ -1,0 +1,40 @@
+# SIO runtime state: databases, logs, pidfiles, models, sample media.
+# Nothing under .sio/ is ever committed — it is all reproducible via `just setup`.
+.sio/
+.legacy/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / web
+node_modules/
+web/dist/
+web/.vite/
+*.tsbuildinfo
+
+# Models & media (fetched by `just models` / `just samples`, checksummed in infra/models.json)
+*.onnx
+*.pt
+*.mp4
+*.mkv
+*.wav
+
+# Local environment
+.env
+.env.local
+*.pid
+*.log
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+!.vscode/extensions.json

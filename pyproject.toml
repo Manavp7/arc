@@ -1,0 +1,48 @@
+[project]
+name = "sio"
+version = "0.1.0"
+description = "Spatial Intelligence OS — an AI operating system for the physical world"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = { text = "Apache-2.0" }
+
+# The workspace root is a virtual project: it installs every workspace member into a
+# single dev environment. Production/per-service isolation is still available via
+# `uv sync --package sio-perception` (see docs/DEPLOYMENT.md).
+dependencies = [
+    "sio-schemas",
+    "sio-core",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["libs/*", "services/*"]
+
+[tool.uv.sources]
+sio-schemas = { workspace = true }
+sio-core = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4",
+    "pytest-asyncio>=1.0",
+    "pytest-cov>=6.0",
+    "ruff>=0.9",
+    "mypy>=1.14",
+    "types-pyyaml",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q --strict-markers"
+markers = [
+    "infra: requires live infrastructure (postgres/redis/neo4j/minio); set SIO_TEST_INFRA=1",
+    "e2e: end-to-end scenario test; boots the pipeline",
+    "models: requires ONNX model weights in .sio/models",
+    "eval: quality/accuracy evaluation harness, not a pass/fail gate",
+]
+filterwarnings = ["error::DeprecationWarning:sio_.*"]

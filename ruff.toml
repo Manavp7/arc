@@ -1,0 +1,36 @@
+target-version = "py312"
+line-length = 100
+extend-exclude = [".sio", ".legacy", "web", "sdk/ts"]
+
+[lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "C4",   # comprehensions
+    "SIM",  # simplify
+    "RUF",  # ruff-specific
+    "ASYNC",
+    "PTH",  # use pathlib
+    "TID",  # tidy imports
+]
+ignore = [
+    "E501",   # line length is handled by the formatter
+    "B008",   # FastAPI Depends() in defaults is idiomatic
+    "N818",   # exception naming
+]
+
+[lint.per-file-ignores]
+"tests/**" = ["N802", "N803", "SIM117"]
+"scripts/**" = ["T201"]  # scripts are allowed to print
+
+[lint.isort]
+known-first-party = ["sio_schemas", "sio_core", "sio_sdk"]
+
+[format]
+quote-style = "double"
+indent-style = "space"
