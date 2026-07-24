@@ -1,0 +1,41 @@
+{
+  "comment": "Expected SHA256 for every model file fetched by scripts/fetch_models.py. A mismatch means a truncated download or a re-published asset; either way the model is not the one this code was written against.",
+  "models": {
+    "clip-text.onnx": {
+      "sha256": "18845f2ccc35223bb7fec403383a131154b11ac0918df25cf51986df5efd3a21",
+      "bytes": 64070791,
+      "url": "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/text_model_int8.onnx",
+      "licence": "MIT (OpenAI CLIP weights, Xenova ONNX export)"
+    },
+    "clip-tokenizer.json": {
+      "sha256": "f7f3b7af117d467b58374797691a6438d3e6b9e9cef800dfd5dced7f697a90cd",
+      "bytes": 2224119,
+      "url": "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/tokenizer.json",
+      "licence": "MIT"
+    },
+    "clip-vision.onnx": {
+      "sha256": "0ab0c1b3ace708e539633af1744d5a95247fe4e14d3e08ff197ef82a6cb9bd93",
+      "bytes": 88648877,
+      "url": "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/vision_model_int8.onnx",
+      "licence": "MIT (OpenAI CLIP weights, Xenova ONNX export)"
+    },
+    "yolo26n-reid.onnx": {
+      "sha256": "8529c383197ae4c468eda535d1b165f8b4162cf17bf5fbcff49c7cb6455bc0bb",
+      "bytes": 9873245,
+      "url": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n-reid.onnx",
+      "licence": "AGPL-3.0 (Ultralytics)"
+    },
+    "yolo26n-seg.onnx": {
+      "sha256": "711e0ef837c677ae4006f65fe503a62a6b0529979f4828ed50b674a7482b7d2e",
+      "bytes": 11218582,
+      "url": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n-seg.onnx",
+      "licence": "AGPL-3.0 (Ultralytics)"
+    },
+    "yolo26n.onnx": {
+      "sha256": "2e947b787d9e787b93a16772a5f55b1d4d8c4d86f53146149c5d6a642442d6f7",
+      "bytes": 9941957,
+      "url": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.onnx",
+      "licence": "AGPL-3.0 (Ultralytics)"
+    }
+  }
+}

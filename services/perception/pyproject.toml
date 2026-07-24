@@ -1,0 +1,36 @@
+[project]
+name = "sio-perception"
+version = "0.1.0"
+description = "SIO vision engine: ONNX detection, segmentation, ReID, OCR (PRD M3)"
+requires-python = ">=3.12,<3.14"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "sio-core",
+    "sio-schemas",
+    # The entire perception stack is onnxruntime + opencv. No torch, no paddle, no tensorflow:
+    # Ultralytics publishes pre-exported ONNX weights, so the GPU path is an execution-provider
+    # string rather than a different dependency tree. See docs/MODELS.md.
+    "onnxruntime>=1.20",
+    "opencv-python-headless>=4.10",
+    "pillow>=11.0",
+    "numpy>=2.0",
+]
+
+[project.optional-dependencies]
+# Plate and container-ID reading. RapidOCR is ONNX-based; PaddleOCR would pull in PaddlePaddle.
+ocr = ["rapidocr>=3.0"]
+# AudioSet sound-event detection (gunshot, glass, scream). Off by default.
+audio = ["librosa>=0.10"]
+# GPU inference: same .onnx files, different execution provider.
+gpu = ["onnxruntime-gpu>=1.20"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sio_perception"]
+
+[tool.uv.sources]
+sio-core = { workspace = true }
+sio-schemas = { workspace = true }

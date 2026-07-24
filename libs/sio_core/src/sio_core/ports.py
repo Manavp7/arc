@@ -14,10 +14,11 @@ first needs them, so their signatures are designed against a real caller rather 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
-from sio_schemas import BusMessage, Entity, Relationship, SioModel
+from sio_schemas import BBox, BusMessage, Entity, Relationship, SioModel
 
 
 @runtime_checkable
@@ -270,3 +271,73 @@ class BlobStore(Pingable, Closeable, Protocol):
     def url_for(self, key: str) -> str:
         """A URL the UI can fetch. May be presigned, may be an API proxy path."""
         ...
+
+
+# ---------------------------------------------------------------------------- vision
+@dataclass(frozen=True)
+class VisionResult:
+    """One thing a model found in one image.
+
+    Deliberately *not* a :class:`~sio_schemas.Detection`. A detector knows about pixels and classes;
+    it does not know the observation id, the source id or the tenant. Keeping the envelope out of the
+    port means a detector can be tested with an image and a list of expected boxes, with no bus, no
+    ids and no clock.
+    """
+
+    label: str
+    confidence: float
+    bbox: BBox
+    mask_rle: str | None = None
+    """Run-length-encoded instance mask, when the model produces one."""
+    embedding: tuple[float, ...] | None = None
+    """Appearance vector for re-identification, when computed."""
+    attrs: dict[str, Any] = field(default_factory=dict)
+    """Model extras: OCR text, pose label, per-class scores, heuristic diagnostics."""
+
+
+@runtime_checkable
+class Detector(Protocol):
+    """Turns an image into structured detections (PRD M3).
+
+    Implementations live in the service that owns them (``services/perception/detectors``), not in
+    this library: a detector is perception's business, and the seam the *platform* depends on is the
+    ``detections`` bus topic, not a Python import. What lives here is the shared vocabulary, so the
+    tracking eval harness and the copilot can talk about detections without importing perception.
+    """
+
+    name: str
+    """Identifier recorded on every detection, so an explanation can name the model."""
+
+    def detect(self, image: Any) -> list[VisionResult]:
+        """Detect objects in a BGR image array (OpenCV convention)."""
+        ...
+
+    def warmup(self) -> None:
+        """Run one dummy inference so the first real frame is not the slow one."""
+        ...
+
+    def close(self) -> None: ...
+
+
+@runtime_checkable
+class Embedder(Protocol):
+    """Projects images and text into one shared vector space.
+
+    Shared rather than service-local because two services need it: ``perception`` embeds frames as
+    they arrive, and ``worldmodel`` embeds the *query* when someone searches. If they used different
+    models the vectors would be incomparable and semantic search would return noise, so there is one
+    implementation behind one port.
+    """
+
+    dim: int
+    name: str
+
+    def embed_image(self, image: Any) -> list[float]:
+        """Embed a BGR image array."""
+        ...
+
+    def embed_text(self, text: str) -> list[float]:
+        """Embed a natural-language string into the same space as :meth:`embed_image`."""
+        ...
+
+    def close(self) -> None: ...
