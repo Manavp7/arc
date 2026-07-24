@@ -126,12 +126,24 @@ export const useSioStore = create<SioState>((set) => ({
     }),
 }));
 
-/** Entities that have a position, as an array — the shape deck.gl layers want. */
-export const selectPositionedEntities = (state: SioState): Entity[] =>
-  [...state.entities.values()].filter((entity) => entity.state.geo != null);
+/**
+ * Derivations — plain functions over data, **not** zustand selectors.
+ *
+ * This distinction is load-bearing. Zustand 5 compares snapshots by reference identity, so a
+ * selector like `state => [...state.entities.values()].filter(...)` returns a fresh array on every
+ * read, React sees a changed snapshot every time it checks, and the result is
+ * "Maximum update depth exceeded" — an infinite render loop that unmounts the whole tree and leaves
+ * a blank page. (That is exactly what happened here, and with no error boundary the entire console
+ * rendered as one flat dark rectangle.)
+ *
+ * The rule that avoids it: subscribe to *stored* values only (`state.entities`, `state.alerts` —
+ * whose references change only when the data does), then derive inside a `useMemo`.
+ */
+export const positionedEntities = (entities: Map<string, Entity>): Entity[] =>
+  [...entities.values()].filter((entity) => entity.state.geo != null);
 
-export const selectOpenAlerts = (state: SioState): Alert[] =>
-  state.alerts.filter((alert) => alert.state === "open" || alert.state === "escalated");
+export const openAlerts = (alerts: Alert[]): Alert[] =>
+  alerts.filter((alert) => alert.state === "open" || alert.state === "escalated");
 
-export const selectPendingDecisions = (state: SioState): Decision[] =>
-  state.decisions.filter((decision) => decision.approval === "pending");
+export const pendingDecisions = (decisions: Decision[]): Decision[] =>
+  decisions.filter((decision) => decision.approval === "pending");

@@ -8,11 +8,12 @@
  * Phase 1 wires the map, the event feed and the connection state. Later phases fill the rail.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { LiveMap } from "./components/LiveMap";
 import { api } from "./lib/api";
 import { connectStream } from "./lib/stream";
-import { selectOpenAlerts, useSioStore } from "./store";
+import { openAlerts, useSioStore } from "./store";
 import type { Entity, SioEvent } from "./types";
 
 type RailTab = "events" | "copilot" | "alerts" | "decisions" | "missions";
@@ -128,7 +129,9 @@ function EntityDetail() {
         {entity.provenance.slice(-6).map((provenance, index) => (
           <li key={`${provenance.source_id}-${index}`}>
             <span className="chip chip-quiet">{provenance.modality}</span>
-            {provenance.source_id}
+            <span className="source-id" title={provenance.source_id}>
+              {provenance.source_id}
+            </span>
             <em>{Math.round(provenance.confidence * 100)}%</em>
           </li>
         ))}
@@ -154,7 +157,8 @@ export default function App() {
   const addEvent = useSioStore((state) => state.addEvent);
   const setEvents = useSioStore((state) => state.setEvents);
   const setZones = useSioStore((state) => state.setZones);
-  const openAlerts = useSioStore(selectOpenAlerts);
+  const alerts = useSioStore((state) => state.alerts);
+  const unresolvedAlerts = useMemo(() => openAlerts(alerts), [alerts]);
   const entityCount = useSioStore((state) => state.entities.size);
 
   // Initial snapshot, then live updates. Loading the snapshot first means the map is populated
@@ -208,15 +212,21 @@ export default function App() {
         </h1>
         <div className="topbar-right">
           <span className="stat">{entityCount} entities</span>
-          <span className="stat">{openAlerts.length} open alerts</span>
+          <span className="stat">{unresolvedAlerts.length} open alerts</span>
           <ConnectionBadge />
         </div>
       </header>
 
       <main className="workspace">
         <section className="map-pane">
-          <LiveMap />
-          <EntityDetail />
+          {/* Each panel gets its own boundary: a broken map must still leave the event feed,
+              alerts and copilot usable rather than blanking the console. */}
+          <ErrorBoundary label="Live map">
+            <LiveMap />
+          </ErrorBoundary>
+          <ErrorBoundary label="Entity detail">
+            <EntityDetail />
+          </ErrorBoundary>
         </section>
 
         <aside className="rail">
@@ -232,11 +242,13 @@ export default function App() {
             ))}
           </nav>
           <div className="rail-body">
-            {tab === "events" && <EventFeed />}
-            {tab === "copilot" && <Placeholder label="The copilot" phase="Phase 4" />}
-            {tab === "alerts" && <Placeholder label="The alerts inbox" phase="Phase 4" />}
-            {tab === "decisions" && <Placeholder label="Recommendations" phase="Phase 4" />}
-            {tab === "missions" && <Placeholder label="Mission control" phase="Phase 6" />}
+            <ErrorBoundary label={tab}>
+              {tab === "events" && <EventFeed />}
+              {tab === "copilot" && <Placeholder label="The copilot" phase="Phase 4" />}
+              {tab === "alerts" && <Placeholder label="The alerts inbox" phase="Phase 4" />}
+              {tab === "decisions" && <Placeholder label="Recommendations" phase="Phase 4" />}
+              {tab === "missions" && <Placeholder label="Mission control" phase="Phase 6" />}
+            </ErrorBoundary>
           </div>
         </aside>
       </main>

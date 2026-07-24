@@ -371,6 +371,23 @@ code {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+/* The source id is the only part allowed to shrink. It must be a real element, not a bare text
+   node: an anonymous flex item cannot be given min-width: 0, so with nowrap it refuses to shrink and
+   pushes the confidence outside the panel and onto the map. */
+.sources .source-id {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sources li > .chip,
+.sources li > em {
+  flex: 0 0 auto;
 }
 
 .sources em {
@@ -451,4 +468,63 @@ code {
   .workspace {
     grid-template-columns: 1fr 300px;
   }
+}
+
+/* ------------------------------------------------------------- error boundary */
+.panel-error {
+  margin: 10px;
+  padding: 12px 14px;
+  background: rgba(240, 90, 75, 0.08);
+  border: 1px solid rgba(240, 90, 75, 0.35);
+  border-radius: var(--radius);
+  max-width: 520px;
+}
+
+.panel-error h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--danger);
+}
+
+.panel-error-message {
+  margin: 0 0 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.panel-error-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.panel-error-actions button {
+  font-size: 11px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev);
+  color: var(--text);
+}
+
+.panel-error-actions button:hover {
+  border-color: var(--accent);
+}
+
+.panel-error details {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.panel-error pre {
+  max-height: 160px;
+  overflow: auto;
+  font-size: 10px;
+  line-height: 1.45;
+  background: var(--bg);
+  padding: 8px;
+  border-radius: 4px;
 }

@@ -70,11 +70,13 @@ class Agent:
     attributes: dict[str, Any] = field(default_factory=dict)
     has_gps: bool = True
     active: bool = True
+    _path_completed: bool = False
 
     # ------------------------------------------------------------------ movement
     def set_path(self, names: list[str]) -> None:
         self.path = [self.site.waypoint(name) for name in names]
         self.path_index = 0
+        self._path_completed = False
 
     @property
     def target(self) -> Point | None:
@@ -90,6 +92,14 @@ class Agent:
         target = self.target
         if target is None:
             self.kinematics.speed_mps = 0.0
+            # The path is finished *and* any wait has elapsed, so let the agent decide what next.
+            # Without this hook an agent whose state machine transitions after a wait — a truck
+            # pausing at the gate for its RFID check — would sit there forever: `on_waypoint_reached`
+            # only fires on arrival, and there are no waypoints left to arrive at. Six trucks
+            # accumulated at Gate A and never docked, which also meant no dwell data for UC1.
+            if not self._path_completed:
+                self._path_completed = True
+                self.on_path_complete(now)
             return
 
         dx = target.east - self.kinematics.east
@@ -110,7 +120,25 @@ class Agent:
         self.kinematics.heading_deg = (math.degrees(math.atan2(dx, dy)) + 360) % 360
 
     def on_waypoint_reached(self, waypoint: Point, now: float) -> None:
-        """Hook for subclasses."""
+        """Called on arrival at each waypoint."""
+
+    def on_path_complete(self, now: float) -> None:
+        """Called once when the path is exhausted and any wait has elapsed.
+
+        This is where a state machine that pauses before moving on belongs — the transition cannot
+        hang off waypoint arrival, because after a wait there is no further waypoint to arrive at.
+        """
+
+    def wait(self, now: float, seconds: float) -> None:
+        """Pause here for ``seconds``, then fire :meth:`on_path_complete` again.
+
+        Use this rather than assigning ``wait_until`` directly. The hook is latched so it fires once
+        per completed path, and a state that pauses *without* setting a new path (a truck dwelling at
+        a dock) would otherwise never be called again — trucks docked and then stayed docked forever.
+        Resetting the latch here is what makes "wait, then decide" work as a state.
+        """
+        self.wait_until = now + seconds
+        self._path_completed = False
 
     def gps_reading(self) -> Geo:
         """Position with GPS-like noise.
@@ -132,6 +160,11 @@ class Agent:
         return {"state": self.attributes.get("state", "active")}
 
 
+QUEUE_SPACING_M = 16.0
+"""Gap between queued trucks. Six trucks waiting at the same coordinate rendered as one dot with
+six overprinted labels; a real queue is a line."""
+
+
 @dataclass
 class Truck(Agent):
     """Arrive, queue at the gate, dock, dwell, depart.
@@ -147,6 +180,7 @@ class Truck(Agent):
     plate: str = ""
     arrived_at: float = 0.0
     docked_at: float = 0.0
+    queue_slot: int = 0
 
     def start(self, now: float) -> None:
         self.state = TruckState.APPROACHING
@@ -154,20 +188,41 @@ class Truck(Agent):
         self.attributes.update({"state": str(self.state), "plate": self.plate})
         self.set_path(["gate_a_approach", "gate_a"])
 
+    def gps_reading(self) -> Geo:
+        """Position, offset by the truck's queue slot while it waits at the gate.
+
+        Only applied while stationary at the gate: on the move, the queue slot is meaningless and the
+        offset would look like a lane change.
+        """
+        if self.state is TruckState.AT_GATE and self.queue_slot:
+            return to_geo(
+                self.kinematics.east - self.queue_slot * QUEUE_SPACING_M + self.rng.gauss(0, 1.0),
+                self.kinematics.north + self.rng.gauss(0, 1.0),
+            )
+        return super().gps_reading()
+
     def on_waypoint_reached(self, waypoint: Point, now: float) -> None:
         if waypoint.name == "gate_a" and self.state is TruckState.APPROACHING:
             self.state = TruckState.AT_GATE
-            # Gate check: an RFID read plus a guard glance. Also gives the queue something to be
-            # a queue about.
-            self.wait_until = now + self.rng.uniform(8, 25)
+            # Gate check: an RFID read plus a guard glance. This pause is why the machine must be
+            # able to advance on *path completion* and not only on waypoint arrival — see below.
+            self.wait(now, self.rng.uniform(8, 25))
             self.attributes["state"] = str(self.state)
-            return
+
+    def on_path_complete(self, now: float) -> None:
+        """Advance to the next leg of the journey: gate → dock → dwell → exit → gone.
+
+        Every transition hangs off *finishing a leg*, not off arriving at a particular named
+        waypoint. The earlier version keyed on arrival, which meant the post-gate transition could
+        never fire: after the RFID wait the path was already exhausted, so no further arrival ever
+        happened and all six trucks sat at Gate A forever — no docking, no dwell data for UC1, and
+        six labels overprinted on one pixel.
+        """
+        index = (self.dock_id or "dock_1").rsplit("_", 1)[-1]
 
         if self.state is TruckState.AT_GATE:
             self.state = TruckState.DRIVING_TO_DOCK
             self.attributes["state"] = str(self.state)
-            assert self.dock_id is not None
-            index = self.dock_id.rsplit("_", 1)[-1]
             self.set_path(
                 [
                     "gate_a_inner",
@@ -180,17 +235,16 @@ class Truck(Agent):
             )
             return
 
-        if self.state is TruckState.DRIVING_TO_DOCK and waypoint.name.endswith("_bay"):
+        if self.state is TruckState.DRIVING_TO_DOCK:
             self.state = TruckState.DOCKED
             self.docked_at = now
-            self.wait_until = now + self.dwell_s
+            self.wait(now, self.dwell_s)
             self.attributes.update({"state": str(self.state), "dock": self.dock_id})
             return
 
         if self.state is TruckState.DOCKED:
             self.state = TruckState.DRIVING_TO_EXIT
             self.attributes["state"] = str(self.state)
-            index = (self.dock_id or "dock_1").rsplit("_", 1)[-1]
             self.set_path(
                 [
                     f"dock_{index}_approach",
@@ -204,7 +258,7 @@ class Truck(Agent):
             )
             return
 
-        if self.state is TruckState.DRIVING_TO_EXIT and waypoint.name == "gate_b_exit":
+        if self.state is TruckState.DRIVING_TO_EXIT:
             self.state = TruckState.DEPARTED
             self.active = False
             self.attributes["state"] = str(self.state)
@@ -239,7 +293,7 @@ class Forklift(Agent):
     def on_waypoint_reached(self, waypoint: Point, now: float) -> None:
         if self.path_index >= len(self.path):
             # Loading and unloading pauses, then reverse the loop.
-            self.wait_until = now + self.rng.uniform(10, 40)
+            self.wait(now, self.rng.uniform(10, 40))
             self.loop.reverse()
             self.set_path(self.loop)
 
@@ -279,7 +333,7 @@ class Worker(Agent):
 
     def on_waypoint_reached(self, waypoint: Point, now: float) -> None:
         if self.path_index >= len(self.path):
-            self.wait_until = now + self.rng.uniform(15, 90)
+            self.wait(now, self.rng.uniform(15, 90))
             self._choose_destination(now)
 
 
@@ -312,7 +366,7 @@ class Drone(Agent):
             if self.battery_pct < 20:
                 # Swap the battery rather than vanishing: an entity disappearing from the map for
                 # no visible reason is a worse demo than a two-minute pause.
-                self.wait_until = now + 120
+                self.wait(now, 120)
                 self.battery_pct = 100.0
                 self.attributes["state"] = "patrolling"
             self.set_path(self.site.routes["patrol"])
@@ -394,9 +448,14 @@ class Population:
             # positives and negatives to distinguish.
             dwell_s=self.rng.choice([300, 480, 600, 960, 1_200, 1_500]),
         )
+        truck.queue_slot = sum(
+            1
+            for agent in self.agents
+            if isinstance(agent, Truck) and agent.state is TruckState.AT_GATE
+        )
         truck.start(now)
         if stagger:
-            truck.wait_until = now + self.rng.uniform(0, 60)
+            truck.wait(now, self.rng.uniform(0, 60))
         self.agents.append(truck)
         return truck
 

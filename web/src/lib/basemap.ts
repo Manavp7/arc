@@ -19,9 +19,10 @@ export function basemapStyle(withTiles = false): StyleSpecification {
   const style: StyleSpecification = {
     version: 8,
     name: "SIO dark",
-    // An empty glyph/sprite set keeps the style valid while avoiding any network dependency;
-    // labels are rendered by deck.gl layers, not by MapLibre's symbol layer.
-    glyphs: undefined,
+    // No `glyphs` key at all: MapLibre validates the style and rejects an explicitly-undefined
+    // value ("glyphs: string expected, undefined found"). Nothing needs it — labels are drawn by
+    // deck.gl's TextLayer, not MapLibre's symbol layer, so there is no font atlas to fetch and no
+    // network dependency for the basemap.
     sources: {},
     layers: [
       {

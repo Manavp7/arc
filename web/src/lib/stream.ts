@@ -17,6 +17,29 @@ export interface StreamOptions {
   onStatus?: StatusHandler;
 }
 
+/**
+ * Payload kinds the API emits as *named* SSE events (`event: Entity`).
+ *
+ * This list is not decoration. `EventSource.onmessage` fires only for frames with **no** event
+ * name, so a named frame is silently dropped unless a listener is registered for that exact name.
+ * That failed invisibly: the connection opened, the badge said "live", 790 frames per run arrived
+ * on the wire, and the map stayed frozen on its initial snapshot with nothing in the console.
+ *
+ * Named events are worth keeping — they let a consumer subscribe to one kind — so the fix is to
+ * register a listener per kind, plus `onmessage` for anything unnamed.
+ */
+const MESSAGE_KINDS = [
+  "Entity",
+  "Event",
+  "Alert",
+  "Decision",
+  "Forecast",
+  "Track",
+  "Mission",
+  "WorkflowRun",
+  "Relationship",
+] as const;
+
 export function connectStream({ topics, onMessage, onStatus }: StreamOptions): () => void {
   let source: EventSource | null = null;
   let closed = false;
@@ -34,7 +57,7 @@ export function connectStream({ topics, onMessage, onStatus }: StreamOptions): (
       onStatus?.("live");
     };
 
-    source.onmessage = (event) => {
+    const handle = (event: MessageEvent<string>) => {
       try {
         onMessage(JSON.parse(event.data) as StreamMessage);
       } catch (error) {
@@ -42,6 +65,13 @@ export function connectStream({ topics, onMessage, onStatus }: StreamOptions): (
         console.warn("stream: unparseable message", error);
       }
     };
+
+    // Unnamed frames…
+    source.onmessage = handle;
+    // …and every named kind the API emits.
+    for (const kind of MESSAGE_KINDS) {
+      source.addEventListener(kind, handle as EventListener);
+    }
 
     source.onerror = () => {
       source?.close();

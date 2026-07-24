@@ -13,12 +13,37 @@ import type { Feature, FeatureCollection, Geometry } from "geojson";
 import maplibregl from "maplibre-gl";
 import { useEffect, useMemo, useRef } from "react";
 import { basemapStyle, entityColour, SEVERITY_COLOURS } from "../lib/basemap";
-import { selectPositionedEntities, useSioStore } from "../store";
+import { positionedEntities, useSioStore } from "../store";
 import type { Entity, SioEvent, Zone } from "../types";
 
 import "maplibre-gl/dist/maplibre-gl.css";
 
 const DEFAULT_VIEW = { longitude: -122.4194, latitude: 37.7749, zoom: 16.5, pitch: 0, bearing: 0 };
+
+/** Bounding box of the site geometry, as [[west, south], [east, north]]. */
+function zoneBounds(zones: Zone[]): [[number, number], [number, number]] | null {
+  let west = Infinity;
+  let south = Infinity;
+  let east = -Infinity;
+  let north = -Infinity;
+  for (const zone of zones) {
+    for (const ring of zone.geometry?.coordinates ?? []) {
+      for (const position of ring as number[][]) {
+        const lon = position[0];
+        const lat = position[1];
+        if (lon === undefined || lat === undefined) continue;
+        west = Math.min(west, lon);
+        east = Math.max(east, lon);
+        south = Math.min(south, lat);
+        north = Math.max(north, lat);
+      }
+    }
+  }
+  return Number.isFinite(west) ? [[west, south], [east, north]] : null;
+}
+
+/** Printable ASCII: entity labels are names, plates and ids. */
+const LABEL_CHARSET = Array.from({ length: 95 }, (_, index) => String.fromCharCode(32 + index));
 
 type ZoneFeature = Feature<Geometry, Zone>;
 
@@ -46,9 +71,15 @@ function zoneLayer(zones: Zone[]) {
   });
 }
 
+const LABELLED_TYPES = new Set(["truck", "vehicle", "drone", "forklift"]);
+
 function entityLayers(entities: Entity[], selectedId: string | null, onSelect: (id: string) => void) {
   const movers = entities.filter((entity) => !entity.is_static);
   const fixtures = entities.filter((entity) => entity.is_static);
+  const labelled = movers.filter(
+    (entity) =>
+      entity.label && (LABELLED_TYPES.has(entity.type) || entity.entity_id === selectedId),
+  );
 
   return [
     new ScatterplotLayer<Entity>({
@@ -84,7 +115,7 @@ function entityLayers(entities: Entity[], selectedId: string | null, onSelect: (
     }),
     new TextLayer<Entity>({
       id: "entity-labels",
-      data: movers.filter((entity) => entity.label),
+      data: labelled,
       getPosition: (entity) => [entity.state.geo!.lon, entity.state.geo!.lat],
       getText: (entity) => entity.label ?? "",
       getSize: 11,
@@ -92,8 +123,12 @@ function entityLayers(entities: Entity[], selectedId: string | null, onSelect: (
       getPixelOffset: [0, -14],
       // No font atlas is bundled, so use the browser's default sans stack.
       fontFamily: "system-ui, sans-serif",
-      characterSet: "auto",
+      // An explicit character set instead of "auto": auto builds the atlas lazily and uploads an
+      // empty canvas on the first frame, which WebGL reports as
+      // "INVALID_VALUE: texSubImage2D: no canvas". Entity labels are ASCII (names, plates, ids).
+      characterSet: LABEL_CHARSET,
       pickable: false,
+      updateTriggers: { getText: [selectedId] },
     }),
   ];
 }
@@ -119,8 +154,12 @@ export function LiveMap() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const overlayRef = useRef<MapboxOverlay | null>(null);
+  const fittedRef = useRef(false);
 
-  const entities = useSioStore(selectPositionedEntities);
+  // Subscribe to the stored Map, then derive. Subscribing to a *filtered array* would hand React a
+  // new snapshot on every read and loop forever (see the note in store.ts).
+  const entityMap = useSioStore((state) => state.entities);
+  const entities = useMemo(() => positionedEntities(entityMap), [entityMap]);
   const events = useSioStore((state) => state.events);
   const zones = useSioStore((state) => state.zones);
   const selectedId = useSioStore((state) => state.selectedEntityId);
@@ -166,6 +205,16 @@ export function LiveMap() {
   useEffect(() => {
     overlayRef.current?.setProps({ layers });
   }, [layers]);
+
+  // Frame the site the first time its geometry arrives. Guarded so it does not fight the operator
+  // for control of the camera on every subsequent zone update.
+  useEffect(() => {
+    if (fittedRef.current || zones.length === 0 || !mapRef.current) return;
+    const bounds = zoneBounds(zones);
+    if (!bounds) return;
+    mapRef.current.fitBounds(bounds, { padding: 60, duration: 0 });
+    fittedRef.current = true;
+  }, [zones]);
 
   return (
     <div className="map-root">
