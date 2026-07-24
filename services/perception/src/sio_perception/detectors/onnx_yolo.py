@@ -39,8 +39,8 @@ class Letterbox:
     def __init__(self, source_shape: tuple[int, int], size: int) -> None:
         source_height, source_width = source_shape
         self.scale = min(size / source_height, size / source_width)
-        self.new_width = int(round(source_width * self.scale))
-        self.new_height = int(round(source_height * self.scale))
+        self.new_width = round(source_width * self.scale)
+        self.new_height = round(source_height * self.scale)
         # Centre the image in the square canvas; halves, not the whole pad, or every box is offset.
         self.pad_x = (size - self.new_width) / 2
         self.pad_y = (size - self.new_height) / 2
@@ -53,7 +53,7 @@ class Letterbox:
             image, (self.new_width, self.new_height), interpolation=cv2.INTER_LINEAR
         )
         canvas = np.full((self.size, self.size, 3), 114, dtype=np.uint8)  # 114 = Ultralytics' grey
-        top, left = int(round(self.pad_y)), int(round(self.pad_x))
+        top, left = round(self.pad_y), round(self.pad_x)
         canvas[top : top + self.new_height, left : left + self.new_width] = resized
         return canvas
 
@@ -175,7 +175,10 @@ class OnnxYoloDetector:
         remaining row is too — hence the early break rather than a full scan of 300 rows per frame.
         """
         raw = outputs[0]
-        if raw.ndim != 3 or raw.shape[-1] < 6:
+        # The end-to-end head's last dimension is the per-detection field count: 6 for detection,
+        # 38 for segmentation. The one-to-many head is (1, nc+4, 8400), where the last dimension is
+        # the anchor count — so an upper bound is what actually distinguishes them.
+        if raw.ndim != 3 or not 6 <= raw.shape[-1] <= 64:
             raise ValueError(
                 f"unexpected detection output shape {raw.shape}; expected (1, N, 6) from a "
                 "YOLO26 end-to-end export. A model exported with end2end=False produces "

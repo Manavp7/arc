@@ -154,6 +154,13 @@ class Settings(BaseSettings):
     det_conf: float = 0.35
     det_imgsz: int = 640
     ort_threads: int = 2
+    ort_providers: str = "CPUExecutionProvider"
+    """Comma-separated onnxruntime execution providers, in preference order.
+
+    This one string is the entire CPU-to-GPU swap for inference: the same .onnx weights run under
+    CUDAExecutionProvider or TensorrtExecutionProvider. Unavailable providers are dropped with a
+    warning rather than failing to start.
+    """
     perception_fps: float = 2.0
     enable_segmentation: bool = False
     enable_ocr: bool = True

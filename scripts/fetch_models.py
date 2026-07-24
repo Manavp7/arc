@@ -53,7 +53,7 @@ class ModelAsset:
 
     @property
     def dest(self) -> Path:
-        return Path(filename)
+        return Path(self.filename)
 
 
 ASSETS: tuple[ModelAsset, ...] = (
