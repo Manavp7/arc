@@ -1,0 +1,499 @@
+{
+  "$defs": {
+    "AlertState": {
+      "enum": [
+        "open",
+        "acknowledged",
+        "escalated",
+        "resolved",
+        "suppressed"
+      ],
+      "title": "AlertState",
+      "type": "string"
+    },
+    "Alternative": {
+      "additionalProperties": false,
+      "description": "A hypothesis SIO considered and did not choose.\n\nSurfacing these is what separates \"the system says X\" from \"the system considered Y and\nZ and here is why it preferred X\".",
+      "properties": {
+        "confidence": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "hypothesis": {
+          "title": "Hypothesis",
+          "type": "string"
+        },
+        "why_not": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Why Not"
+        }
+      },
+      "required": [
+        "hypothesis"
+      ],
+      "title": "Alternative",
+      "type": "object"
+    },
+    "EvidenceKind": {
+      "description": "What a piece of evidence in an explanation points at.",
+      "enum": [
+        "frame",
+        "observation",
+        "detection",
+        "track",
+        "entity",
+        "event",
+        "forecast",
+        "decision",
+        "query",
+        "document",
+        "simulation",
+        "rule",
+        "model"
+      ],
+      "title": "EvidenceKind",
+      "type": "string"
+    },
+    "EvidenceRef": {
+      "additionalProperties": false,
+      "description": "A pointer to something a human can go and check.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/EvidenceKind"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        },
+        "ref": {
+          "description": "Id, object-store key, or the query text for kind=query",
+          "title": "Ref",
+          "type": "string"
+        },
+        "score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Relevance/similarity, if ranked",
+          "title": "Score"
+        },
+        "source_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Id"
+        },
+        "ts": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ts"
+        }
+      },
+      "required": [
+        "kind",
+        "ref"
+      ],
+      "title": "EvidenceRef",
+      "type": "object"
+    },
+    "Explanation": {
+      "additionalProperties": false,
+      "description": "The standard evidence bundle attached to every assertion (PRD M20, \u00a78.1).",
+      "properties": {
+        "alternatives": {
+          "items": {
+            "$ref": "#/$defs/Alternative"
+          },
+          "title": "Alternatives",
+          "type": "array"
+        },
+        "confidence": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "degraded": {
+          "default": false,
+          "description": "True when a fallback path produced this answer (e.g. LLM tool-calling failed)",
+          "title": "Degraded",
+          "type": "boolean"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Notes",
+          "type": "array"
+        },
+        "related_entities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Related Entities",
+          "type": "array"
+        },
+        "sources": {
+          "description": "Contributing sensors/systems",
+          "items": {
+            "type": "string"
+          },
+          "title": "Sources",
+          "type": "array"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Summary"
+        },
+        "timeline": {
+          "items": {
+            "$ref": "#/$defs/TimelineEntry"
+          },
+          "title": "Timeline",
+          "type": "array"
+        }
+      },
+      "title": "Explanation",
+      "type": "object"
+    },
+    "Geo": {
+      "additionalProperties": false,
+      "description": "A point on Earth. WGS84 unless ``crs`` says otherwise.",
+      "properties": {
+        "alt": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Metres above the WGS84 ellipsoid",
+          "title": "Alt"
+        },
+        "crs": {
+          "default": "EPSG:4326",
+          "title": "Crs",
+          "type": "string"
+        },
+        "lat": {
+          "maximum": 90.0,
+          "minimum": -90.0,
+          "title": "Lat",
+          "type": "number"
+        },
+        "lon": {
+          "maximum": 180.0,
+          "minimum": -180.0,
+          "title": "Lon",
+          "type": "number"
+        }
+      },
+      "required": [
+        "lat",
+        "lon"
+      ],
+      "title": "Geo",
+      "type": "object"
+    },
+    "Severity": {
+      "description": "Ordered severity. Use :meth:`rank` for comparisons \u2014 string order is meaningless.",
+      "enum": [
+        "info",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "TimelineEntry": {
+      "additionalProperties": false,
+      "description": "One beat in the story an explanation tells.",
+      "properties": {
+        "kind": {
+          "description": "observation | detection | event | decision | action | note",
+          "title": "Kind",
+          "type": "string"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ts",
+        "kind",
+        "summary"
+      ],
+      "title": "TimelineEntry",
+      "type": "object"
+    }
+  },
+  "$id": "https://sio.dev/schemas/1.0.0/Alert.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A prioritised, deduplicated, escalatable notification (PRD M16).",
+  "properties": {
+    "ack_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Ack By"
+    },
+    "ack_ts": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Ack Ts"
+    },
+    "alert_id": {
+      "title": "Alert Id",
+      "type": "string"
+    },
+    "assignee": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Assignee"
+    },
+    "count": {
+      "default": 1,
+      "description": "Number of folded-in occurrences",
+      "minimum": 1,
+      "title": "Count",
+      "type": "integer"
+    },
+    "decision_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Decision Ids",
+      "type": "array"
+    },
+    "entity_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Entity Ids",
+      "type": "array"
+    },
+    "escalated_ts": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Escalated Ts"
+    },
+    "event_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Event Ids",
+      "type": "array"
+    },
+    "explanation": {
+      "$ref": "#/$defs/Explanation"
+    },
+    "geo": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Geo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "group_key": {
+      "description": "Dedup/grouping key: type + entity/location bucket. Repeats fold together.",
+      "title": "Group Key",
+      "type": "string"
+    },
+    "last_ts": {
+      "format": "date-time",
+      "title": "Last Ts",
+      "type": "string"
+    },
+    "resolved_ts": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Resolved Ts"
+    },
+    "score": {
+      "default": 0.0,
+      "description": "Priority score used for ordering",
+      "minimum": 0.0,
+      "title": "Score",
+      "type": "number"
+    },
+    "severity": {
+      "$ref": "#/$defs/Severity",
+      "default": "medium"
+    },
+    "state": {
+      "$ref": "#/$defs/AlertState",
+      "default": "open"
+    },
+    "tenant_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Tenant Id",
+      "type": "string"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    },
+    "trace_id": {
+      "title": "Trace Id",
+      "type": "string"
+    },
+    "ts": {
+      "format": "date-time",
+      "title": "Ts",
+      "type": "string"
+    },
+    "urgency_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Why this ranks where it does \u2014 shown next to the score",
+      "title": "Urgency Reason"
+    },
+    "zone_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Zone Id"
+    }
+  },
+  "required": [
+    "title",
+    "group_key"
+  ],
+  "title": "Alert",
+  "type": "object",
+  "x-sio-schema-version": "1.0.0"
+}

@@ -1,0 +1,106 @@
+{
+  "$defs": {
+    "RelationshipType": {
+      "description": "Edge types in the world model (PRD M7). Edges are bitemporal, never overwritten.",
+      "enum": [
+        "owns",
+        "visited",
+        "contains",
+        "connected_to",
+        "seen_by",
+        "transporting",
+        "communicated_with",
+        "assigned_to",
+        "entered",
+        "exited",
+        "same_as",
+        "near",
+        "covers",
+        "caused",
+        "responds_to"
+      ],
+      "title": "RelationshipType",
+      "type": "string"
+    }
+  },
+  "$id": "https://sio.dev/schemas/1.0.0/Relationship.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A bitemporal edge between two entities.\n\nEdges are *never* mutated: when a relationship stops holding we close it by setting\n``ts_valid_to`` and, if it resumes, write a new edge. That is what lets the timeline\nreconstruct the graph as it stood at any instant (PRD M8, UC5) instead of only as it\nstands now.",
+  "properties": {
+    "attributes": {
+      "additionalProperties": true,
+      "title": "Attributes",
+      "type": "object"
+    },
+    "confidence": {
+      "default": 1.0,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "evidence": {
+      "description": "Ids of observations/detections/events supporting this edge",
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence",
+      "type": "array"
+    },
+    "from": {
+      "minLength": 1,
+      "title": "From",
+      "type": "string"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "tenant_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Tenant Id",
+      "type": "string"
+    },
+    "to": {
+      "minLength": 1,
+      "title": "To",
+      "type": "string"
+    },
+    "trace_id": {
+      "title": "Trace Id",
+      "type": "string"
+    },
+    "ts_valid_from": {
+      "format": "date-time",
+      "title": "Ts Valid From",
+      "type": "string"
+    },
+    "ts_valid_to": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "None = still holds. Closing an edge never deletes it.",
+      "title": "Ts Valid To"
+    },
+    "type": {
+      "$ref": "#/$defs/RelationshipType"
+    }
+  },
+  "required": [
+    "from",
+    "type",
+    "to"
+  ],
+  "title": "Relationship",
+  "type": "object",
+  "x-sio-schema-version": "1.0.0"
+}

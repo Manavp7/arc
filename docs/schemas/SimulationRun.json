@@ -1,0 +1,377 @@
+{
+  "$defs": {
+    "Alternative": {
+      "additionalProperties": false,
+      "description": "A hypothesis SIO considered and did not choose.\n\nSurfacing these is what separates \"the system says X\" from \"the system considered Y and\nZ and here is why it preferred X\".",
+      "properties": {
+        "confidence": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "hypothesis": {
+          "title": "Hypothesis",
+          "type": "string"
+        },
+        "why_not": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Why Not"
+        }
+      },
+      "required": [
+        "hypothesis"
+      ],
+      "title": "Alternative",
+      "type": "object"
+    },
+    "EvidenceKind": {
+      "description": "What a piece of evidence in an explanation points at.",
+      "enum": [
+        "frame",
+        "observation",
+        "detection",
+        "track",
+        "entity",
+        "event",
+        "forecast",
+        "decision",
+        "query",
+        "document",
+        "simulation",
+        "rule",
+        "model"
+      ],
+      "title": "EvidenceKind",
+      "type": "string"
+    },
+    "EvidenceRef": {
+      "additionalProperties": false,
+      "description": "A pointer to something a human can go and check.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/EvidenceKind"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        },
+        "ref": {
+          "description": "Id, object-store key, or the query text for kind=query",
+          "title": "Ref",
+          "type": "string"
+        },
+        "score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Relevance/similarity, if ranked",
+          "title": "Score"
+        },
+        "source_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Id"
+        },
+        "ts": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ts"
+        }
+      },
+      "required": [
+        "kind",
+        "ref"
+      ],
+      "title": "EvidenceRef",
+      "type": "object"
+    },
+    "Explanation": {
+      "additionalProperties": false,
+      "description": "The standard evidence bundle attached to every assertion (PRD M20, \u00a78.1).",
+      "properties": {
+        "alternatives": {
+          "items": {
+            "$ref": "#/$defs/Alternative"
+          },
+          "title": "Alternatives",
+          "type": "array"
+        },
+        "confidence": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "degraded": {
+          "default": false,
+          "description": "True when a fallback path produced this answer (e.g. LLM tool-calling failed)",
+          "title": "Degraded",
+          "type": "boolean"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Notes",
+          "type": "array"
+        },
+        "related_entities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Related Entities",
+          "type": "array"
+        },
+        "sources": {
+          "description": "Contributing sensors/systems",
+          "items": {
+            "type": "string"
+          },
+          "title": "Sources",
+          "type": "array"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Summary"
+        },
+        "timeline": {
+          "items": {
+            "$ref": "#/$defs/TimelineEntry"
+          },
+          "title": "Timeline",
+          "type": "array"
+        }
+      },
+      "title": "Explanation",
+      "type": "object"
+    },
+    "RunStatus": {
+      "enum": [
+        "pending",
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+        "compensated"
+      ],
+      "title": "RunStatus",
+      "type": "string"
+    },
+    "TimelineEntry": {
+      "additionalProperties": false,
+      "description": "One beat in the story an explanation tells.",
+      "properties": {
+        "kind": {
+          "description": "observation | detection | event | decision | action | note",
+          "title": "Kind",
+          "type": "string"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ts",
+        "kind",
+        "summary"
+      ],
+      "title": "TimelineEntry",
+      "type": "object"
+    }
+  },
+  "$id": "https://sio.dev/schemas/1.0.0/SimulationRun.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A what-if scenario execution (PRD M11).",
+  "properties": {
+    "confidence": {
+      "default": 0.5,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error"
+    },
+    "explanation": {
+      "$ref": "#/$defs/Explanation"
+    },
+    "finished_ts": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Finished Ts"
+    },
+    "impacted_entities": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Impacted Entities",
+      "type": "array"
+    },
+    "kpi_deltas": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "description": "Projected change per KPI, e.g. {'throughput_per_h': -12.5}",
+      "title": "Kpi Deltas",
+      "type": "object"
+    },
+    "params": {
+      "additionalProperties": true,
+      "title": "Params",
+      "type": "object"
+    },
+    "results": {
+      "additionalProperties": true,
+      "title": "Results",
+      "type": "object"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "scenario": {
+      "description": "gate_closure | fire_spread | dock_breakdown | flood_level | \u2026",
+      "title": "Scenario",
+      "type": "string"
+    },
+    "seeded_from_ts": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "World-model instant the simulation was seeded from",
+      "title": "Seeded From Ts"
+    },
+    "started_ts": {
+      "format": "date-time",
+      "title": "Started Ts",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/RunStatus",
+      "default": "pending"
+    },
+    "tenant_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Tenant Id",
+      "type": "string"
+    },
+    "timeline": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Timeline",
+      "type": "array"
+    },
+    "trace_id": {
+      "title": "Trace Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "scenario"
+  ],
+  "title": "SimulationRun",
+  "type": "object",
+  "x-sio-schema-version": "1.0.0"
+}

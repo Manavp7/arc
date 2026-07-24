@@ -1,0 +1,201 @@
+{
+  "$defs": {
+    "BBox": {
+      "additionalProperties": false,
+      "description": "Axis-aligned box in *source image pixels* (not normalised).\n\nPixel space is deliberate: a bbox is only meaningful alongside the frame it came from,\nand normalising loses the resolution needed to crop for ReID/OCR later.",
+      "properties": {
+        "x1": {
+          "minimum": 0.0,
+          "title": "X1",
+          "type": "number"
+        },
+        "x2": {
+          "minimum": 0.0,
+          "title": "X2",
+          "type": "number"
+        },
+        "y1": {
+          "minimum": 0.0,
+          "title": "Y1",
+          "type": "number"
+        },
+        "y2": {
+          "minimum": 0.0,
+          "title": "Y2",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x1",
+        "y1",
+        "x2",
+        "y2"
+      ],
+      "title": "BBox",
+      "type": "object"
+    },
+    "Geo": {
+      "additionalProperties": false,
+      "description": "A point on Earth. WGS84 unless ``crs`` says otherwise.",
+      "properties": {
+        "alt": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Metres above the WGS84 ellipsoid",
+          "title": "Alt"
+        },
+        "crs": {
+          "default": "EPSG:4326",
+          "title": "Crs",
+          "type": "string"
+        },
+        "lat": {
+          "maximum": 90.0,
+          "minimum": -90.0,
+          "title": "Lat",
+          "type": "number"
+        },
+        "lon": {
+          "maximum": 180.0,
+          "minimum": -180.0,
+          "title": "Lon",
+          "type": "number"
+        }
+      },
+      "required": [
+        "lat",
+        "lon"
+      ],
+      "title": "Geo",
+      "type": "object"
+    }
+  },
+  "$id": "https://sio.dev/schemas/1.0.0/Detection.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A model's structured assertion about part of one observation (PRD M3).\n\n``class_name`` is the PRD's ``class`` field; the alias keeps the wire name.",
+  "properties": {
+    "attrs": {
+      "additionalProperties": true,
+      "description": "Model extras: OCR text, pose label, colour, audio class scores, \u2026",
+      "title": "Attrs",
+      "type": "object"
+    },
+    "bbox": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BBox"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "class": {
+      "minLength": 1,
+      "title": "Class",
+      "type": "string"
+    },
+    "confidence": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "embedding_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Key/row id for the ReID appearance vector, if computed",
+      "title": "Embedding Ref"
+    },
+    "geo": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Geo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Ground position, once the spatial engine has projected it"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "mask_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Object-store key for an RLE mask",
+      "title": "Mask Ref"
+    },
+    "model_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Model that produced this detection",
+      "title": "Model Name"
+    },
+    "observation_id": {
+      "title": "Observation Id",
+      "type": "string"
+    },
+    "source_id": {
+      "title": "Source Id",
+      "type": "string"
+    },
+    "tenant_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Tenant Id",
+      "type": "string"
+    },
+    "trace_id": {
+      "title": "Trace Id",
+      "type": "string"
+    },
+    "ts": {
+      "format": "date-time",
+      "title": "Ts",
+      "type": "string"
+    }
+  },
+  "required": [
+    "observation_id",
+    "class",
+    "confidence",
+    "source_id"
+  ],
+  "title": "Detection",
+  "type": "object",
+  "x-sio-schema-version": "1.0.0"
+}

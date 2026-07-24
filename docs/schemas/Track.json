@@ -1,0 +1,302 @@
+{
+  "$defs": {
+    "BBox": {
+      "additionalProperties": false,
+      "description": "Axis-aligned box in *source image pixels* (not normalised).\n\nPixel space is deliberate: a bbox is only meaningful alongside the frame it came from,\nand normalising loses the resolution needed to crop for ReID/OCR later.",
+      "properties": {
+        "x1": {
+          "minimum": 0.0,
+          "title": "X1",
+          "type": "number"
+        },
+        "x2": {
+          "minimum": 0.0,
+          "title": "X2",
+          "type": "number"
+        },
+        "y1": {
+          "minimum": 0.0,
+          "title": "Y1",
+          "type": "number"
+        },
+        "y2": {
+          "minimum": 0.0,
+          "title": "Y2",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x1",
+        "y1",
+        "x2",
+        "y2"
+      ],
+      "title": "BBox",
+      "type": "object"
+    },
+    "Geo": {
+      "additionalProperties": false,
+      "description": "A point on Earth. WGS84 unless ``crs`` says otherwise.",
+      "properties": {
+        "alt": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Metres above the WGS84 ellipsoid",
+          "title": "Alt"
+        },
+        "crs": {
+          "default": "EPSG:4326",
+          "title": "Crs",
+          "type": "string"
+        },
+        "lat": {
+          "maximum": 90.0,
+          "minimum": -90.0,
+          "title": "Lat",
+          "type": "number"
+        },
+        "lon": {
+          "maximum": 180.0,
+          "minimum": -180.0,
+          "title": "Lon",
+          "type": "number"
+        }
+      },
+      "required": [
+        "lat",
+        "lon"
+      ],
+      "title": "Geo",
+      "type": "object"
+    },
+    "TrackState": {
+      "additionalProperties": false,
+      "description": "One time-step of a track: where the tracker believes the object was.",
+      "properties": {
+        "bbox": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BBox"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "confidence": {
+          "default": 1.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "detection_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "None when this state is a prediction through an occlusion",
+          "title": "Detection Id"
+        },
+        "geo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Geo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "velocity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Velocity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "ts"
+      ],
+      "title": "TrackState",
+      "type": "object"
+    },
+    "TrackStatus": {
+      "enum": [
+        "tentative",
+        "confirmed",
+        "lost",
+        "removed"
+      ],
+      "title": "TrackStatus",
+      "type": "string"
+    },
+    "Velocity": {
+      "additionalProperties": false,
+      "description": "Ground velocity in metres per second, plus derived heading/speed helpers.",
+      "properties": {
+        "east": {
+          "default": 0.0,
+          "title": "East",
+          "type": "number"
+        },
+        "north": {
+          "default": 0.0,
+          "title": "North",
+          "type": "number"
+        },
+        "up": {
+          "default": 0.0,
+          "title": "Up",
+          "type": "number"
+        }
+      },
+      "title": "Velocity",
+      "type": "object"
+    }
+  },
+  "$id": "https://sio.dev/schemas/1.0.0/Track.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Persistent identity for one object as seen by one sensor over time (PRD M4).",
+  "properties": {
+    "age": {
+      "default": 0,
+      "description": "Frames since the track was created",
+      "minimum": 0,
+      "title": "Age",
+      "type": "integer"
+    },
+    "class": {
+      "title": "Class",
+      "type": "string"
+    },
+    "confidence": {
+      "default": 1.0,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "cross_camera_of": {
+      "description": "Track ids on other cameras believed to be the same object",
+      "items": {
+        "type": "string"
+      },
+      "title": "Cross Camera Of",
+      "type": "array"
+    },
+    "embedding": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Smoothed ReID appearance vector (512-d) for re-association",
+      "title": "Embedding"
+    },
+    "entity_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Set once fusion binds this track to a world-model entity",
+      "title": "Entity Id"
+    },
+    "hits": {
+      "default": 0,
+      "description": "Detections associated to this track",
+      "minimum": 0,
+      "title": "Hits",
+      "type": "integer"
+    },
+    "last_ts": {
+      "format": "date-time",
+      "title": "Last Ts",
+      "type": "string"
+    },
+    "source_id": {
+      "title": "Source Id",
+      "type": "string"
+    },
+    "start_ts": {
+      "format": "date-time",
+      "title": "Start Ts",
+      "type": "string"
+    },
+    "states": {
+      "items": {
+        "$ref": "#/$defs/TrackState"
+      },
+      "title": "States",
+      "type": "array"
+    },
+    "status": {
+      "$ref": "#/$defs/TrackStatus",
+      "default": "tentative"
+    },
+    "tenant_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Tenant Id",
+      "type": "string"
+    },
+    "time_since_update": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Time Since Update",
+      "type": "integer"
+    },
+    "trace_id": {
+      "title": "Trace Id",
+      "type": "string"
+    },
+    "track_id": {
+      "title": "Track Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "class",
+    "source_id"
+  ],
+  "title": "Track",
+  "type": "object",
+  "x-sio-schema-version": "1.0.0"
+}

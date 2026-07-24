@@ -1,0 +1,395 @@
+{
+  "$defs": {
+    "EntityState": {
+      "additionalProperties": false,
+      "description": "The fused kinematic state of an entity at a point in time.",
+      "properties": {
+        "confidence": {
+          "default": 1.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "covariance": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Flattened EKF position covariance (row-major), for uncertainty display",
+          "title": "Covariance"
+        },
+        "geo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Geo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "h3_cell": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "H3 index of the position",
+          "title": "H3 Cell"
+        },
+        "heading_deg": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 360.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Heading Deg"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "velocity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Velocity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "zone_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Site zone containing the entity",
+          "title": "Zone Id"
+        }
+      },
+      "title": "EntityState",
+      "type": "object"
+    },
+    "EntityType": {
+      "description": "Real-world object classes in the world model (PRD M7).",
+      "enum": [
+        "person",
+        "vehicle",
+        "truck",
+        "forklift",
+        "drone",
+        "ship",
+        "aircraft",
+        "animal",
+        "building",
+        "road",
+        "bridge",
+        "hospital",
+        "camera",
+        "sensor",
+        "machine",
+        "container",
+        "package",
+        "zone",
+        "gate",
+        "dock",
+        "company",
+        "country",
+        "resource",
+        "hazard",
+        "unknown"
+      ],
+      "title": "EntityType",
+      "type": "string"
+    },
+    "Geo": {
+      "additionalProperties": false,
+      "description": "A point on Earth. WGS84 unless ``crs`` says otherwise.",
+      "properties": {
+        "alt": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Metres above the WGS84 ellipsoid",
+          "title": "Alt"
+        },
+        "crs": {
+          "default": "EPSG:4326",
+          "title": "Crs",
+          "type": "string"
+        },
+        "lat": {
+          "maximum": 90.0,
+          "minimum": -90.0,
+          "title": "Lat",
+          "type": "number"
+        },
+        "lon": {
+          "maximum": 180.0,
+          "minimum": -180.0,
+          "title": "Lon",
+          "type": "number"
+        }
+      },
+      "required": [
+        "lat",
+        "lon"
+      ],
+      "title": "Geo",
+      "type": "object"
+    },
+    "Modality": {
+      "description": "The kind of signal an observation carries.",
+      "enum": [
+        "video",
+        "image",
+        "audio",
+        "gps",
+        "iot",
+        "rfid",
+        "radar",
+        "lidar",
+        "satellite",
+        "weather",
+        "traffic",
+        "enterprise",
+        "document",
+        "manual"
+      ],
+      "title": "Modality",
+      "type": "string"
+    },
+    "Provenance": {
+      "additionalProperties": false,
+      "description": "Which sensor contributed what, and how much we trusted it.\n\nFusion appends one of these per contributing observation. This is the raw material for\nthe \"sources\" section of every explanation, and the reason an operator can ask *why*\nSIO thinks a truck is at dock 3.",
+      "properties": {
+        "confidence": {
+          "default": 1.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "detection_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detection Id"
+        },
+        "modality": {
+          "$ref": "#/$defs/Modality"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        },
+        "observation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observation Id"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "track_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Track Id"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "weight": {
+          "default": 1.0,
+          "description": "Sensor weight applied by fusion",
+          "minimum": 0.0,
+          "title": "Weight",
+          "type": "number"
+        }
+      },
+      "required": [
+        "source_id",
+        "modality",
+        "ts"
+      ],
+      "title": "Provenance",
+      "type": "object"
+    },
+    "Velocity": {
+      "additionalProperties": false,
+      "description": "Ground velocity in metres per second, plus derived heading/speed helpers.",
+      "properties": {
+        "east": {
+          "default": 0.0,
+          "title": "East",
+          "type": "number"
+        },
+        "north": {
+          "default": 0.0,
+          "title": "North",
+          "type": "number"
+        },
+        "up": {
+          "default": 0.0,
+          "title": "Up",
+          "type": "number"
+        }
+      },
+      "title": "Velocity",
+      "type": "object"
+    }
+  },
+  "$id": "https://sio.dev/schemas/1.0.0/Entity.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One unified real-world object \u2014 the heart of the world model.\n\nAn entity is what N observations of the same thing collapse into (PRD M5/M7). Identity\nis stable across sensors and time, which is what makes \"which camera last saw entity X\"\nanswerable.",
+  "properties": {
+    "attributes": {
+      "additionalProperties": true,
+      "description": "Type-specific facts: plate, colour, capacity, operator, criticality, \u2026",
+      "title": "Attributes",
+      "type": "object"
+    },
+    "confidence": {
+      "default": 1.0,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "entity_id": {
+      "title": "Entity Id",
+      "type": "string"
+    },
+    "first_seen": {
+      "format": "date-time",
+      "title": "First Seen",
+      "type": "string"
+    },
+    "is_static": {
+      "default": false,
+      "description": "Infrastructure (camera, gate, dock) rather than something that moves",
+      "title": "Is Static",
+      "type": "boolean"
+    },
+    "label": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Human-facing name, e.g. 'Truck ABC-123'",
+      "title": "Label"
+    },
+    "last_seen": {
+      "format": "date-time",
+      "title": "Last Seen",
+      "type": "string"
+    },
+    "provenance": {
+      "items": {
+        "$ref": "#/$defs/Provenance"
+      },
+      "title": "Provenance",
+      "type": "array"
+    },
+    "state": {
+      "$ref": "#/$defs/EntityState"
+    },
+    "tenant_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Tenant Id",
+      "type": "string"
+    },
+    "trace_id": {
+      "title": "Trace Id",
+      "type": "string"
+    },
+    "track_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Track Ids",
+      "type": "array"
+    },
+    "type": {
+      "$ref": "#/$defs/EntityType"
+    }
+  },
+  "required": [
+    "type"
+  ],
+  "title": "Entity",
+  "type": "object",
+  "x-sio-schema-version": "1.0.0"
+}

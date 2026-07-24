@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ..errors import DependencyMissing, StoreError
@@ -63,7 +63,9 @@ class PgPool:
         except Exception as exc:
             raise StoreError(f"postgres executemany failed: {exc}") from exc
 
-    async def fetch(self, sql: str, params: Sequence[Any] | None = None) -> list[dict[str, Any]]:
+    async def fetch(
+        self, sql: str, params: Sequence[Any] | Mapping[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
         try:
             from psycopg.rows import dict_row
 
@@ -74,12 +76,14 @@ class PgPool:
             raise StoreError(f"postgres fetch failed: {exc}") from exc
 
     async def fetchrow(
-        self, sql: str, params: Sequence[Any] | None = None
+        self, sql: str, params: Sequence[Any] | Mapping[str, Any] | None = None
     ) -> dict[str, Any] | None:
         rows = await self.fetch(sql, params)
         return rows[0] if rows else None
 
-    async def fetchval(self, sql: str, params: Sequence[Any] | None = None) -> Any:
+    async def fetchval(
+        self, sql: str, params: Sequence[Any] | Mapping[str, Any] | None = None
+    ) -> Any:
         row = await self.fetchrow(sql, params)
         if row is None:
             return None

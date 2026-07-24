@@ -78,12 +78,18 @@ def _add_context(
 def configure_logging(
     level: str = "INFO", fmt: str = "console", service: str | None = None
 ) -> None:
-    """Configure structlog once per process. Safe to call repeatedly."""
+    """Configure structlog for this process. The most recent call wins.
+
+    Deliberately *not* guarded by a "already configured" early return. Modules create their
+    logger at import time (``log = get_logger(__name__)``), and if that implicitly locked in a
+    default configuration, every later explicit call — a service setting its name and level, a
+    script asking for quiet output — would be silently ignored. That bug cost an afternoon of
+    "why is my --quiet flag doing nothing", so the invariant is now: configuration is cheap,
+    idempotent, and always applied.
+    """
     global _configured
     if service:
         set_service(service)
-    if _configured:
-        return
 
     shared: list[Any] = [
         structlog.contextvars.merge_contextvars,
@@ -110,8 +116,15 @@ def configure_logging(
     # Route stdlib logging (uvicorn, redis, neo4j) through the same handler so output is
     # uniform and greppable rather than half-structured.
     logging.basicConfig(format="%(message)s", stream=sys.stderr, level=logging.WARNING, force=True)
+    # Third-party log floors follow the requested level, so `--quiet`/ERROR really is quiet.
+    third_party_level = max(
+        logging.WARNING, logging.getLevelNamesMapping().get(level.upper(), logging.INFO)
+    )
     for noisy in ("uvicorn.error", "uvicorn.access", "neo4j", "httpx", "httpcore"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
+        logging.getLogger(noisy).setLevel(third_party_level)
+    # Neo4j logs server notifications (deprecations, planner hints) at WARNING and includes the
+    # entire query text. Useful when tuning Cypher, pure noise in normal operation.
+    logging.getLogger("neo4j.notifications").setLevel(logging.ERROR)
 
     _configured = True
 

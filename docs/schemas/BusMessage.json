@@ -1,0 +1,59 @@
+{
+  "$id": "https://sio.dev/schemas/1.0.0/BusMessage.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Envelope for one message on one topic.\n\n``payload`` is a plain dict on the wire: the bus is not in the business of importing\nevery domain model, and a consumer that only forwards messages should not have to\nvalidate them.",
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "kind": {
+      "description": "Payload model name, e.g. Detection \u2014 used to decode",
+      "title": "Kind",
+      "type": "string"
+    },
+    "payload": {
+      "additionalProperties": true,
+      "title": "Payload",
+      "type": "object"
+    },
+    "producer": {
+      "default": "unknown",
+      "description": "Service that published this",
+      "title": "Producer",
+      "type": "string"
+    },
+    "schema_version": {
+      "default": "1.0.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "tenant_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Tenant Id",
+      "type": "string"
+    },
+    "topic": {
+      "title": "Topic",
+      "type": "string"
+    },
+    "trace_id": {
+      "title": "Trace Id",
+      "type": "string"
+    },
+    "ts": {
+      "format": "date-time",
+      "title": "Ts",
+      "type": "string"
+    }
+  },
+  "required": [
+    "topic",
+    "kind"
+  ],
+  "title": "BusMessage",
+  "type": "object",
+  "x-sio-schema-version": "1.0.0"
+}

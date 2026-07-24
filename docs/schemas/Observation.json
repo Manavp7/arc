@@ -1,0 +1,156 @@
+{
+  "$defs": {
+    "Geo": {
+      "additionalProperties": false,
+      "description": "A point on Earth. WGS84 unless ``crs`` says otherwise.",
+      "properties": {
+        "alt": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Metres above the WGS84 ellipsoid",
+          "title": "Alt"
+        },
+        "crs": {
+          "default": "EPSG:4326",
+          "title": "Crs",
+          "type": "string"
+        },
+        "lat": {
+          "maximum": 90.0,
+          "minimum": -90.0,
+          "title": "Lat",
+          "type": "number"
+        },
+        "lon": {
+          "maximum": 180.0,
+          "minimum": -180.0,
+          "title": "Lon",
+          "type": "number"
+        }
+      },
+      "required": [
+        "lat",
+        "lon"
+      ],
+      "title": "Geo",
+      "type": "object"
+    },
+    "Modality": {
+      "description": "The kind of signal an observation carries.",
+      "enum": [
+        "video",
+        "image",
+        "audio",
+        "gps",
+        "iot",
+        "rfid",
+        "radar",
+        "lidar",
+        "satellite",
+        "weather",
+        "traffic",
+        "enterprise",
+        "document",
+        "manual"
+      ],
+      "title": "Modality",
+      "type": "string"
+    }
+  },
+  "$id": "https://sio.dev/schemas/1.0.0/Observation.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One un-interpreted signal from one source at one instant.\n\nThis is the universal envelope every connector produces (PRD M1). ``payload`` stays\nfree-form because a weather reading and a MAVLink heartbeat have nothing in common;\n``raw_ref`` points at the immutable bytes in the object store when they exist.",
+  "properties": {
+    "confidence": {
+      "default": 1.0,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "geo": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Geo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "modality": {
+      "$ref": "#/$defs/Modality"
+    },
+    "payload": {
+      "additionalProperties": true,
+      "title": "Payload",
+      "type": "object"
+    },
+    "raw_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Object-store key for the raw bytes (frame/audio/tile), if any",
+      "title": "Raw Ref"
+    },
+    "schema_version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Schema Version"
+    },
+    "source_id": {
+      "description": "Connector/sensor identifier, e.g. cam-gate-a",
+      "minLength": 1,
+      "title": "Source Id",
+      "type": "string"
+    },
+    "tenant_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Tenant Id",
+      "type": "string"
+    },
+    "trace_id": {
+      "title": "Trace Id",
+      "type": "string"
+    },
+    "ts": {
+      "format": "date-time",
+      "title": "Ts",
+      "type": "string"
+    }
+  },
+  "required": [
+    "source_id",
+    "modality"
+  ],
+  "title": "Observation",
+  "type": "object",
+  "x-sio-schema-version": "1.0.0"
+}

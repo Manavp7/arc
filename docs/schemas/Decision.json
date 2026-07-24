@@ -1,0 +1,502 @@
+{
+  "$defs": {
+    "ActionType": {
+      "description": "Things SIO can recommend or do in the physical world (PRD M12).",
+      "enum": [
+        "move_drone",
+        "dispatch_drone",
+        "deploy_ambulance",
+        "dispatch_patrol",
+        "evacuate_sector",
+        "close_gate",
+        "open_gate",
+        "increase_security",
+        "delay_shipment",
+        "reroute_vehicle",
+        "notify",
+        "create_incident",
+        "generate_report",
+        "no_action"
+      ],
+      "title": "ActionType",
+      "type": "string"
+    },
+    "Alternative": {
+      "additionalProperties": false,
+      "description": "A hypothesis SIO considered and did not choose.\n\nSurfacing these is what separates \"the system says X\" from \"the system considered Y and\nZ and here is why it preferred X\".",
+      "properties": {
+        "confidence": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "hypothesis": {
+          "title": "Hypothesis",
+          "type": "string"
+        },
+        "why_not": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Why Not"
+        }
+      },
+      "required": [
+        "hypothesis"
+      ],
+      "title": "Alternative",
+      "type": "object"
+    },
+    "ApprovalState": {
+      "description": "Human-on-the-loop gate for anything an agent wants to actually do (PRD M14).",
+      "enum": [
+        "not_required",
+        "pending",
+        "approved",
+        "rejected",
+        "expired"
+      ],
+      "title": "ApprovalState",
+      "type": "string"
+    },
+    "DecisionOption": {
+      "additionalProperties": false,
+      "description": "One candidate course of action, scored so the ranking is inspectable.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ActionType"
+        },
+        "cost": {
+          "default": 0.0,
+          "title": "Cost",
+          "type": "number"
+        },
+        "expected_effect": {
+          "description": "Plain-language effect, e.g. 'contains fire in ~4 min'",
+          "title": "Expected Effect",
+          "type": "string"
+        },
+        "expected_metrics": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "description": "Quantified effects: eta_s, coverage_pct, cost, risk_delta",
+          "title": "Expected Metrics",
+          "type": "object"
+        },
+        "feasible": {
+          "default": true,
+          "title": "Feasible",
+          "type": "boolean"
+        },
+        "option_id": {
+          "title": "Option Id",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": true,
+          "title": "Params",
+          "type": "object"
+        },
+        "rejection_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rejection Reason"
+        },
+        "risk": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Risk",
+          "type": "number"
+        },
+        "score": {
+          "description": "Higher is better; the objective value from the solver",
+          "title": "Score",
+          "type": "number"
+        },
+        "target_entity_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Entity Id"
+        }
+      },
+      "required": [
+        "action",
+        "score",
+        "expected_effect"
+      ],
+      "title": "DecisionOption",
+      "type": "object"
+    },
+    "EvidenceKind": {
+      "description": "What a piece of evidence in an explanation points at.",
+      "enum": [
+        "frame",
+        "observation",
+        "detection",
+        "track",
+        "entity",
+        "event",
+        "forecast",
+        "decision",
+        "query",
+        "document",
+        "simulation",
+        "rule",
+        "model"
+      ],
+      "title": "EvidenceKind",
+      "type": "string"
+    },
+    "EvidenceRef": {
+      "additionalProperties": false,
+      "description": "A pointer to something a human can go and check.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/EvidenceKind"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        },
+        "ref": {
+          "description": "Id, object-store key, or the query text for kind=query",
+          "title": "Ref",
+          "type": "string"
+        },
+        "score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Relevance/similarity, if ranked",
+          "title": "Score"
+        },
+        "source_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Id"
+        },
+        "ts": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ts"
+        }
+      },
+      "required": [
+        "kind",
+        "ref"
+      ],
+      "title": "EvidenceRef",
+      "type": "object"
+    },
+    "Explanation": {
+      "additionalProperties": false,
+      "description": "The standard evidence bundle attached to every assertion (PRD M20, \u00a78.1).",
+      "properties": {
+        "alternatives": {
+          "items": {
+            "$ref": "#/$defs/Alternative"
+          },
+          "title": "Alternatives",
+          "type": "array"
+        },
+        "confidence": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "degraded": {
+          "default": false,
+          "description": "True when a fallback path produced this answer (e.g. LLM tool-calling failed)",
+          "title": "Degraded",
+          "type": "boolean"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Notes",
+          "type": "array"
+        },
+        "related_entities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Related Entities",
+          "type": "array"
+        },
+        "sources": {
+          "description": "Contributing sensors/systems",
+          "items": {
+            "type": "string"
+          },
+          "title": "Sources",
+          "type": "array"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Summary"
+        },
+        "timeline": {
+          "items": {
+            "$ref": "#/$defs/TimelineEntry"
+          },
+          "title": "Timeline",
+          "type": "array"
+        }
+      },
+      "title": "Explanation",
+      "type": "object"
+    },
+    "TimelineEntry": {
+      "additionalProperties": false,
+      "description": "One beat in the story an explanation tells.",
+      "properties": {
+        "kind": {
+          "description": "observation | detection | event | decision | action | note",
+          "title": "Kind",
+          "type": "string"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ts",
+        "kind",
+        "summary"
+      ],
+      "title": "TimelineEntry",
+      "type": "object"
+    }
+  },
+  "$id": "https://sio.dev/schemas/1.0.0/Decision.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A recommendation with ranked options, a rationale, and an approval gate (PRD M12).",
+  "properties": {
+    "approval": {
+      "$ref": "#/$defs/ApprovalState",
+      "default": "pending"
+    },
+    "approved_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Approved By"
+    },
+    "approved_ts": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Approved Ts"
+    },
+    "chosen": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "option_id of the recommendation",
+      "title": "Chosen"
+    },
+    "confidence": {
+      "default": 0.5,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "decision_id": {
+      "title": "Decision Id",
+      "type": "string"
+    },
+    "executed_ts": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Executed Ts"
+    },
+    "expected_effect": {
+      "default": "",
+      "title": "Expected Effect",
+      "type": "string"
+    },
+    "explanation": {
+      "$ref": "#/$defs/Explanation"
+    },
+    "options": {
+      "items": {
+        "$ref": "#/$defs/DecisionOption"
+      },
+      "title": "Options",
+      "type": "array"
+    },
+    "proposed_by": {
+      "default": "decision",
+      "description": "Service or agent that proposed it",
+      "title": "Proposed By",
+      "type": "string"
+    },
+    "rationale": {
+      "default": "",
+      "title": "Rationale",
+      "type": "string"
+    },
+    "solver": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "e.g. ortools-cpsat, ortools-vrp",
+      "title": "Solver"
+    },
+    "tenant_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Tenant Id",
+      "type": "string"
+    },
+    "trace_id": {
+      "title": "Trace Id",
+      "type": "string"
+    },
+    "trigger_event": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Event id that prompted this",
+      "title": "Trigger Event"
+    },
+    "ts": {
+      "format": "date-time",
+      "title": "Ts",
+      "type": "string"
+    }
+  },
+  "title": "Decision",
+  "type": "object",
+  "x-sio-schema-version": "1.0.0"
+}

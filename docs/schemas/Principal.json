@@ -1,0 +1,88 @@
+{
+  "$defs": {
+    "Role": {
+      "description": "RBAC roles (PRD \u00a74 personas \u2192 PRD M21 roles).",
+      "enum": [
+        "operator",
+        "commander",
+        "integrator",
+        "ml_engineer",
+        "admin",
+        "service"
+      ],
+      "title": "Role",
+      "type": "string"
+    }
+  },
+  "$id": "https://sio.dev/schemas/1.0.0/Principal.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The authenticated actor behind a request. Threaded into every audit record.",
+  "properties": {
+    "attributes": {
+      "additionalProperties": true,
+      "description": "ABAC attributes: clearance, zones, shift, \u2026",
+      "title": "Attributes",
+      "type": "object"
+    },
+    "display_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Display Name"
+    },
+    "email": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Email"
+    },
+    "roles": {
+      "items": {
+        "$ref": "#/$defs/Role"
+      },
+      "title": "Roles",
+      "type": "array"
+    },
+    "subject": {
+      "description": "User id or service account name",
+      "title": "Subject",
+      "type": "string"
+    },
+    "tenant_id": {
+      "title": "Tenant Id",
+      "type": "string"
+    },
+    "token_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Token Id"
+    }
+  },
+  "required": [
+    "subject",
+    "tenant_id"
+  ],
+  "title": "Principal",
+  "type": "object",
+  "x-sio-schema-version": "1.0.0"
+}

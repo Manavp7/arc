@@ -1,0 +1,292 @@
+{
+  "$defs": {
+    "Geo": {
+      "additionalProperties": false,
+      "description": "A point on Earth. WGS84 unless ``crs`` says otherwise.",
+      "properties": {
+        "alt": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Metres above the WGS84 ellipsoid",
+          "title": "Alt"
+        },
+        "crs": {
+          "default": "EPSG:4326",
+          "title": "Crs",
+          "type": "string"
+        },
+        "lat": {
+          "maximum": 90.0,
+          "minimum": -90.0,
+          "title": "Lat",
+          "type": "number"
+        },
+        "lon": {
+          "maximum": 180.0,
+          "minimum": -180.0,
+          "title": "Lon",
+          "type": "number"
+        }
+      },
+      "required": [
+        "lat",
+        "lon"
+      ],
+      "title": "Geo",
+      "type": "object"
+    },
+    "MissionObjective": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "done": {
+          "default": false,
+          "title": "Done",
+          "type": "boolean"
+        },
+        "due_ts": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Due Ts"
+        },
+        "geo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Geo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "objective_id": {
+          "title": "Objective Id",
+          "type": "string"
+        },
+        "progress": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Progress",
+          "type": "number"
+        },
+        "zone_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Zone Id"
+        }
+      },
+      "required": [
+        "description"
+      ],
+      "title": "MissionObjective",
+      "type": "object"
+    },
+    "MissionState": {
+      "enum": [
+        "draft",
+        "active",
+        "paused",
+        "completed",
+        "aborted"
+      ],
+      "title": "MissionState",
+      "type": "string"
+    }
+  },
+  "$id": "https://sio.dev/schemas/1.0.0/Mission.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A multi-user operation: objectives, assigned resources, live status (PRD M17).",
+  "properties": {
+    "alert_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Alert Ids",
+      "type": "array"
+    },
+    "assignees": {
+      "description": "User ids",
+      "items": {
+        "type": "string"
+      },
+      "title": "Assignees",
+      "type": "array"
+    },
+    "commander": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Commander"
+    },
+    "comms": {
+      "description": "Append-only comms log entries",
+      "items": {
+        "type": "string"
+      },
+      "title": "Comms",
+      "type": "array"
+    },
+    "completed_ts": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Completed Ts"
+    },
+    "created_ts": {
+      "format": "date-time",
+      "title": "Created Ts",
+      "type": "string"
+    },
+    "decision_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Decision Ids",
+      "type": "array"
+    },
+    "description": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Description"
+    },
+    "event_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Event Ids",
+      "type": "array"
+    },
+    "geo": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Geo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "mission_id": {
+      "title": "Mission Id",
+      "type": "string"
+    },
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "objectives": {
+      "items": {
+        "$ref": "#/$defs/MissionObjective"
+      },
+      "title": "Objectives",
+      "type": "array"
+    },
+    "resources": {
+      "description": "Entity ids: drones, patrols, docks",
+      "items": {
+        "type": "string"
+      },
+      "title": "Resources",
+      "type": "array"
+    },
+    "started_ts": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Started Ts"
+    },
+    "state": {
+      "$ref": "#/$defs/MissionState",
+      "default": "draft"
+    },
+    "tenant_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Tenant Id",
+      "type": "string"
+    },
+    "trace_id": {
+      "title": "Trace Id",
+      "type": "string"
+    },
+    "updated_ts": {
+      "format": "date-time",
+      "title": "Updated Ts",
+      "type": "string"
+    },
+    "zone_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Zone Id"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "title": "Mission",
+  "type": "object",
+  "x-sio-schema-version": "1.0.0"
+}

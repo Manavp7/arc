@@ -79,8 +79,13 @@ class PostgresGraphStore:
                 geom, zone_id, h3_cell, first_seen, last_seen, payload
             ) VALUES (
                 %s, %s, %s, %s, %s, %s,
-                CASE WHEN %s IS NULL OR %s IS NULL THEN NULL
-                     ELSE ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography END,
+                -- ST_MakePoint is STRICT, so a NULL coordinate yields a NULL geometry: an
+                -- entity without a position (a company, an unlocated sensor) needs no special
+                -- case. The explicit casts are required because Postgres cannot infer the type
+                -- of a parameter that may be NULL.
+                ST_SetSRID(
+                    ST_MakePoint(%s::double precision, %s::double precision), 4326
+                )::geography,
                 %s, %s, %s, %s, %s::jsonb
             )
             ON CONFLICT (tenant_id, entity_id) DO UPDATE SET
@@ -91,13 +96,14 @@ class PostgresGraphStore:
                 geom       = COALESCE(EXCLUDED.geom, entities.geom),
                 zone_id    = COALESCE(EXCLUDED.zone_id, entities.zone_id),
                 h3_cell    = COALESCE(EXCLUDED.h3_cell, entities.h3_cell),
+                -- An upsert is a merge: LEAST/GREATEST mean a replayed or out-of-order message
+                -- can never shrink an entity's known lifetime.
                 first_seen = LEAST(entities.first_seen, EXCLUDED.first_seen),
                 last_seen  = GREATEST(entities.last_seen, EXCLUDED.last_seen),
                 payload    = EXCLUDED.payload,
                 updated_at = now()
             """,
-            # geom needs lon/lat four times: two NULL checks and two coordinates.
-            [(r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[6], r[7], *r[8:]) for r in rows],
+            rows,
         )
         return len(rows)
 
@@ -191,26 +197,31 @@ class PostgresGraphStore:
         at: datetime | None = None,
         limit: int = 100,
     ) -> list[tuple[Relationship, Entity]]:
+        # Positional parameters must be assembled in the order they appear in the SQL text, and
+        # the JOIN precedes the WHERE. Building the list in textual order is what keeps this
+        # correct: an earlier version collected the WHERE parameters first and therefore bound
+        # tenant_id into the JOIN's CASE, silently returning the wrong neighbours.
+        join_params: list[Any] = [entity_id, tenant_id]
+
         clauses = ["r.tenant_id = %s"]
-        params: list[Any] = [tenant_id]
+        where_params: list[Any] = [tenant_id]
         if direction == "out":
             clauses.append("r.from_id = %s")
-            params.append(entity_id)
+            where_params.append(entity_id)
         elif direction == "in":
             clauses.append("r.to_id = %s")
-            params.append(entity_id)
+            where_params.append(entity_id)
         else:
             clauses.append("(r.from_id = %s OR r.to_id = %s)")
-            params.extend([entity_id, entity_id])
+            where_params.extend([entity_id, entity_id])
         if types:
             clauses.append("r.type = ANY(%s)")
-            params.append([str(t) for t in types])
+            where_params.append([str(t) for t in types])
         if at is not None:
             clauses.append(
                 "r.ts_valid_from <= %s AND (r.ts_valid_to IS NULL OR r.ts_valid_to >= %s)"
             )
-            params.extend([at, at])
-        params.extend([entity_id, tenant_id, limit])
+            where_params.extend([at, at])
 
         rows = await self._pool.fetch(
             f"""
@@ -222,7 +233,7 @@ class PostgresGraphStore:
              WHERE {" AND ".join(clauses)}
              LIMIT %s
             """,
-            [*params[:-3], params[-3], params[-2], params[-1]],
+            [*join_params, *where_params, limit],
         )
         return [
             (Relationship.model_validate(r["rel"]), Entity.model_validate(r["entity"]))
@@ -297,8 +308,11 @@ class PostgresGraphStore:
             raise StoreError("raw_query is read-only; DDL/DML keywords are not permitted")
         if ";" in query.strip().rstrip(";"):
             raise StoreError("raw_query accepts a single statement")
-        values = list(params.values()) if params else None
-        rows = await self._pool.fetch(query, values)
+        # Pass the mapping straight through: psycopg binds %(name)s from a dict, and flattening
+        # to a list would break named placeholders (which is the natural style for a
+        # copilot-authored query, and how this first broke).
+        merged = {"tenant_id": tenant_id, **dict(params or {})} if params is not None else None
+        rows = await self._pool.fetch(query, merged)
         return [json.loads(json.dumps(row, default=str)) for row in rows]
 
     async def counts(self, *, tenant_id: str) -> dict[str, int]:

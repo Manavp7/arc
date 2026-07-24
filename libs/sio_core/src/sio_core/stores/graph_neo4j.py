@@ -367,9 +367,13 @@ class Neo4jGraphStore:
             MATCH (e:Entity {tenant_id: $tenant_id})
             WITH count(e) AS entities
             OPTIONAL MATCH ()-[r]->() WHERE r.tenant_id = $tenant_id
+            // coalesce keeps the aggregate from seeing NULLs when there are no edges yet,
+            // which Neo4j otherwise reports as a "null value eliminated" warning on an
+            // otherwise perfectly healthy empty graph.
             RETURN entities,
                    count(r) AS relationships,
-                   sum(CASE WHEN r.valid_to_ms IS NULL THEN 1 ELSE 0 END) AS open_relationships
+                   sum(CASE WHEN r IS NOT NULL AND r.valid_to_ms IS NULL THEN 1 ELSE 0 END)
+                       AS open_relationships
             """,
             {"tenant_id": tenant_id},
         )

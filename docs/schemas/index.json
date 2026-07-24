@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0.0",
+  "schemas": {
+    "Alert": "Alert.json",
+    "AuditRecord": "AuditRecord.json",
+    "BusMessage": "BusMessage.json",
+    "Decision": "Decision.json",
+    "Detection": "Detection.json",
+    "Entity": "Entity.json",
+    "Event": "Event.json",
+    "Explanation": "Explanation.json",
+    "Forecast": "Forecast.json",
+    "HealthStatus": "HealthStatus.json",
+    "Mission": "Mission.json",
+    "Observation": "Observation.json",
+    "Principal": "Principal.json",
+    "Relationship": "Relationship.json",
+    "SimulationRun": "SimulationRun.json",
+    "Track": "Track.json",
+    "WorkflowRun": "WorkflowRun.json"
+  }
+}

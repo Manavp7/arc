@@ -1,0 +1,78 @@
+{
+  "$id": "https://sio.dev/schemas/1.0.0/HealthStatus.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Uniform ``/health`` payload for every service (PRD \u00a713 observability).",
+  "properties": {
+    "adapters": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Which adapter is active per port, for debuggability",
+      "title": "Adapters",
+      "type": "object"
+    },
+    "checks": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "dependency \u2192 ok/error detail",
+      "title": "Checks",
+      "type": "object"
+    },
+    "consumed": {
+      "default": 0,
+      "title": "Consumed",
+      "type": "integer"
+    },
+    "errors": {
+      "default": 0,
+      "title": "Errors",
+      "type": "integer"
+    },
+    "lag": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "description": "topic \u2192 pending messages",
+      "title": "Lag",
+      "type": "object"
+    },
+    "produced": {
+      "default": 0,
+      "title": "Produced",
+      "type": "integer"
+    },
+    "schema_version": {
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "service": {
+      "title": "Service",
+      "type": "string"
+    },
+    "status": {
+      "default": "ok",
+      "description": "ok | degraded | error",
+      "title": "Status",
+      "type": "string"
+    },
+    "uptime_s": {
+      "default": 0.0,
+      "title": "Uptime S",
+      "type": "number"
+    },
+    "version": {
+      "default": "0.1.0",
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "service",
+    "schema_version"
+  ],
+  "title": "HealthStatus",
+  "type": "object",
+  "x-sio-schema-version": "1.0.0"
+}
