@@ -100,7 +100,12 @@ class PostgresGraphStore:
                 -- can never shrink an entity's known lifetime.
                 first_seen = LEAST(entities.first_seen, EXCLUDED.first_seen),
                 last_seen  = GREATEST(entities.last_seen, EXCLUDED.last_seen),
-                payload    = EXCLUDED.payload,
+                payload    = EXCLUDED.payload || jsonb_build_object(
+                                 'first_seen',
+                                 to_jsonb(LEAST(entities.first_seen, EXCLUDED.first_seen)),
+                                 'last_seen',
+                                 to_jsonb(GREATEST(entities.last_seen, EXCLUDED.last_seen))
+                             ),
                 updated_at = now()
             """,
             rows,

@@ -98,10 +98,31 @@ class Neo4jGraphStore:
         }
 
     @staticmethod
-    def _to_entity(payload: str | None) -> Entity | None:
+    def _to_entity(
+        payload: str | None, first_seen: str | None = None, last_seen: str | None = None
+    ) -> Entity | None:
+        """Rebuild an entity, preferring the node's merged lifetime over the payload's copy.
+
+        The payload is written wholesale on every upsert (the producer owns it), while
+        first_seen/last_seen are merged in the node properties. Without this override a reader would
+        see the *last writer's* timestamps and every entity's dwell time would read as zero.
+
+        The ISO-8601 string properties are used rather than the ``*_ms`` ones: the millisecond
+        values exist for indexing and range filters, and round-tripping through them would silently
+        truncate microseconds — enough to make an equality assertion on a timestamp fail.
+        """
         if not payload:
             return None
-        return Entity.model_validate_json(payload)
+        if not (first_seen or last_seen):
+            return Entity.model_validate_json(payload)
+        # Patch the raw JSON and validate, rather than model_copy(): model_copy skips validation, so
+        # an ISO *string* would be stored in a datetime field and only fail later, at a comparison.
+        data = json.loads(payload)
+        if first_seen:
+            data["first_seen"] = first_seen
+        if last_seen:
+            data["last_seen"] = last_seen
+        return Entity.model_validate(data)
 
     # ------------------------------------------------------------------ entities
     async def upsert_entity(self, entity: Entity) -> None:
@@ -145,10 +166,15 @@ class Neo4jGraphStore:
     async def get_entity(self, entity_id: str, *, tenant_id: str) -> Entity | None:
         rows = await self._run(
             "MATCH (e:Entity {entity_id: $entity_id, tenant_id: $tenant_id}) "
-            "RETURN e.payload AS payload LIMIT 1",
+            "RETURN e.payload AS payload, e.first_seen AS first_seen, e.last_seen AS last_seen "
+            "LIMIT 1",
             {"entity_id": entity_id, "tenant_id": tenant_id},
         )
-        return self._to_entity(rows[0]["payload"]) if rows else None
+        if not rows:
+            return None
+        return self._to_entity(
+            rows[0]["payload"], rows[0].get("first_seen"), rows[0].get("last_seen")
+        )
 
     async def find_entities(
         self,
@@ -178,10 +204,17 @@ class Neo4jGraphStore:
 
         rows = await self._run(
             f"MATCH (e:Entity) WHERE {' AND '.join(clauses)} "
-            "RETURN e.payload AS payload ORDER BY e.last_seen_ms DESC SKIP $offset LIMIT $limit",
+            "RETURN e.payload AS payload, e.first_seen AS first_seen, e.last_seen AS last_seen "
+            "ORDER BY e.last_seen_ms DESC SKIP $offset LIMIT $limit",
             params,
         )
-        return [e for e in (self._to_entity(r["payload"]) for r in rows) if e is not None]
+        return [
+            entity
+            for entity in (
+                self._to_entity(r["payload"], r.get("first_seen"), r.get("last_seen")) for r in rows
+            )
+            if entity is not None
+        ]
 
     # ------------------------------------------------------------ relationships
     async def upsert_relationship(self, relationship: Relationship) -> None:
@@ -270,12 +303,13 @@ class Neo4jGraphStore:
 
         rows = await self._run(
             f"MATCH {pattern} WHERE {' AND '.join(clauses)} "
-            "RETURN r.payload AS rel, b.payload AS entity LIMIT $limit",
+            "RETURN r.payload AS rel, b.payload AS entity, "
+            "b.first_seen AS first_seen, b.last_seen AS last_seen LIMIT $limit",
             params,
         )
         out: list[tuple[Relationship, Entity]] = []
         for row in rows:
-            entity = self._to_entity(row["entity"])
+            entity = self._to_entity(row["entity"], row.get("first_seen"), row.get("last_seen"))
             if row["rel"] and entity is not None:
                 out.append((Relationship.model_validate_json(row["rel"]), entity))
         return out
@@ -314,7 +348,8 @@ class Neo4jGraphStore:
         at_ms = _ms(ts)
         entity_rows = await self._run(
             "MATCH (e:Entity) WHERE e.tenant_id = $tenant_id AND e.first_seen_ms <= $at_ms "
-            "RETURN e.payload AS payload ORDER BY e.last_seen_ms DESC LIMIT $limit",
+            "RETURN e.payload AS payload, e.first_seen AS first_seen, e.last_seen AS last_seen "
+            "ORDER BY e.last_seen_ms DESC LIMIT $limit",
             {"tenant_id": tenant_id, "at_ms": at_ms, "limit": limit},
         )
         rel_rows = await self._run(
@@ -327,7 +362,14 @@ class Neo4jGraphStore:
             """,
             {"tenant_id": tenant_id, "at_ms": at_ms, "limit": limit},
         )
-        entities = [e for e in (self._to_entity(r["payload"]) for r in entity_rows) if e]
+        entities = [
+            entity
+            for entity in (
+                self._to_entity(r["payload"], r.get("first_seen"), r.get("last_seen"))
+                for r in entity_rows
+            )
+            if entity
+        ]
         rels = [Relationship.model_validate_json(r["payload"]) for r in rel_rows if r["payload"]]
         return entities, rels
 

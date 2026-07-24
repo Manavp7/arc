@@ -135,6 +135,13 @@ class Settings(BaseSettings):
     sim_seed: int = 1337
     sim_site: Path = Path("infra/site/yard.geojson")
     sim_frame_fps: float = 2.0
+    # Phase 1 bridge: the simulator publishes ground-truth entities so the live map has something
+    # to show before perception/tracking/fusion exist. Set false once Phase 2 is live.
+    sim_publish_entities: bool = True
+    sim_entity_hz: float = 2.0
+    sim_gps_hz: float = 1.0  # per-tracker GPS reporting rate
+    sim_sensor_hz: float = 0.2  # per-sensor IoT reporting rate (every 5 s)
+    sim_tick_hz: float = 4.0  # simulation steps per second (motion smoothness)
 
     # --- perception ---------------------------------------------------------
     model_dir: Path = Path(".sio/models")

@@ -27,15 +27,14 @@ class MemoryGraphStore:
         key = (entity.tenant_id, entity.entity_id)
         existing = self._entities.get(key)
         if existing is not None:
-            # Preserve the earliest sighting and accumulate provenance: an upsert is a merge,
-            # not a replace, or every new observation would erase an entity's history.
+            # The merge contract (see GraphStore.upsert_entity): protect the lifetime bounds, and
+            # nothing else. Merging attributes or provenance here would compete with fusion, which
+            # is the component that owns them — and would make this adapter behave differently from
+            # Neo4j and Postgres, which is exactly what the shared contract suite exists to prevent.
             entity = entity.model_copy(
                 update={
                     "first_seen": min(existing.first_seen, entity.first_seen),
                     "last_seen": max(existing.last_seen, entity.last_seen),
-                    "provenance": [*existing.provenance, *entity.provenance][-50:],
-                    "track_ids": list(dict.fromkeys([*existing.track_ids, *entity.track_ids])),
-                    "attributes": {**existing.attributes, **entity.attributes},
                 }
             )
         self._entities[key] = entity

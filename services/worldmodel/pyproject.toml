@@ -1,0 +1,25 @@
+[project]
+name = "sio-worldmodel"
+version = "0.1.0"
+description = "SIO world model: persists entities and bitemporal relationships (PRD M7)"
+requires-python = ">=3.12,<3.14"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "sio-core",
+    "sio-schemas",
+]
+
+[project.optional-dependencies]
+# Semantic search (Phase 2): CLIP embeddings for frames and text queries.
+embeddings = ["onnxruntime>=1.20", "tokenizers>=0.21", "pillow>=11.0", "numpy>=2.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sio_worldmodel"]
+
+[tool.uv.sources]
+sio-core = { workspace = true }
+sio-schemas = { workspace = true }

@@ -254,6 +254,32 @@ async def test_graph_upsert_extends_lifetime(graph) -> None:  # type: ignore[no-
     assert found.first_seen == entity.first_seen, "first_seen never moves forward"
 
 
+async def test_graph_lifetime_merge_survives_a_replayed_first_seen(graph) -> None:  # type: ignore[no-untyped-def]
+    """The bug this guards against made every entity's dwell time read as zero.
+
+    Both real adapters store the entity as JSON *and* as indexed columns. The columns were merged
+    with LEAST/GREATEST but the JSON was replaced wholesale, so readers — which deserialise the JSON —
+    saw the newest producer's timestamps. Dwell time (UC1) was therefore always 0.
+    """
+    entity = an_entity()
+    original_first_seen = entity.first_seen
+    await graph.upsert_entity(entity)
+
+    # A later message that wrongly claims the entity is brand new, as the simulator's periodic
+    # ground-truth publish does.
+    twenty_minutes_later = utc_now() + timedelta(minutes=20)
+    await graph.upsert_entity(
+        entity.model_copy(
+            update={"first_seen": twenty_minutes_later, "last_seen": twenty_minutes_later}
+        )
+    )
+
+    found = await graph.get_entity(entity.entity_id, tenant_id=TENANT)
+    assert found is not None
+    assert found.first_seen == original_first_seen, "the deserialised payload must show the merge"
+    assert found.dwell_s() > 60, f"dwell time collapsed to {found.dwell_s()}s"
+
+
 async def test_graph_find_entities_filters(graph) -> None:  # type: ignore[no-untyped-def]
     await graph.upsert_entities([an_entity(), an_entity(), an_entity(entity_type="person")])
     assert len(await graph.find_entities(tenant_id=TENANT)) >= 3

@@ -1,0 +1,1969 @@
+{
+  "type": "FeatureCollection",
+  "properties": {
+    "name": "Northgate Distribution Centre",
+    "origin": {
+      "lat": 37.7749,
+      "lon": -122.4194
+    },
+    "routes": {
+      "arrive": [
+        "gate_a_approach",
+        "gate_a",
+        "gate_a_inner",
+        "south_west",
+        "west_link",
+        "north_west"
+      ],
+      "depart": [
+        "north_east",
+        "east_link",
+        "south_east",
+        "gate_b_inner",
+        "gate_b",
+        "gate_b_exit"
+      ],
+      "to_staging": [
+        "south_mid",
+        "staging_in",
+        "staging_bay"
+      ],
+      "patrol": [
+        "gate_a_inner",
+        "south_mid",
+        "south_east",
+        "east_link",
+        "north_east",
+        "north_mid",
+        "north_west",
+        "west_link"
+      ],
+      "forklift_loop": [
+        "dock_2_bay",
+        "dock_2_approach",
+        "dock_4_approach",
+        "dock_4_bay"
+      ],
+      "worker_walk": [
+        "office_door",
+        "north_west",
+        "north_mid",
+        "dock_3_approach"
+      ],
+      "to_dock_1": [
+        "north_west",
+        "dock_1_approach",
+        "dock_1_bay"
+      ],
+      "to_dock_2": [
+        "north_west",
+        "dock_2_approach",
+        "dock_2_bay"
+      ],
+      "to_dock_3": [
+        "north_west",
+        "dock_3_approach",
+        "dock_3_bay"
+      ],
+      "to_dock_4": [
+        "north_west",
+        "dock_4_approach",
+        "dock_4_bay"
+      ],
+      "to_dock_5": [
+        "north_west",
+        "dock_5_approach",
+        "dock_5_bay"
+      ],
+      "to_dock_6": [
+        "north_west",
+        "dock_6_approach",
+        "dock_6_bay"
+      ]
+    }
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.4195137770366,
+              37.77481006796363
+            ],
+            [
+              -122.41450758742603,
+              37.77481006796363
+            ],
+            [
+              -122.41450758742603,
+              37.77732816498206
+            ],
+            [
+              -122.4195137770366,
+              37.77732816498206
+            ],
+            [
+              -122.4195137770366,
+              37.77481006796363
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "zone",
+        "zone_id": "perimeter",
+        "name": "Site perimeter",
+        "zone_kind": "area",
+        "restricted": false,
+        "capacity": null
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.4192862229634,
+              37.775079864072744
+            ],
+            [
+              -122.41473514149924,
+              37.775079864072744
+            ],
+            [
+              -122.41473514149924,
+              37.77669864072745
+            ],
+            [
+              -122.4192862229634,
+              37.77669864072745
+            ],
+            [
+              -122.4192862229634,
+              37.775079864072744
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "zone",
+        "zone_id": "yard",
+        "name": "Yard",
+        "zone_kind": "area",
+        "restricted": false,
+        "capacity": null
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41917244592679,
+              37.77624898054559
+            ],
+            [
+              -122.41484891853584,
+              37.77624898054559
+            ],
+            [
+              -122.41484891853584,
+              37.776374885396514
+            ],
+            [
+              -122.41917244592679,
+              37.776374885396514
+            ],
+            [
+              -122.41917244592679,
+              37.77624898054559
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "zone",
+        "zone_id": "lane_north",
+        "name": "North lane",
+        "zone_kind": "lane",
+        "restricted": false,
+        "capacity": null
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41917244592679,
+              37.775439592218234
+            ],
+            [
+              -122.41484891853584,
+              37.775439592218234
+            ],
+            [
+              -122.41484891853584,
+              37.77556549706916
+            ],
+            [
+              -122.41917244592679,
+              37.77556549706916
+            ],
+            [
+              -122.41917244592679,
+              37.775439592218234
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "zone",
+        "zone_id": "lane_south",
+        "name": "South lane",
+        "zone_kind": "lane",
+        "restricted": false,
+        "capacity": null
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41894489185358,
+              37.77641085821106
+            ],
+            [
+              -122.41530402668225,
+              37.77641085821106
+            ],
+            [
+              -122.41530402668225,
+              37.776680654320174
+            ],
+            [
+              -122.41894489185358,
+              37.776680654320174
+            ],
+            [
+              -122.41894489185358,
+              37.77641085821106
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "zone",
+        "zone_id": "apron",
+        "name": "Dock apron",
+        "zone_kind": "area",
+        "restricted": false,
+        "capacity": null
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41935448918535,
+              37.77542160581096
+            ],
+            [
+              -122.41914969051946,
+              37.77542160581096
+            ],
+            [
+              -122.41914969051946,
+              37.77558348347643
+            ],
+            [
+              -122.41935448918535,
+              37.77558348347643
+            ],
+            [
+              -122.41935448918535,
+              37.77542160581096
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "zone",
+        "zone_id": "gate_a",
+        "name": "Gate A (entry)",
+        "zone_kind": "gate",
+        "restricted": false,
+        "capacity": 1
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41487167394315,
+              37.77542160581096
+            ],
+            [
+              -122.41466687527726,
+              37.77542160581096
+            ],
+            [
+              -122.41466687527726,
+              37.77558348347643
+            ],
+            [
+              -122.41487167394315,
+              37.77558348347643
+            ],
+            [
+              -122.41487167394315,
+              37.77542160581096
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "zone",
+        "zone_id": "gate_b",
+        "name": "Gate B (exit)",
+        "zone_kind": "gate",
+        "restricted": false,
+        "capacity": 1
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41894489185358,
+              37.776680654320174
+            ],
+            [
+              -122.41530402668225,
+              37.776680654320174
+            ],
+            [
+              -122.41530402668225,
+              37.77713031450204
+            ],
+            [
+              -122.41894489185358,
+              37.77713031450204
+            ],
+            [
+              -122.41894489185358,
+              37.776680654320174
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "zone",
+        "zone_id": "warehouse",
+        "name": "Warehouse",
+        "zone_kind": "building",
+        "restricted": false,
+        "capacity": null
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41876284859501,
+              37.77648280384016
+            ],
+            [
+              -122.41851253911449,
+              37.77648280384016
+            ],
+            [
+              -122.41851253911449,
+              37.776680654320174
+            ],
+            [
+              -122.41876284859501,
+              37.776680654320174
+            ],
+            [
+              -122.41876284859501,
+              37.77648280384016
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "zone",
+        "zone_id": "dock_1",
+        "name": "Dock 1",
+        "zone_kind": "dock",
+        "restricted": false,
+        "capacity": 1
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41817120800468,
+              37.77648280384016
+            ],
+            [
+              -122.41792089852414,
+              37.77648280384016
+            ],
+            [
+              -122.41792089852414,
+              37.776680654320174
+            ],
+            [
+              -122.41817120800468,
+              37.776680654320174
+            ],
+            [
+              -122.41817120800468,
+              37.77648280384016
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "zone",
+        "zone_id": "dock_2",
+        "name": "Dock 2",
+        "zone_kind": "dock",
+        "restricted": false,
+        "capacity": 1
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41757956741434,
+              37.77648280384016
+            ],
+            [
+              -122.4173292579338,
+              37.77648280384016
+            ],
+            [
+              -122.4173292579338,
+              37.776680654320174
+            ],
+            [
+              -122.41757956741434,
+              37.776680654320174
+            ],
+            [
+              -122.41757956741434,
+              37.77648280384016
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "zone",
+        "zone_id": "dock_3",
+        "name": "Dock 3",
+        "zone_kind": "dock",
+        "restricted": false,
+        "capacity": 1
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41698792682399,
+              37.77648280384016
+            ],
+            [
+              -122.41673761734346,
+              37.77648280384016
+            ],
+            [
+              -122.41673761734346,
+              37.776680654320174
+            ],
+            [
+              -122.41698792682399,
+              37.776680654320174
+            ],
+            [
+              -122.41698792682399,
+              37.77648280384016
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "zone",
+        "zone_id": "dock_4",
+        "name": "Dock 4",
+        "zone_kind": "dock",
+        "restricted": false,
+        "capacity": 1
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41639628623365,
+              37.77648280384016
+            ],
+            [
+              -122.41614597675313,
+              37.77648280384016
+            ],
+            [
+              -122.41614597675313,
+              37.776680654320174
+            ],
+            [
+              -122.41639628623365,
+              37.776680654320174
+            ],
+            [
+              -122.41639628623365,
+              37.77648280384016
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "zone",
+        "zone_id": "dock_5",
+        "name": "Dock 5",
+        "zone_kind": "dock",
+        "restricted": false,
+        "capacity": 1
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.4158046456433,
+              37.77648280384016
+            ],
+            [
+              -122.41555433616278,
+              37.77648280384016
+            ],
+            [
+              -122.41555433616278,
+              37.776680654320174
+            ],
+            [
+              -122.4158046456433,
+              37.776680654320174
+            ],
+            [
+              -122.4158046456433,
+              37.77648280384016
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "zone",
+        "zone_id": "dock_6",
+        "name": "Dock 6",
+        "zone_kind": "dock",
+        "restricted": false,
+        "capacity": 1
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41598668890188,
+              37.77569140192008
+            ],
+            [
+              -122.41496269557244,
+              37.77569140192008
+            ],
+            [
+              -122.41496269557244,
+              37.77614106210194
+            ],
+            [
+              -122.41598668890188,
+              37.77614106210194
+            ],
+            [
+              -122.41598668890188,
+              37.77569140192008
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "zone",
+        "zone_id": "staging",
+        "name": "Staging area",
+        "zone_kind": "parking",
+        "restricted": false,
+        "capacity": 8
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41701068223131,
+              37.775133823294574
+            ],
+            [
+              -122.41648730786294,
+              37.775133823294574
+            ],
+            [
+              -122.41648730786294,
+              37.77536764658914
+            ],
+            [
+              -122.41701068223131,
+              37.77536764658914
+            ],
+            [
+              -122.41701068223131,
+              37.775133823294574
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "zone",
+        "zone_id": "fuel_store",
+        "name": "Fuel store",
+        "zone_kind": "restricted",
+        "restricted": true,
+        "capacity": null
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41917244592679,
+              37.77678857276383
+            ],
+            [
+              -122.41871733778038,
+              37.77678857276383
+            ],
+            [
+              -122.41871733778038,
+              37.77705836887294
+            ],
+            [
+              -122.41917244592679,
+              37.77705836887294
+            ],
+            [
+              -122.41917244592679,
+              37.77678857276383
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "zone",
+        "zone_id": "office",
+        "name": "Office",
+        "zone_kind": "building",
+        "restricted": false,
+        "capacity": null
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41912693511215,
+          37.77561945629098
+        ]
+      },
+      "properties": {
+        "kind": "camera",
+        "source_id": "cam-gate-a",
+        "label": "Gate A",
+        "bearing_deg": 180,
+        "range_m": 55,
+        "covers": [
+          "gate_a",
+          "lane_south"
+        ],
+        "entity_type": "camera"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41912693511215,
+              37.77561945629098
+            ],
+            [
+              -122.4187459882195,
+              37.77522704294298
+            ],
+            [
+              -122.41883194743136,
+              37.775183234927255
+            ],
+            [
+              -122.41892578674819,
+              37.77515107983932
+            ],
+            [
+              -122.41902499940883,
+              37.77513143664883
+            ],
+            [
+              -122.41912693511215,
+              37.77512483009093
+            ],
+            [
+              -122.41922887081546,
+              37.77513143664883
+            ],
+            [
+              -122.4193280834761,
+              37.77515107983932
+            ],
+            [
+              -122.41942192279294,
+              37.775183234927255
+            ],
+            [
+              -122.4195078820048,
+              37.77522704294298
+            ],
+            [
+              -122.41912693511215,
+              37.77561945629098
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "camera_fov",
+        "source_id": "cam-gate-a",
+        "label": "Gate A field of view"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41489442935048,
+          37.77561945629098
+        ]
+      },
+      "properties": {
+        "kind": "camera",
+        "source_id": "cam-gate-b",
+        "label": "Gate B",
+        "bearing_deg": 180,
+        "range_m": 55,
+        "covers": [
+          "gate_b",
+          "lane_south"
+        ],
+        "entity_type": "camera"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41489442935048,
+              37.77561945629098
+            ],
+            [
+              -122.41451348245782,
+              37.77522704294298
+            ],
+            [
+              -122.41459944166968,
+              37.775183234927255
+            ],
+            [
+              -122.41469328098653,
+              37.77515107983932
+            ],
+            [
+              -122.41479249364716,
+              37.77513143664883
+            ],
+            [
+              -122.41489442935048,
+              37.77512483009093
+            ],
+            [
+              -122.4149963650538,
+              37.77513143664883
+            ],
+            [
+              -122.41509557771442,
+              37.77515107983932
+            ],
+            [
+              -122.41518941703127,
+              37.775183234927255
+            ],
+            [
+              -122.41527537624313,
+              37.77522704294298
+            ],
+            [
+              -122.41489442935048,
+              37.77561945629098
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "camera_fov",
+        "source_id": "cam-gate-b",
+        "label": "Gate B field of view"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41846702829984,
+          37.77641085821106
+        ]
+      },
+      "properties": {
+        "kind": "camera",
+        "source_id": "cam-dock-1-2",
+        "label": "Docks 1-2",
+        "bearing_deg": 0,
+        "range_m": 45,
+        "covers": [
+          "dock_1",
+          "dock_2",
+          "apron"
+        ],
+        "entity_type": "camera"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41846702829984,
+              37.77641085821106
+            ],
+            [
+              -122.41879613341213,
+              37.77672087192631
+            ],
+            [
+              -122.41872302663221,
+              37.776761333637566
+            ],
+            [
+              -122.41864214147249,
+              37.77679114633034
+            ],
+            [
+              -122.41855593558765,
+              37.77680940416105
+            ],
+            [
+              -122.41846702829984,
+              37.776815552374735
+            ],
+            [
+              -122.41837812101204,
+              37.77680940416105
+            ],
+            [
+              -122.4182919151272,
+              37.77679114633034
+            ],
+            [
+              -122.41821102996748,
+              37.776761333637566
+            ],
+            [
+              -122.41813792318756,
+              37.77672087192631
+            ],
+            [
+              -122.41846702829984,
+              37.77641085821106
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "camera_fov",
+        "source_id": "cam-dock-1-2",
+        "label": "Docks 1-2 field of view"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41728374711916,
+          37.77641085821106
+        ]
+      },
+      "properties": {
+        "kind": "camera",
+        "source_id": "cam-dock-3-4",
+        "label": "Docks 3-4",
+        "bearing_deg": 0,
+        "range_m": 45,
+        "covers": [
+          "dock_3",
+          "dock_4",
+          "apron"
+        ],
+        "entity_type": "camera"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41728374711916,
+              37.77641085821106
+            ],
+            [
+              -122.41761285223144,
+              37.77672087192631
+            ],
+            [
+              -122.41753974545152,
+              37.776761333637566
+            ],
+            [
+              -122.41745886029182,
+              37.77679114633034
+            ],
+            [
+              -122.41737265440696,
+              37.77680940416105
+            ],
+            [
+              -122.41728374711916,
+              37.776815552374735
+            ],
+            [
+              -122.41719483983137,
+              37.77680940416105
+            ],
+            [
+              -122.41710863394651,
+              37.77679114633034
+            ],
+            [
+              -122.41702774878681,
+              37.776761333637566
+            ],
+            [
+              -122.41695464200689,
+              37.77672087192631
+            ],
+            [
+              -122.41728374711916,
+              37.77641085821106
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "camera_fov",
+        "source_id": "cam-dock-3-4",
+        "label": "Docks 3-4 field of view"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41610046593848,
+          37.77641085821106
+        ]
+      },
+      "properties": {
+        "kind": "camera",
+        "source_id": "cam-dock-5-6",
+        "label": "Docks 5-6",
+        "bearing_deg": 0,
+        "range_m": 45,
+        "covers": [
+          "dock_5",
+          "dock_6",
+          "apron"
+        ],
+        "entity_type": "camera"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41610046593848,
+              37.77641085821106
+            ],
+            [
+              -122.41642957105076,
+              37.77672087192631
+            ],
+            [
+              -122.41635646427083,
+              37.776761333637566
+            ],
+            [
+              -122.41627557911113,
+              37.77679114633034
+            ],
+            [
+              -122.41618937322627,
+              37.77680940416105
+            ],
+            [
+              -122.41610046593848,
+              37.776815552374735
+            ],
+            [
+              -122.41601155865068,
+              37.77680940416105
+            ],
+            [
+              -122.41592535276583,
+              37.77679114633034
+            ],
+            [
+              -122.41584446760612,
+              37.776761333637566
+            ],
+            [
+              -122.4157713608262,
+              37.77672087192631
+            ],
+            [
+              -122.41610046593848,
+              37.77641085821106
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "camera_fov",
+        "source_id": "cam-dock-5-6",
+        "label": "Docks 5-6 field of view"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41871733778038,
+          37.77597918443647
+        ]
+      },
+      "properties": {
+        "kind": "camera",
+        "source_id": "cam-yard-west",
+        "label": "Yard west",
+        "bearing_deg": 90,
+        "range_m": 70,
+        "covers": [
+          "yard",
+          "lane_south"
+        ],
+        "entity_type": "camera"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41871733778038,
+              37.77597918443647
+            ],
+            [
+              -122.4181541701815,
+              37.776424325305825
+            ],
+            [
+              -122.41805512274077,
+              37.77632892937329
+            ],
+            [
+              -122.41798152385266,
+              37.776220092938985
+            ],
+            [
+              -122.41793620188113,
+              37.77610199852602
+            ],
+            [
+              -122.41792089852414,
+              37.77597918443647
+            ],
+            [
+              -122.41793620188113,
+              37.77585637034692
+            ],
+            [
+              -122.41798152385266,
+              37.77573827593396
+            ],
+            [
+              -122.41805512274077,
+              37.775629439499646
+            ],
+            [
+              -122.4181541701815,
+              37.77553404356712
+            ],
+            [
+              -122.41871733778038,
+              37.77597918443647
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "camera_fov",
+        "source_id": "cam-yard-west",
+        "label": "Yard west field of view"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41553158075546,
+          37.77597918443647
+        ]
+      },
+      "properties": {
+        "kind": "camera",
+        "source_id": "cam-yard-east",
+        "label": "Yard east",
+        "bearing_deg": 270,
+        "range_m": 70,
+        "covers": [
+          "yard",
+          "staging"
+        ],
+        "entity_type": "camera"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41553158075546,
+              37.77597918443647
+            ],
+            [
+              -122.41609474835434,
+              37.77553404356712
+            ],
+            [
+              -122.41619379579505,
+              37.775629439499646
+            ],
+            [
+              -122.41626739468317,
+              37.77573827593396
+            ],
+            [
+              -122.4163127166547,
+              37.77585637034692
+            ],
+            [
+              -122.41632802001169,
+              37.77597918443647
+            ],
+            [
+              -122.4163127166547,
+              37.77610199852602
+            ],
+            [
+              -122.41626739468317,
+              37.776220092938985
+            ],
+            [
+              -122.41619379579505,
+              37.77632892937329
+            ],
+            [
+              -122.41609474835434,
+              37.776424325305825
+            ],
+            [
+              -122.41553158075546,
+              37.77597918443647
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "camera_fov",
+        "source_id": "cam-yard-east",
+        "label": "Yard east field of view"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41674899504713,
+          37.775439592218234
+        ]
+      },
+      "properties": {
+        "kind": "camera",
+        "source_id": "cam-fuel",
+        "label": "Fuel store",
+        "bearing_deg": 180,
+        "range_m": 40,
+        "covers": [
+          "fuel_store"
+        ],
+        "entity_type": "camera"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.41674899504713,
+              37.775439592218234
+            ],
+            [
+              -122.41652144097391,
+              37.775128058505786
+            ],
+            [
+              -122.41657483269955,
+              37.77510724674735
+            ],
+            [
+              -122.41663120439125,
+              37.77509212151207
+            ],
+            [
+              -122.41668959151372,
+              37.7750829415969
+            ],
+            [
+              -122.41674899504713,
+              37.775079864072744
+            ],
+            [
+              -122.41680839858053,
+              37.7750829415969
+            ],
+            [
+              -122.416866785703,
+              37.77509212151207
+            ],
+            [
+              -122.41692315739469,
+              37.77510724674735
+            ],
+            [
+              -122.41697654912033,
+              37.775128058505786
+            ],
+            [
+              -122.41674899504713,
+              37.775439592218234
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "kind": "camera_fov",
+        "source_id": "cam-fuel",
+        "label": "Fuel store field of view"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41723823630451,
+          37.776518776654704
+        ]
+      },
+      "properties": {
+        "kind": "sensor",
+        "source_id": "iot-temp-dock-3",
+        "label": "Dock 3 temperature",
+        "metric": "temperature_c",
+        "unit": "\u00b0C",
+        "zone_id": "dock_3",
+        "entity_type": "sensor"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41605495512384,
+          37.776518776654704
+        ]
+      },
+      "properties": {
+        "kind": "sensor",
+        "source_id": "iot-temp-dock-5",
+        "label": "Dock 5 temperature",
+        "metric": "temperature_c",
+        "unit": "\u00b0C",
+        "zone_id": "dock_5",
+        "entity_type": "sensor"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41674899504713,
+          37.77525073494186
+        ]
+      },
+      "properties": {
+        "kind": "sensor",
+        "source_id": "iot-temp-fuel",
+        "label": "Fuel store temperature",
+        "metric": "temperature_c",
+        "unit": "\u00b0C",
+        "zone_id": "fuel_store",
+        "entity_type": "sensor"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41712445926791,
+          37.776878504800194
+        ]
+      },
+      "properties": {
+        "kind": "sensor",
+        "source_id": "iot-humidity-wh",
+        "label": "Warehouse humidity",
+        "metric": "humidity_pct",
+        "unit": "%",
+        "zone_id": "warehouse",
+        "entity_type": "sensor"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41905866889019,
+          37.77683353878201
+        ]
+      },
+      "properties": {
+        "kind": "sensor",
+        "source_id": "iot-power-main",
+        "label": "Main switchboard",
+        "metric": "power_kw",
+        "unit": "kW",
+        "zone_id": "office",
+        "entity_type": "sensor"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.4192520898524,
+          37.7755025446437
+        ]
+      },
+      "properties": {
+        "kind": "sensor",
+        "source_id": "iot-rfid-gate-a",
+        "label": "Gate A RFID reader",
+        "metric": "rfid_read",
+        "unit": "count",
+        "zone_id": "gate_a",
+        "entity_type": "sensor"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41476927461021,
+          37.7755025446437
+        ]
+      },
+      "properties": {
+        "kind": "sensor",
+        "source_id": "iot-rfid-gate-b",
+        "label": "Gate B RFID reader",
+        "metric": "rfid_read",
+        "unit": "count",
+        "zone_id": "gate_b",
+        "entity_type": "sensor"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41701068223131,
+          37.77525073494186
+        ]
+      },
+      "properties": {
+        "kind": "sensor",
+        "source_id": "iot-door-fuel",
+        "label": "Fuel store door",
+        "metric": "door_open",
+        "unit": "bool",
+        "zone_id": "fuel_store",
+        "entity_type": "sensor"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41944551081464,
+          37.7755025446437
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "gate_a_approach"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.4192520898524,
+          37.7755025446437
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "gate_a"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41901315807554,
+          37.7755025446437
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "gate_a_inner"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41871733778038,
+          37.7755025446437
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "south_west"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41712445926791,
+          37.7755025446437
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "south_mid"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41553158075546,
+          37.7755025446437
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "south_east"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41500820638709,
+          37.7755025446437
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "gate_b_inner"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41476927461021,
+          37.7755025446437
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "gate_b"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41455309824066,
+          37.7755025446437
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "gate_b_exit"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41901315807554,
+          37.7758892524001
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "west_link"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41500820638709,
+          37.7758892524001
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "east_link"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41871733778038,
+          37.77631193297105
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "north_west"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41712445926791,
+          37.77631193297105
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "north_mid"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41553158075546,
+          37.77631193297105
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "north_east"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41585015645795,
+          37.775799320363724
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "staging_in"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41553158075546,
+          37.77590723880737
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "staging_bay"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41674899504713,
+          37.77525073494186
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "fuel_store"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41894489185358,
+          37.77677058635655
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "office_door"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41712445926791,
+          37.7758892524001
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "yard_centre"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41863769385475,
+          37.77633891258196
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "dock_1_approach"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41863769385475,
+          37.77654575626562
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "dock_1_bay"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.4180460532644,
+          37.77633891258196
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "dock_2_approach"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.4180460532644,
+          37.77654575626562
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "dock_2_bay"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41745441267406,
+          37.77633891258196
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "dock_3_approach"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41745441267406,
+          37.77654575626562
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "dock_3_bay"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41686277208373,
+          37.77633891258196
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "dock_4_approach"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41686277208373,
+          37.77654575626562
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "dock_4_bay"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41627113149339,
+          37.77633891258196
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "dock_5_approach"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41627113149339,
+          37.77654575626562
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "dock_5_bay"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41567949090305,
+          37.77633891258196
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "dock_6_approach"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.41567949090305,
+          37.77654575626562
+        ]
+      },
+      "properties": {
+        "kind": "waypoint",
+        "name": "dock_6_bay"
+      }
+    }
+  ]
+}

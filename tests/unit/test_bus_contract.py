@@ -8,6 +8,8 @@ production incident later.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import os
 from collections.abc import AsyncIterator
 from datetime import timedelta
@@ -209,6 +211,54 @@ async def test_read_range_does_not_disturb_consumers(bus: object, topic: str) ->
 
 
 # ------------------------------------------------------------------ maintenance
+async def test_tail_starts_from_now_not_from_history(bus: object, topic: str) -> None:
+    """An SSE client must get what happens next, never a replay of the whole stream."""
+    await bus.publish(topic, make_detection("history"))  # type: ignore[attr-defined]
+
+    received: list[BusMessage] = []
+    stream = bus.tail([topic], block_ms=100)  # type: ignore[attr-defined]
+
+    async def collect() -> None:
+        async for message in stream:
+            received.append(message)
+            if len(received) >= 1:
+                break
+
+    task = asyncio.create_task(collect())
+    await asyncio.sleep(0.3)  # let the tail establish its position
+    await bus.publish(topic, make_detection("live"))  # type: ignore[attr-defined]
+    await asyncio.wait_for(task, timeout=5.0)
+    await stream.aclose()
+
+    assert [m.decode(Detection).class_name for m in received] == ["live"]
+
+
+async def test_tail_can_start_from_a_timestamp(bus: object, topic: str) -> None:
+    """Replaying an incident needs the tail to begin at a chosen instant."""
+    before = utc_now() - timedelta(minutes=1)
+    await bus.publish(topic, make_detection("earlier"))  # type: ignore[attr-defined]
+
+    received: list[BusMessage] = []
+    stream = bus.tail([topic], start=before, block_ms=100)  # type: ignore[attr-defined]
+    async for message in stream:
+        received.append(message)
+        break
+    await stream.aclose()
+
+    assert received and received[0].decode(Detection).class_name == "earlier"
+
+
+async def test_tail_does_not_disturb_consumer_groups(bus: object, topic: str) -> None:
+    """Tailing is an observation, not a consumption: a real consumer must still get everything."""
+    await bus.publish(topic, make_detection())  # type: ignore[attr-defined]
+    stream = bus.tail([topic], block_ms=50)  # type: ignore[attr-defined]
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(anext(stream), timeout=0.3)
+    await stream.aclose()
+
+    assert len(await consume_n(bus, topic, "worker", 1)) == 1
+
+
 async def test_length_and_trim(bus: object, topic: str) -> None:
     for _ in range(4):
         await bus.publish(topic, make_detection())  # type: ignore[attr-defined]

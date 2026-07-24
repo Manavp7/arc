@@ -94,6 +94,25 @@ class Bus(Pingable, Closeable, Protocol):
         """Read history for replay. Ordered oldest → newest."""
         ...
 
+    def tail(
+        self,
+        topics: Sequence[str],
+        *,
+        start: datetime | None = None,
+        block_ms: int | None = None,
+        batch: int | None = None,
+    ) -> AsyncIterator[BusMessage]:
+        """Follow topics from *now* (or from ``start``), without consumer groups or acks.
+
+        Distinct from :meth:`consume` on purpose. `consume` is for work that must not be lost:
+        it uses a group, tracks a cursor and requires an ack. `tail` is for observers — the SSE
+        fan-out to browsers, the timeline tail, `just demo` narration — where the only sane
+        starting point is "whatever happens next". Tailing through a consumer group would either
+        replay the entire stream to every browser that connects, or corrupt a real consumer's
+        cursor.
+        """
+        ...
+
     async def lag(self, topic: str, group: str) -> int:
         """Messages pending for ``group``. The core backpressure signal."""
         ...
@@ -109,7 +128,17 @@ class GraphStore(Pingable, Closeable, Protocol):
     so :meth:`snapshot_at` can rebuild the graph as it stood at any instant (PRD M8/UC5).
     """
 
-    async def upsert_entity(self, entity: Entity) -> None: ...
+    async def upsert_entity(self, entity: Entity) -> None:
+        """Insert or update an entity.
+
+        **The merge contract, which every adapter must honour identically:** the store protects the
+        *lifetime bounds only* — ``first_seen`` never moves later and ``last_seen`` never moves
+        earlier, so a replayed or out-of-order message cannot shrink what is known about an entity.
+        Everything else (attributes, provenance, state) belongs to the producer: fusion is the
+        component that decides what an entity's attributes and provenance *are* (PRD M5), and a
+        store that quietly merged them would compete with it.
+        """
+        ...
 
     async def upsert_entities(self, entities: Iterable[Entity]) -> int: ...
 

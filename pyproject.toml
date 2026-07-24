@@ -12,6 +12,9 @@ license = { text = "Apache-2.0" }
 dependencies = [
     "sio-schemas",
     "sio-core",
+    "sio-worldmodel",
+    "sio-ingest",
+    "sio-api",
 ]
 
 [tool.uv]
@@ -23,6 +26,9 @@ members = ["libs/*", "services/*"]
 [tool.uv.sources]
 sio-schemas = { workspace = true }
 sio-core = { workspace = true }
+sio-worldmodel = { workspace = true }
+sio-ingest = { workspace = true }
+sio-api = { workspace = true }
 
 [dependency-groups]
 dev = [

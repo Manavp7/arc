@@ -212,6 +212,43 @@ class RedisStreamBus:
         )
         await self.publish_message(dlq)
 
+    async def tail(
+        self,
+        topics: Sequence[str],
+        *,
+        start: datetime | None = None,
+        block_ms: int | None = None,
+        batch: int | None = None,
+    ) -> AsyncIterator[BusMessage]:
+        """Follow topics with ``XREAD`` — no group, no cursor, no acks.
+
+        ``$`` means "only what arrives after this call", which is exactly what an SSE client wants.
+        Using a consumer group here would either replay the whole stream to every browser or move a
+        real consumer's cursor.
+        """
+        names = [str(t) for t in topics]
+        block = block_ms or self._block_ms
+        count = batch or self._batch
+        if start is None:
+            cursors = dict.fromkeys(names, "$")
+        else:
+            cursors = dict.fromkeys(names, str(int(start.timestamp() * 1000) - 1))
+
+        while True:
+            try:
+                response = await self._redis.xread(cursors, count=count, block=block)
+            except Exception as exc:
+                raise BusError(f"xread failed for {names}: {exc}") from exc
+            for topic, entries in response or []:
+                for stream_id, fields in entries:
+                    cursors[topic] = stream_id
+                    try:
+                        yield decode(fields, stream_id=stream_id)
+                    except Exception as exc:
+                        log.warning(
+                            "bus.tail_skip", topic=topic, stream_id=stream_id, error=str(exc)
+                        )
+
     async def read_range(
         self,
         topic: str,

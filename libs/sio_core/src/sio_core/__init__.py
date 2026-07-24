@@ -19,6 +19,7 @@ from .explain import ExplanationBuilder, merge_explanations
 from .ports import BlobStore, Bus, GraphStore, VectorStore
 from .registry import close_all, get_blob, get_bus, get_graph, get_pg_pool, get_vectors, override
 from .service import MessageContext, SioService
+from .stores.pg import PgPool
 from .telemetry import (
     Metrics,
     configure_logging,
@@ -44,6 +45,7 @@ __all__ = [
     "Metrics",
     "ModelUnavailable",
     "NotFound",
+    "PgPool",
     "PolicyDenied",
     "Settings",
     "SioError",

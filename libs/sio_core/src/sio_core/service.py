@@ -87,7 +87,21 @@ class SioService:
         self._seen: OrderedDict[str, None] = OrderedDict()
         self._counters = {"consumed": 0, "produced": 0, "errors": 0}
         self._extra_checks: dict[str, str] = {}
-        self.app = self._build_app()
+        self._app: FastAPI | None = None
+
+    @property
+    def app(self) -> FastAPI:
+        """The HTTP application, built on first access.
+
+        Deliberately lazy. Building it in ``__init__`` would call the subclass's ``routes()`` hook
+        before the subclass had finished its own ``__init__`` — so a route closure referencing
+        ``self.read`` would raise ``AttributeError`` at import time. Lazy construction means a
+        subclass can set up whatever its routes need, in the normal order, after calling
+        ``super().__init__()``.
+        """
+        if self._app is None:
+            self._app = self._build_app()
+        return self._app
 
     # ------------------------------------------------------------------- plumbing
     @property
@@ -132,7 +146,16 @@ class SioService:
         """Periodic work, every :attr:`tick_interval_s` seconds."""
 
     async def health_checks(self) -> dict[str, str]:
-        """Extra dependency checks merged into ``/health``."""
+        """Extra dependency checks merged into ``/health``.
+
+        Return values starting with ``ok`` are healthy — ``"ok (18 agents)"`` is fine. Anything
+        else marks the service degraded, so put counters and other non-status detail in
+        :meth:`health_info` instead.
+        """
+        return {}
+
+    async def health_info(self) -> dict[str, str]:
+        """Informational values for ``/health`` that must not affect status."""
         return {}
 
     def routes(self, app: FastAPI) -> None:
@@ -172,8 +195,16 @@ class SioService:
         except Exception as exc:
             checks["custom"] = f"error: {exc}"
         checks.update(self._extra_checks)
-        if any(v != "ok" for v in checks.values()):
+        # A check is healthy when it *starts with* "ok", so a service can report useful detail
+        # ("ok (18 agents, 81 frames)") without declaring itself broken.
+        if any(not str(value).lower().startswith("ok") for value in checks.values()):
             status = "degraded"
+
+        info: dict[str, str] = {}
+        try:
+            info = await self.health_info()
+        except Exception as exc:
+            info = {"health_info_error": str(exc)}
 
         lag: dict[str, int] = {}
         for topic in self.subscribes:
@@ -188,6 +219,7 @@ class SioService:
             schema_version=SCHEMA_VERSION,
             uptime_s=round(time.monotonic() - self._started_at, 3),
             checks=checks,
+            info=info,
             consumed=self._counters["consumed"],
             produced=self._counters["produced"],
             errors=self._counters["errors"],

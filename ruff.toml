@@ -31,6 +31,7 @@ ignore = [
 # direction obvious at a glance. They are banned in services, where absolute imports of
 # sio_core/sio_schemas are the point.
 "libs/**" = ["TID252"]
+"services/**" = ["TID252"]
 
 [lint.isort]
 known-first-party = ["sio_schemas", "sio_core", "sio_sdk"]

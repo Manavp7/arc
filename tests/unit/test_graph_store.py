@@ -48,8 +48,14 @@ async def test_upsert_and_get(graph: MemoryGraphStore) -> None:
     assert found is not None and found.label == "Truck ABC-123"
 
 
-async def test_upsert_merges_rather_than_replaces(graph: MemoryGraphStore) -> None:
-    """A new observation must extend an entity's history, never erase it."""
+async def test_upsert_protects_the_lifetime_bounds(graph: MemoryGraphStore) -> None:
+    """The merge contract: first_seen never moves later, last_seen never moves earlier.
+
+    This is what keeps a replayed or out-of-order message from shrinking what is known about an
+    entity — and it is what makes dwell time trustworthy (UC1). Everything *else* in the payload
+    belongs to the producer (fusion owns attributes and provenance, PRD M5), which is why this test
+    asserts the bounds and deliberately does not assert attribute merging.
+    """
     start = utc_now()
     await graph.upsert_entity(
         truck().model_copy(
@@ -60,7 +66,6 @@ async def test_upsert_merges_rather_than_replaces(graph: MemoryGraphStore) -> No
                     Provenance(source_id="cam-gate-a", modality=Modality.VIDEO, ts=start)
                 ],
                 "attributes": {"plate": "ABC-123"},
-                "track_ids": ["trk_1"],
             }
         )
     )
@@ -68,11 +73,10 @@ async def test_upsert_merges_rather_than_replaces(graph: MemoryGraphStore) -> No
     await graph.upsert_entity(
         truck().model_copy(
             update={
-                "first_seen": later,
+                "first_seen": later,  # a fresh producer claiming "I just saw this for the first time"
                 "last_seen": later,
                 "provenance": [Provenance(source_id="gps-1", modality=Modality.GPS, ts=later)],
-                "attributes": {"colour": "red"},
-                "track_ids": ["trk_2"],
+                "attributes": {"plate": "ABC-123", "colour": "red"},
             }
         )
     )
@@ -81,10 +85,20 @@ async def test_upsert_merges_rather_than_replaces(graph: MemoryGraphStore) -> No
     assert merged is not None
     assert merged.first_seen == start, "earliest sighting is preserved"
     assert merged.last_seen == later, "latest sighting wins"
-    assert merged.dwell_s() == pytest.approx(1200)
-    assert {p.source_id for p in merged.provenance} == {"cam-gate-a", "gps-1"}
-    assert merged.attributes == {"plate": "ABC-123", "colour": "red"}
-    assert merged.track_ids == ["trk_1", "trk_2"]
+    assert merged.dwell_s() == pytest.approx(1200), "dwell time survives a re-publish"
+    assert merged.attributes["colour"] == "red", "the producer's payload is authoritative"
+
+
+async def test_out_of_order_delivery_cannot_rewind_last_seen(graph: MemoryGraphStore) -> None:
+    """At-least-once delivery reorders messages; an old one must not undo a newer one."""
+    start = utc_now()
+    latest = start + timedelta(minutes=5)
+    await graph.upsert_entity(truck().model_copy(update={"first_seen": start, "last_seen": latest}))
+    await graph.upsert_entity(
+        truck().model_copy(update={"first_seen": start, "last_seen": start})  # stale redelivery
+    )
+    found = await graph.get_entity("ent_truck", tenant_id=TENANT)
+    assert found is not None and found.last_seen == latest
 
 
 async def test_find_entities_filters(graph: MemoryGraphStore) -> None:

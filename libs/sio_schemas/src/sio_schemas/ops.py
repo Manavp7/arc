@@ -199,7 +199,18 @@ class HealthStatus(SioModel):
     version: str = "0.1.0"
     schema_version: str
     uptime_s: float = 0.0
-    checks: dict[str, str] = Field(default_factory=dict, description="dependency → ok/error detail")
+    checks: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "dependency → status. A value is healthy when it starts with 'ok'; anything else "
+            "(error/unreachable/degraded) marks the service degraded. Informational values belong "
+            "in `info`, not here."
+        ),
+    )
+    info: dict[str, str] = Field(
+        default_factory=dict,
+        description="Non-status detail worth surfacing on /health (client counts, model names, …)",
+    )
     consumed: int = 0
     produced: int = 0
     errors: int = 0

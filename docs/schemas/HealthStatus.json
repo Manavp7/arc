@@ -16,7 +16,7 @@
       "additionalProperties": {
         "type": "string"
       },
-      "description": "dependency \u2192 ok/error detail",
+      "description": "dependency \u2192 status. A value is healthy when it starts with 'ok'; anything else (error/unreachable/degraded) marks the service degraded. Informational values belong in `info`, not here.",
       "title": "Checks",
       "type": "object"
     },
@@ -29,6 +29,14 @@
       "default": 0,
       "title": "Errors",
       "type": "integer"
+    },
+    "info": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Non-status detail worth surfacing on /health (client counts, model names, \u2026)",
+      "title": "Info",
+      "type": "object"
     },
     "lag": {
       "additionalProperties": {

@@ -163,6 +163,50 @@ class MemoryBus:
         )
         await self.publish_message(dlq)
 
+    async def tail(
+        self,
+        topics: Sequence[str],
+        *,
+        start: datetime | None = None,
+        block_ms: int | None = None,
+        batch: int | None = None,
+    ) -> AsyncIterator[BusMessage]:
+        """Follow topics from now (or from ``start``) without a consumer group."""
+        names = [str(t) for t in topics]
+        block = (block_ms or 500) / 1000.0
+        limit = batch or 64
+        # Start at the current end of each stream unless a time is given: an observer wants what
+        # happens next, not the backlog.
+        cursors: dict[str, int] = {}
+        for topic in names:
+            if start is None:
+                cursors[topic] = len(self._stream(topic))
+            else:
+                lo = int(start.timestamp() * 1000)
+                stream = self._stream(topic)
+                cursors[topic] = next(
+                    (i for i, entry in enumerate(stream) if entry.ts_ms >= lo), len(stream)
+                )
+
+        while not self._closed:
+            delivered = 0
+            for topic in names:
+                stream = self._stream(topic)
+                while cursors[topic] < len(stream) and delivered < limit:
+                    entry = stream[cursors[topic]]
+                    cursors[topic] += 1
+                    delivered += 1
+                    yield decode(entry.fields, stream_id=entry.stream_id)
+            if delivered == 0:
+                for topic in names:
+                    self._event(topic).clear()
+                waiters = [asyncio.create_task(self._event(t).wait()) for t in names]
+                try:
+                    await asyncio.wait(waiters, timeout=block, return_when=asyncio.FIRST_COMPLETED)
+                finally:
+                    for task in waiters:
+                        task.cancel()
+
     async def read_range(
         self,
         topic: str,

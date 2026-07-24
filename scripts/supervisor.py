@@ -230,12 +230,30 @@ class Supervisor:
         return False
 
     # ---------------------------------------------------------------------- running
+    @staticmethod
+    def port_in_use(port: int) -> bool:
+        import socket
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.settimeout(0.2)
+            return probe.connect_ex(("127.0.0.1", port)) == 0
+
     async def start(self, spec: ProcessSpec) -> bool:
         if not self.entry_point_exists(spec):
             if spec.optional:
                 self.say(spec.name, "not built yet — skipping")
                 return True
             self.say(spec.name, "entry point missing")
+            return False
+
+        # A port already in use means a previous run is still alive. Uvicorn's own failure for this
+        # is a twenty-line traceback that buries the actual cause, so say it plainly and skip.
+        if spec.health_port and self.port_in_use(spec.health_port):
+            self.say(
+                spec.name,
+                f"port {spec.health_port} is already in use — a previous run is still alive. "
+                f"stop it with: just stop",
+            )
             return False
 
         LOG_DIR.mkdir(parents=True, exist_ok=True)
