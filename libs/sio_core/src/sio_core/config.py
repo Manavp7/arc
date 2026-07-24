@@ -162,6 +162,14 @@ class Settings(BaseSettings):
     warning rather than failing to start.
     """
     perception_fps: float = 2.0
+    perception_max_age_s: float = 60.0
+    """Skip frames older than this.
+
+    At-least-once delivery plus a consumer group that starts at the beginning of the stream means a
+    restart replays history. For a live picture that history is worthless: inferring on a frame from
+    an hour ago costs the same as inferring on the current one and tells an operator nothing. The
+    timeline still has every observation; only *inference* is skipped.
+    """
     enable_segmentation: bool = False
     enable_ocr: bool = True
     enable_audio: bool = False

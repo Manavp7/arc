@@ -11,6 +11,8 @@ from fastapi import FastAPI, HTTPException
 from sio_core import MessageContext, SioService
 from sio_schemas import BusMessage, Modality, Observation, Topic
 
+from sio_core import get_blob
+
 from .connectors.base import (
     Connector,
     ConnectorConfig,
@@ -19,6 +21,7 @@ from .connectors.base import (
 )
 from .connectors.simulator import SimulatorConnector
 from .connectors.weather import OpenMeteoConnector
+from .sim.renderer import CameraRenderer
 from .site import load_site
 
 # Modality decides the topic. Keeping this mapping in one place means a new connector only has to
@@ -54,6 +57,10 @@ class IngestService(SioService):
         self._tasks: list[asyncio.Task[None]] = []
         self._published_by_topic: dict[str, int] = {}
         self._entity_task: asyncio.Task[None] | None = None
+        self.blob = get_blob(self.settings)
+        self.renderer = CameraRenderer(self.settings.samples_dir)
+        self._frames_written = 0
+        self._frames_unrendered = 0
 
     # ----------------------------------------------------------------- lifecycle
     def _build_connectors(self) -> list[Connector]:
@@ -99,6 +106,14 @@ class IngestService(SioService):
         return [simulator, weather]
 
     async def setup(self) -> None:
+        if self.renderer.available:
+            self.log.info("ingest.renderer_ready", **self.renderer.stats())
+        else:
+            self.log.warning(
+                "ingest.renderer_unavailable",
+                effect="frame observations will carry no raw_ref; perception falls back to synthetic",
+                hint="run: just samples",
+            )
         self.connectors = self._build_connectors()
         for connector in self.connectors:
             try:
@@ -152,6 +167,8 @@ class IngestService(SioService):
             try:
                 async for observation in connector.observations():
                     topic = self._topic_for(connector, observation)
+                    if topic == str(Topic.RAW_FRAMES):
+                        await self._store_frame(observation)
                     await self.publish(topic, observation)
                     self._published_by_topic[topic] = self._published_by_topic.get(topic, 0) + 1
                     await self._apply_backpressure(topic)
@@ -164,6 +181,34 @@ class IngestService(SioService):
                 )
                 # Restart the source after a pause rather than losing it for the process lifetime.
                 await asyncio.sleep(5.0)
+
+    async def _store_frame(self, observation: Observation) -> None:
+        """Render the camera view and write it to the object store.
+
+        Done *before* publishing, so a consumer that receives the observation and immediately fetches
+        `raw_ref` always finds bytes. Publishing first would create a race that shows up as
+        intermittent "frame missing" warnings in perception and looks like a storage fault.
+
+        When rendering is unavailable the `raw_ref` is cleared rather than left dangling: a reference
+        to something that does not exist is worse than no reference, because a consumer cannot tell
+        the difference between "not yet written" and "never will be".
+        """
+        if not observation.raw_ref:
+            return
+        rendered = await asyncio.to_thread(
+            self.renderer.render, observation.source_id, observation.payload
+        )
+        if rendered is None:
+            self._frames_unrendered += 1
+            observation.raw_ref = None
+            return
+        try:
+            await self.blob.put(observation.raw_ref, rendered, content_type="image/jpeg")
+            self._frames_written += 1
+        except Exception as exc:  # noqa: BLE001 - a storage hiccup must not stop ingestion
+            self.metrics.errors.labels(service=self.name, kind="blob").inc()
+            self.log.warning("frame.store_failed", key=observation.raw_ref, error=str(exc))
+            observation.raw_ref = None
 
     def _topic_for(self, connector: Connector, observation: Observation) -> str:
         if isinstance(connector, SimulatorConnector):
@@ -211,6 +256,8 @@ class IngestService(SioService):
     # ------------------------------------------------------------------ reporting
     async def health_checks(self) -> dict[str, str]:
         checks: dict[str, str] = {}
+        with contextlib.suppress(Exception):
+            checks["blob"] = "ok" if await self.blob.ping() else "unreachable"
         for connector in self.connectors:
             with contextlib.suppress(Exception):
                 checks[f"connector:{connector.source_id}"] = await connector.health()
@@ -223,6 +270,8 @@ class IngestService(SioService):
             published=self._published_by_topic,
             agents=stats.get("agents"),
             frames=stats.get("frames"),
+            frames_written=self._frames_written,
+            frames_unrendered=self._frames_unrendered,
             incidents=stats.get("incidents"),
         )
 
@@ -234,6 +283,11 @@ class IngestService(SioService):
                 "registered_kinds": connector_kinds(),
                 "running": [connector.describe() for connector in self.connectors],
                 "published": self._published_by_topic,
+                "renderer": {
+                    **self.renderer.stats(),
+                    "frames_written": self._frames_written,
+                    "frames_unrendered": self._frames_unrendered,
+                },
             }
 
         @app.get("/site", tags=["ingest"])

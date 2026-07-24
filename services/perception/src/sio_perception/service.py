@@ -55,6 +55,8 @@ class PerceptionService(SioService):
         self._last_inference_at: dict[str, float] = {}
         self._inference_ms: list[float] = []
         self._decode_failures = 0
+        self._stale_skipped = 0
+        self._warned_stale = False
 
     # ----------------------------------------------------------------- lifecycle
     async def setup(self) -> None:
@@ -92,6 +94,7 @@ class PerceptionService(SioService):
             "detections": str(self._detections),
             "mean_inference": mean,
             "decode_failures": str(self._decode_failures),
+            "stale_skipped": str(self._stale_skipped),
         }
 
     # ------------------------------------------------------------------ handling
@@ -101,6 +104,8 @@ class PerceptionService(SioService):
         observation = message.decode(Observation)
         self._frames_seen += 1
 
+        if self._is_stale(ctx.age_s):
+            return
         if not self._due(observation.source_id):
             return
 
@@ -126,6 +131,28 @@ class PerceptionService(SioService):
             )
             await ctx.publish(Topic.DETECTIONS, detection)
             self._detections += 1
+
+    def _is_stale(self, age_s: float) -> bool:
+        """Skip frames older than the staleness limit.
+
+        A restart replays the stream from the start of the consumer group, and on a busy site that is
+        thousands of frames. Inferring on them is not just wasted work: it puts the live picture
+        minutes behind while the service processes a past it can never catch up with. The
+        observations remain in the timeline; only inference is skipped, and the count is reported so
+        the skipping is visible rather than mysterious.
+        """
+        if age_s <= self.settings.perception_max_age_s:
+            return False
+        self._stale_skipped += 1
+        if not self._warned_stale:
+            self._warned_stale = True
+            self.log.warning(
+                "perception.skipping_stale_frames",
+                age_s=round(age_s, 1),
+                limit_s=self.settings.perception_max_age_s,
+                note="replayed backlog; live frames are unaffected",
+            )
+        return True
 
     def _due(self, source_id: str) -> bool:
         """Per-camera frame-rate cap.
@@ -264,6 +291,7 @@ class PerceptionService(SioService):
             frames_seen=self._frames_seen,
             frames_inferred=self._frames_inferred,
             detections=self._detections,
+            stale_skipped=self._stale_skipped,
             mean_inference_ms=round(mean, 1),
             suppressed_fire=self.fire_detector._suppressed if self.fire_detector else 0,
         )

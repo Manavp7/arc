@@ -487,3 +487,40 @@ def test_class_names_come_from_the_model_file() -> None:
     assert len(detector.names) == 80, "COCO has 80 classes"
     assert detector.names[0] == "person"
     assert detector.names[7] == "truck"
+
+
+# ------------------------------------------------------------------- staleness
+def test_stale_frames_are_skipped() -> None:
+    """A restart replays the stream; inferring on an hour-old frame helps nobody.
+
+    Without this guard the live picture sits minutes behind while the service grinds through a
+    backlog it can never catch up with — observed for real: 23,986 replayed frame observations after
+    a phase's worth of runs.
+    """
+    from sio_perception.service import PerceptionService
+
+    service = PerceptionService.__new__(PerceptionService)
+    service.settings = Settings(_env_file=None, perception_max_age_s=60.0)  # type: ignore[call-arg]
+    service._stale_skipped = 0  # noqa: SLF001
+    service._warned_stale = False  # noqa: SLF001
+    service.log = type("L", (), {"warning": lambda *a, **k: None})()  # type: ignore[assignment]
+
+    assert service._is_stale(5.0) is False  # noqa: SLF001
+    assert service._is_stale(59.9) is False  # noqa: SLF001
+    assert service._is_stale(120.0) is True  # noqa: SLF001
+    assert service._is_stale(3600.0) is True  # noqa: SLF001
+    assert service._stale_skipped == 2  # noqa: SLF001
+
+
+def test_frame_rate_cap_is_per_camera() -> None:
+    """A global cap lets a busy camera starve a quiet one — and the quiet one watches the gate
+    nobody uses, which is exactly where an intrusion happens."""
+    from sio_perception.service import PerceptionService
+
+    service = PerceptionService.__new__(PerceptionService)
+    service.settings = Settings(_env_file=None, perception_fps=2.0)  # type: ignore[call-arg]
+    service._last_inference_at = {}  # noqa: SLF001
+
+    assert service._due("cam-a") is True  # noqa: SLF001
+    assert service._due("cam-a") is False, "same camera, too soon"  # noqa: SLF001
+    assert service._due("cam-b") is True, "a different camera must not be blocked"  # noqa: SLF001
