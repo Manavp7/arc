@@ -22,6 +22,7 @@ import math
 import random
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any
 
 from sio_schemas import (
@@ -105,6 +106,9 @@ class YardSimulator:
         # passed. In production the service passes real elapsed time, so behaviour is identical.
         self.clock = 0.0
         self.wall_started_at = time.monotonic()
+        # Wall-clock anchor for the internal clock, so simulation seconds can be reported as real
+        # timestamps.
+        self.started_utc = utc_now()
         self._last_frame_at: dict[str, float] = {}
         self._last_gps_at: dict[str, float] = {}
         self._last_sensor_at: dict[str, float] = {}
@@ -173,6 +177,18 @@ class YardSimulator:
 
         return output
 
+    def now_utc(self) -> datetime:
+        """Current simulated time as a real timestamp.
+
+        Every timestamp the simulator emits comes from here, never from ``utc_now()`` directly.
+        Mixing the two is subtly wrong: a test that advances five simulated minutes in half a second
+        of wall time would produce entities whose first_seen is five minutes old and whose last_seen
+        is *now*, or vice versa. Anchoring everything to the internal clock means simulated durations
+        are exactly what the simulation says they are — and in production, where dt is real elapsed
+        time, the two are identical anyway.
+        """
+        return self.started_utc + timedelta(seconds=self.clock)
+
     def _due(self, ledger: dict[str, float], key: str, interval_s: float) -> bool:
         """Rate-gate one source. Records the time only when it fires."""
         if self.clock - ledger.get(key, -interval_s) < interval_s:
@@ -186,7 +202,7 @@ class YardSimulator:
         return Observation(
             source_id=f"gps-{agent.agent_id}",
             modality=Modality.GPS,
-            ts=utc_now(),
+            ts=self.now_utc(),
             geo=geo,
             confidence=0.9,
             payload={
@@ -223,7 +239,7 @@ class YardSimulator:
                 Observation(
                     source_id=reader,
                     modality=Modality.RFID,
-                    ts=utc_now(),
+                    ts=self.now_utc(),
                     geo=to_geo(*centroid),
                     confidence=0.99,
                     payload={
@@ -267,7 +283,7 @@ class YardSimulator:
         return Observation(
             source_id=camera.source_id,
             modality=Modality.VIDEO,
-            ts=utc_now(),
+            ts=self.now_utc(),
             geo=camera.geo,
             confidence=1.0,
             # Phase 2 replaces this with a real object key written to MinIO; the key shape is
@@ -286,23 +302,10 @@ class YardSimulator:
                 },
                 # Ground truth for what is in shot. Phase 2's perception service ignores this and
                 # runs a real detector; until then it lets the pipeline be exercised end to end,
-                # and afterwards it is what the detection eval harness scores against.
-                "visible": [
-                    {
-                        "agent_id": agent.agent_id,
-                        "class": self._detector_class(agent.entity_type),
-                        "label": agent.label,
-                        "bbox": self._project_bbox(camera, agent),
-                        "distance_m": round(
-                            math.hypot(
-                                agent.kinematics.east - camera.east,
-                                agent.kinematics.north - camera.north,
-                            ),
-                            1,
-                        ),
-                    }
-                    for agent in visible
-                ],
+                # and afterwards it is what the detection eval harness scores against — which is
+                # why an unprojectable box is dropped rather than emitted as null: ground truth
+                # containing a box that is not in the frame would poison the mAP numbers.
+                "visible": self._visible_payload(camera, visible),
                 "fire": bool(fire),
                 "simulated": True,
             },
@@ -324,31 +327,68 @@ class YardSimulator:
             EntityType.VEHICLE: "car",
         }.get(entity_type, "unknown")
 
+    def _visible_payload(self, camera: Camera, visible: list[Agent]) -> list[dict[str, Any]]:
+        """Ground-truth entries for the agents this camera can actually frame."""
+        entries: list[dict[str, Any]] = []
+        for agent in visible:
+            bbox = self._project_bbox(camera, agent)
+            if bbox is None:
+                continue
+            entries.append(
+                {
+                    "agent_id": agent.agent_id,
+                    "class": self._detector_class(agent.entity_type),
+                    "label": agent.label,
+                    "bbox": bbox,
+                    "distance_m": round(
+                        math.hypot(
+                            agent.kinematics.east - camera.east,
+                            agent.kinematics.north - camera.north,
+                        ),
+                        1,
+                    ),
+                }
+            )
+        return entries
+
     @staticmethod
-    def _project_bbox(camera: Camera, agent: Agent) -> list[float]:
-        """A plausible pixel bbox from a pinhole-ish projection.
+    def _project_bbox(camera: Camera, agent: Agent) -> list[float] | None:
+        """A plausible pixel bbox, or None when the object is not really in frame.
 
         Not photogrammetrically correct — it does not need to be. What it must get right is the
-        *relationships*: nearer objects are bigger, objects to the left of the optical axis appear
-        left of centre. That is enough for tracking association and for the UI to draw boxes.
+        *relationships*: nearer objects are bigger, objects left of the optical axis appear left of
+        centre. That is enough for tracking association and for the UI to draw boxes.
+
+        Two details it must also get right, both learned from a failing test: the vertical centre has
+        to be **bounded**, because an unbounded 1/distance term put a nearby object's box at y≈1650
+        in a 720-pixel frame; and the result has to be clipped *and then validated*, because clipping
+        alone can leave a degenerate or entirely off-frame box.
         """
+        width_px, height_px = 1280.0, 720.0
         dx = agent.kinematics.east - camera.east
         dy = agent.kinematics.north - camera.north
         distance = max(2.0, math.hypot(dx, dy))
         bearing = (math.degrees(math.atan2(dx, dy)) + 360) % 360
         offset_deg = (bearing - camera.bearing_deg + 180) % 360 - 180
-        centre_x = 640 + (offset_deg / (camera.fov_deg / 2)) * 640
-        height = max(24.0, 2200.0 / distance)
-        width = height * (
+
+        centre_x = width_px / 2 + (offset_deg / (camera.fov_deg / 2)) * (width_px / 2)
+        # Apparent size falls off with distance, capped so a very close object fills the frame
+        # instead of overflowing it.
+        box_height = min(height_px * 0.9, max(24.0, 2200.0 / distance))
+        box_width = box_height * (
             1.9 if agent.entity_type in (EntityType.TRUCK, EntityType.FORKLIFT) else 0.55
         )
-        centre_y = 400 + (30.0 / distance) * 120
-        return [
-            round(max(0.0, centre_x - width / 2), 1),
-            round(max(0.0, centre_y - height / 2), 1),
-            round(min(1280.0, centre_x + width / 2), 1),
-            round(min(720.0, centre_y + height / 2), 1),
-        ]
+        # Ground-plane perspective: nearer objects sit lower in frame, asymptotically toward the
+        # bottom third rather than without limit.
+        centre_y = height_px * 0.5 + min(height_px * 0.28, 900.0 / distance)
+
+        x1 = max(0.0, min(width_px, centre_x - box_width / 2))
+        y1 = max(0.0, min(height_px, centre_y - box_height / 2))
+        x2 = max(0.0, min(width_px, centre_x + box_width / 2))
+        y2 = max(0.0, min(height_px, centre_y + box_height / 2))
+        if x2 - x1 < 2.0 or y2 - y1 < 2.0:
+            return None  # clipped away entirely, or too small to count as a detection
+        return [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)]
 
     def _sensor_observation(self, sensor: Sensor, now: float) -> Observation | None:
         """A fixed-sensor reading, perturbed by any active incident in its zone."""
@@ -386,7 +426,7 @@ class YardSimulator:
         return Observation(
             source_id=sensor.source_id,
             modality=Modality.IOT,
-            ts=utc_now(),
+            ts=self.now_utc(),
             geo=sensor.geo,
             confidence=0.97,
             payload={
@@ -405,15 +445,23 @@ class YardSimulator:
         from sio_schemas import Entity
 
         entities: list[Entity] = []
+        now = self.now_utc()
         for agent in self.population.active_agents():
             zone_id = agent.zone_id
+            # A real first_seen, from when the agent appeared. Letting pydantic default it stamped
+            # first_seen = last_seen = now on every tick, so every dwell time computed by a consumer
+            # of the live stream was zero — including the UI's entity panel, which is exactly where
+            # UC1 ("stayed more than 15 minutes") has to be visible.
+            first_seen = self.started_utc + timedelta(seconds=agent.spawned_at)
             entities.append(
                 Entity(
                     entity_id=f"sim-{agent.agent_id}",
                     type=agent.entity_type,
                     label=agent.label,
+                    first_seen=first_seen,
+                    last_seen=now,
                     state=EntityState(
-                        ts=utc_now(),
+                        ts=self.now_utc(),
                         geo=agent.kinematics.geo,
                         velocity=agent.kinematics.velocity,
                         heading_deg=agent.kinematics.heading_deg,
@@ -424,7 +472,7 @@ class YardSimulator:
                         Provenance(
                             source_id=f"gps-{agent.agent_id}" if agent.has_gps else "simulator",
                             modality=Modality.GPS if agent.has_gps else Modality.MANUAL,
-                            ts=utc_now(),
+                            ts=self.now_utc(),
                             confidence=0.9,
                             note="simulated ground truth (Phase 1 bridge)",
                         )
@@ -445,7 +493,7 @@ class YardSimulator:
         from sio_schemas import Entity
 
         entities: list[Entity] = []
-        now = utc_now()
+        now = self.now_utc()
 
         for camera in self.site.cameras:
             entities.append(

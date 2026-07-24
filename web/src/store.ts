@@ -48,6 +48,24 @@ interface SioState {
   reset: () => void;
 }
 
+/**
+ * Apply the same merge contract the server stores use: `first_seen` never moves later and
+ * `last_seen` never moves earlier.
+ *
+ * Without this the client replaced each entity wholesale on every stream message, so the correct
+ * `first_seen` loaded from the REST snapshot was clobbered within half a second and the entity
+ * panel's dwell time collapsed to "0 min" — the one number UC1 ("stayed more than 15 minutes")
+ * actually turns on.
+ */
+function mergeLifetime(previous: Entity | undefined, incoming: Entity): Entity {
+  if (!previous) return incoming;
+  const first =
+    previous.first_seen < incoming.first_seen ? previous.first_seen : incoming.first_seen;
+  const last = previous.last_seen > incoming.last_seen ? previous.last_seen : incoming.last_seen;
+  if (first === incoming.first_seen && last === incoming.last_seen) return incoming;
+  return { ...incoming, first_seen: first, last_seen: last };
+}
+
 export const useSioStore = create<SioState>((set) => ({
   connection: "connecting",
   entities: new Map(),
@@ -66,14 +84,16 @@ export const useSioStore = create<SioState>((set) => ({
   upsertEntity: (entity) =>
     set((state) => {
       const entities = new Map(state.entities);
-      entities.set(entity.entity_id, entity);
+      entities.set(entity.entity_id, mergeLifetime(state.entities.get(entity.entity_id), entity));
       return { entities, lastMessageAt: new Date().toISOString() };
     }),
 
   upsertEntities: (incoming) =>
     set((state) => {
       const entities = new Map(state.entities);
-      for (const entity of incoming) entities.set(entity.entity_id, entity);
+      for (const entity of incoming) {
+        entities.set(entity.entity_id, mergeLifetime(state.entities.get(entity.entity_id), entity));
+      }
       return { entities };
     }),
 

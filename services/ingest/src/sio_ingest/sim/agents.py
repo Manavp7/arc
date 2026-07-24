@@ -70,6 +70,14 @@ class Agent:
     attributes: dict[str, Any] = field(default_factory=dict)
     has_gps: bool = True
     active: bool = True
+    spawned_at: float = 0.0
+    """Simulation clock reading when this agent appeared.
+
+    Carried so the entity it produces can report a real `first_seen`. Without it the simulator built
+    a fresh Entity every tick and pydantic's default_factory stamped first_seen = last_seen = now, so
+    every dwell time in the UI read as zero — the graph store's merge fixed the stored value but the
+    live stream still carried the wrong one.
+    """
     _path_completed: bool = False
 
     # ------------------------------------------------------------------ movement
@@ -185,6 +193,7 @@ class Truck(Agent):
     def start(self, now: float) -> None:
         self.state = TruckState.APPROACHING
         self.arrived_at = now
+        self.spawned_at = now
         self.attributes.update({"state": str(self.state), "plate": self.plate})
         self.set_path(["gate_a_approach", "gate_a"])
 
@@ -281,12 +290,16 @@ class Forklift(Agent):
     def start(self, now: float) -> None:
         docks = self.site.dock_ids()
         first, second = self.rng.sample(docks, 2)
+        # `_side`, not `_bay`: the bay waypoint is where the truck parks, and sending the forklift
+        # to the same coordinate left it exactly 1 cm from the truck — its dot hidden underneath and
+        # its label overprinting the truck's plate into an unreadable smear.
         self.loop = [
-            f"{first}_bay",
+            f"{first}_side",
             f"{first}_approach",
             f"{second}_approach",
-            f"{second}_bay",
+            f"{second}_side",
         ]
+        self.spawned_at = now
         self.set_path(self.loop)
         self.attributes["state"] = "shuttling"
 
@@ -310,6 +323,7 @@ class Worker(Agent):
     trespass_probability: float = 0.12
 
     def start(self, now: float) -> None:
+        self.spawned_at = now
         self.attributes["state"] = "walking"
         self._choose_destination(now)
 
@@ -350,6 +364,7 @@ class Drone(Agent):
     altitude_m: float = 35.0
 
     def start(self, now: float) -> None:
+        self.spawned_at = now
         self.set_path(self.site.routes["patrol"])
         self.attributes.update({"state": "patrolling", "battery_pct": self.battery_pct})
 

@@ -338,6 +338,60 @@ def test_power_failure_collapses_the_power_reading() -> None:
 
 
 # --------------------------------------------------------------------------- entities
+def test_entities_report_a_truthful_lifetime() -> None:
+    """Dwell time is the number UC1 turns on, so it must be real on the *live stream*, not only in
+    the store after a merge.
+
+    The simulator used to build a fresh Entity every tick and let pydantic default the timestamps,
+    stamping first_seen = last_seen = now. The stored value was corrected by the graph store's merge,
+    so REST looked right — but every consumer of the stream (including the UI panel an operator
+    reads) saw a dwell of zero.
+    """
+    sim = YardSimulator(seed=1337, trucks=3, forklifts=2, people=2, drones=1)
+    run_for(sim, 20 * 60)
+
+    entities = sim.ground_truth_entities()
+    assert entities
+    for entity in entities:
+        assert entity.first_seen < entity.last_seen, f"{entity.label} has a zero-length lifetime"
+    longest = max(entity.dwell_s() for entity in entities)
+    assert longest == pytest.approx(20 * 60, abs=5), (
+        "an agent present from the start should report ~20 minutes on site"
+    )
+
+
+def test_timestamps_follow_the_simulated_clock_not_wall_time() -> None:
+    """Twenty simulated minutes must read as twenty minutes even if they take half a second."""
+    sim = YardSimulator(seed=1337, trucks=2, forklifts=0, people=0, drones=0)
+    run_for(sim, 20 * 60)
+    assert sim.wall_elapsed_s < 10, "this test is meaningless if it really took 20 minutes"
+    span = (sim.now_utc() - sim.started_utc).total_seconds()
+    assert span == pytest.approx(20 * 60, abs=1)
+
+
+def test_forklifts_do_not_park_on_top_of_trucks() -> None:
+    """Two entities at one coordinate render as a single dot with two overprinted labels."""
+    import math
+
+    sim = YardSimulator(seed=1337, trucks=4, forklifts=3, people=0, drones=0)
+    run_for(sim, 15 * 60)
+    trucks = [
+        (agent.kinematics.east, agent.kinematics.north)
+        for agent in sim.population.agents
+        if isinstance(agent, Truck)
+    ]
+    forklifts = [
+        (agent.kinematics.east, agent.kinematics.north)
+        for agent in sim.population.agents
+        if isinstance(agent, Forklift)
+    ]
+    assert trucks and forklifts
+    closest = min(math.dist(truck, forklift) for truck in trucks for forklift in forklifts)
+    assert closest > 5.0, (
+        f"a forklift is {closest:.2f} m from a truck — they will render as one dot"
+    )
+
+
 def test_ground_truth_entities_are_labelled_as_simulated() -> None:
     """The Phase 1 bridge must never be mistaken for real perception output."""
     sim = YardSimulator(seed=1337)

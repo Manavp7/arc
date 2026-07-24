@@ -386,6 +386,9 @@ def default_yard() -> Site:
     for index in range(6):
         waypoints[f"dock_{index + 1}_approach"] = (67 + index * 52, 160)
         waypoints[f"dock_{index + 1}_bay"] = (67 + index * 52, 183)
+        # Where the forklift works: beside the bay, not in it. Two entities at the same coordinate
+        # render as one dot with two overprinted labels.
+        waypoints[f"dock_{index + 1}_side"] = (67 + index * 52 + 15, 180)
     site.waypoints = {name: Point(name, e, n) for name, (e, n) in waypoints.items()}
 
     # ---- routes ------------------------------------------------------------
