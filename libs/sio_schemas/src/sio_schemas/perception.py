@@ -100,7 +100,8 @@ class Track(TenantScoped, Traced):
         default=None, description="Set once fusion binds this track to a world-model entity"
     )
     cross_camera_of: list[str] = Field(
-        default_factory=list, description="Track ids on other cameras believed to be the same object"
+        default_factory=list,
+        description="Track ids on other cameras believed to be the same object",
     )
 
     @property

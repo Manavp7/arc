@@ -7,7 +7,7 @@ fallback for constrained environments, CI, and anyone who does not want to run N
 
 Traversal is recursive SQL rather than Cypher. That is slower for deep paths, which is exactly
 why Neo4j is the default — but for the site-scale neighbourhoods SIO actually queries
-(1–4 hops), it is indistinguishable in practice.
+(1-4 hops), it is indistinguishable in practice.
 """
 
 from __future__ import annotations
@@ -206,7 +206,9 @@ class PostgresGraphStore:
             clauses.append("r.type = ANY(%s)")
             params.append([str(t) for t in types])
         if at is not None:
-            clauses.append("r.ts_valid_from <= %s AND (r.ts_valid_to IS NULL OR r.ts_valid_to >= %s)")
+            clauses.append(
+                "r.ts_valid_from <= %s AND (r.ts_valid_to IS NULL OR r.ts_valid_to >= %s)"
+            )
             params.extend([at, at])
         params.extend([entity_id, tenant_id, limit])
 
@@ -217,7 +219,7 @@ class PostgresGraphStore:
               JOIN entities e
                 ON e.entity_id = CASE WHEN r.from_id = %s THEN r.to_id ELSE r.from_id END
                AND e.tenant_id = %s
-             WHERE {' AND '.join(clauses)}
+             WHERE {" AND ".join(clauses)}
              LIMIT %s
             """,
             [*params[:-3], params[-3], params[-2], params[-1]],

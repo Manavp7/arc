@@ -109,7 +109,9 @@ class MinioBlobStore:
             from minio import Minio
         except ImportError as exc:  # pragma: no cover - dependency is declared
             raise DependencyMissing("minio", "MinioBlobStore") from exc
-        self._client: Any = Minio(endpoint, access_key=access_key, secret_key=secret_key, secure=secure)
+        self._client: Any = Minio(
+            endpoint, access_key=access_key, secret_key=secret_key, secure=secure
+        )
         self._bucket = bucket
         self._url_prefix = url_prefix.rstrip("/")
 
@@ -144,7 +146,7 @@ class MinioBlobStore:
 
         try:
             await asyncio.to_thread(_put)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise StoreError(f"minio put {key!r} failed: {exc}") from exc
         return key
 
@@ -161,7 +163,7 @@ class MinioBlobStore:
 
         try:
             return await asyncio.to_thread(_get)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise NotFound(f"minio get {key!r} failed: {exc}") from exc
 
     async def exists(self, key: str) -> bool:
@@ -169,7 +171,7 @@ class MinioBlobStore:
             try:
                 self._client.stat_object(self._bucket, key)
                 return True
-            except Exception:  # noqa: BLE001
+            except Exception:
                 return False
 
         return await asyncio.to_thread(_stat)
@@ -196,7 +198,7 @@ class MinioBlobStore:
     async def ping(self) -> bool:
         try:
             return bool(await asyncio.to_thread(self._client.bucket_exists, self._bucket))
-        except Exception:  # noqa: BLE001
+        except Exception:
             return False
 
     async def close(self) -> None:

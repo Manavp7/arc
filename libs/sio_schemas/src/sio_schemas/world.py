@@ -106,7 +106,8 @@ class Relationship(TenantScoped, Traced):
     confidence: Confidence = 1.0
     attributes: dict[str, Any] = Field(default_factory=dict)
     evidence: list[str] = Field(
-        default_factory=list, description="Ids of observations/detections/events supporting this edge"
+        default_factory=list,
+        description="Ids of observations/detections/events supporting this edge",
     )
 
     @model_validator(mode="after")

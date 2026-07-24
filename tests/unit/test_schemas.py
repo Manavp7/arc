@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from pydantic import ValidationError
+
 from sio_schemas import (
     SCHEMA_VERSION,
     Alert,

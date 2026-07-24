@@ -66,7 +66,9 @@ class MemoryGraphStore:
             for (tid, _), e in self._entities.items()
             if tid == tenant_id
             and (entity_type is None or e.type == entity_type)
-            and (label_contains is None or (e.label or "").lower().find(label_contains.lower()) >= 0)
+            and (
+                label_contains is None or (e.label or "").lower().find(label_contains.lower()) >= 0
+            )
             and (zone_id is None or e.state.zone_id == zone_id)
             and (since is None or e.last_seen >= since)
         ]
@@ -155,9 +157,7 @@ class MemoryGraphStore:
             if tid == tenant_id and rel.holds_at(ts)
         ][:limit]
         entities = [
-            e
-            for (tid, _), e in self._entities.items()
-            if tid == tenant_id and e.first_seen <= ts
+            e for (tid, _), e in self._entities.items() if tid == tenant_id and e.first_seen <= ts
         ][:limit]
         return entities, relationships
 

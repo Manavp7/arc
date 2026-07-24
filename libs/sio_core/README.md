@@ -35,6 +35,7 @@ infrastructure at all.
 from sio_core import SioService, Settings, get_bus
 from sio_schemas import Detection, Topic
 
+
 class MyService(SioService):
     name = "example"
     subscribes = (Topic.DETECTIONS,)
@@ -42,6 +43,7 @@ class MyService(SioService):
     async def on_message(self, msg, ctx):
         detection = msg.decode(Detection)
         ...
+
 
 if __name__ == "__main__":
     MyService().run()

@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator
 from datetime import timedelta
 
 import pytest
+
 from sio_schemas import BusMessage, Detection, Event, EventType, Topic, new_id, utc_now
 
 INFRA = os.environ.get("SIO_TEST_INFRA") == "1"

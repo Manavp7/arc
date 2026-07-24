@@ -44,7 +44,7 @@ def repo_root() -> Path:
 
 
 @pytest.fixture
-def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator["object"]:
+def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[object]:
     """Fresh :class:`~sio_core.config.Settings` writing all state under ``tmp_path``."""
     from sio_core.config import Settings, reset_settings
 
@@ -64,7 +64,7 @@ def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator["objec
 
 
 @pytest.fixture
-def memory_bus() -> Iterator["object"]:
+def memory_bus() -> Iterator[object]:
     from sio_core.bus.memory import MemoryBus
 
     bus = MemoryBus()
@@ -82,7 +82,7 @@ def _reset_registry() -> Iterator[None]:
 
 
 @pytest.fixture
-def sample_geo() -> "object":
+def sample_geo() -> object:
     """A point inside the demo yard (see infra/site/yard.geojson)."""
     from sio_schemas import Geo
 

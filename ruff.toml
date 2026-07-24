@@ -27,6 +27,10 @@ ignore = [
 [lint.per-file-ignores]
 "tests/**" = ["N802", "N803", "SIM117"]
 "scripts/**" = ["T201"]  # scripts are allowed to print
+# Intra-package relative imports keep the libraries relocatable and make the dependency
+# direction obvious at a glance. They are banned in services, where absolute imports of
+# sio_core/sio_schemas are the point.
+"libs/**" = ["TID252"]
 
 [lint.isort]
 known-first-party = ["sio_schemas", "sio_core", "sio_sdk"]

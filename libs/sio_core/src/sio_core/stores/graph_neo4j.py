@@ -72,7 +72,7 @@ class Neo4jGraphStore:
             async with self._driver.session(database=self._database) as session:
                 result = await session.run(query, dict(params or {}))
                 return [dict(record) async for record in result]
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise StoreError(f"neo4j query failed: {exc}") from exc
 
     @staticmethod
@@ -253,7 +253,11 @@ class Neo4jGraphStore:
             "out": "(a:Entity)-[r]->(b:Entity)",
             "in": "(a:Entity)<-[r]-(b:Entity)",
         }.get(direction, "(a:Entity)-[r]-(b:Entity)")
-        clauses = ["a.entity_id = $entity_id", "a.tenant_id = $tenant_id", "b.tenant_id = $tenant_id"]
+        clauses = [
+            "a.entity_id = $entity_id",
+            "a.tenant_id = $tenant_id",
+            "b.tenant_id = $tenant_id",
+        ]
         params: dict[str, Any] = {"entity_id": entity_id, "tenant_id": tenant_id, "limit": limit}
         if types:
             clauses.append("r.type IN $types")
@@ -393,7 +397,7 @@ class Neo4jGraphStore:
         try:
             rows = await self._run("RETURN 1 AS ok")
             return bool(rows and rows[0].get("ok") == 1)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return False
 
     async def close(self) -> None:

@@ -14,9 +14,9 @@ from sio_schemas import (
     Alternative,
     Detection,
     Entity,
+    Event,
     EvidenceKind,
     EvidenceRef,
-    Event,
     Explanation,
     Observation,
     TimelineEntry,
@@ -78,7 +78,9 @@ class ExplanationBuilder:
         )
         if observation.raw_ref:
             self.add_evidence(
-                EvidenceKind.FRAME, observation.raw_ref, ts=observation.ts,
+                EvidenceKind.FRAME,
+                observation.raw_ref,
+                ts=observation.ts,
                 source_id=observation.source_id,
             )
         return self.add_timeline(
@@ -137,7 +139,9 @@ class ExplanationBuilder:
         )
         for entity_id in event.entities:
             self.add_related(entity_id)
-        return self.add_timeline(event.ts, "event", f"{event.type} ({event.severity})", ref=event.event_id)
+        return self.add_timeline(
+            event.ts, "event", f"{event.type} ({event.severity})", ref=event.event_id
+        )
 
     def add_query(self, query: str, *, backend: str, rows: int | None = None) -> ExplanationBuilder:
         """Record the query that produced an answer.
@@ -230,21 +234,23 @@ class ExplanationBuilder:
         )
 
 
-def merge_explanations(explanations: Sequence[Explanation], *, summary: str | None = None) -> Explanation:
+def merge_explanations(
+    explanations: Sequence[Explanation], *, summary: str | None = None
+) -> Explanation:
     """Combine explanations (e.g. an alert grouping several events) without losing evidence."""
     builder = ExplanationBuilder(summary)
     for explanation in explanations:
         for evidence in explanation.evidence:
-            builder._evidence.append(evidence)  # noqa: SLF001 - internal merge
+            builder._evidence.append(evidence)
         builder.add_sources(explanation.sources)
         for entry in explanation.timeline:
-            builder._timeline.append(entry)  # noqa: SLF001
+            builder._timeline.append(entry)
         for entity_id in explanation.related_entities:
             builder.add_related(entity_id)
         for alternative in explanation.alternatives:
-            builder._alternatives.append(alternative)  # noqa: SLF001
+            builder._alternatives.append(alternative)
         for note in explanation.notes:
             builder.add_note(note)
         if explanation.degraded:
-            builder._degraded = True  # noqa: SLF001
+            builder._degraded = True
     return builder.build()

@@ -25,6 +25,7 @@ from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, Response
+
 from sio_schemas import BusMessage, HealthStatus, SioModel
 from sio_schemas.base import SCHEMA_VERSION
 
@@ -110,12 +111,8 @@ class SioService:
     def port(self) -> int:
         return self.settings.port_for(self.name)
 
-    async def publish(
-        self, topic: str, model: SioModel, *, trace_id: str | None = None
-    ) -> str:
-        stream_id = await self.bus.publish(
-            str(topic), model, producer=self.name, trace_id=trace_id
-        )
+    async def publish(self, topic: str, model: SioModel, *, trace_id: str | None = None) -> str:
+        stream_id = await self.bus.publish(str(topic), model, producer=self.name, trace_id=trace_id)
         self._counters["produced"] += 1
         self.metrics.produced.labels(service=self.name, topic=str(topic)).inc()
         return stream_id
@@ -158,9 +155,7 @@ class SioService:
         async def metrics() -> Response:
             if not self.settings.metrics_enabled:
                 return Response(status_code=404)
-            return Response(
-                content=self.metrics.render(), media_type="text/plain; version=0.0.4"
-            )
+            return Response(content=self.metrics.render(), media_type="text/plain; version=0.0.4")
 
         self.routes(app)
         return app
@@ -170,11 +165,11 @@ class SioService:
         status = "ok"
         try:
             checks["bus"] = "ok" if await self.bus.ping() else "unreachable"
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             checks["bus"] = f"error: {exc}"
         try:
             checks.update(await self.health_checks())
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             checks["custom"] = f"error: {exc}"
         checks.update(self._extra_checks)
         if any(v != "ok" for v in checks.values()):
@@ -235,7 +230,7 @@ class SioService:
                     await self._handle(message)
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:  # noqa: BLE001 - a bus hiccup must not kill the service
+            except Exception as exc:
                 self._counters["errors"] += 1
                 self.metrics.errors.labels(service=self.name, kind="consume").inc()
                 self.log.error("consumer.error", error=str(exc), exc_info=True)
@@ -271,7 +266,7 @@ class SioService:
                 self.metrics.dead_lettered.labels(service=self.name, topic=topic).inc()
                 if message.stream_id:
                     await self.bus.ack(topic, self.group, message.stream_id)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 # Unexpected failure: leave it unacked so it is retried, and let the bus
                 # dead-letter it once the retry budget is spent.
                 self._counters["errors"] += 1
@@ -299,7 +294,7 @@ class SioService:
                 pass
             try:
                 await self.tick()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 self._counters["errors"] += 1
                 self.metrics.errors.labels(service=self.name, kind="tick").inc()
                 self.log.error("tick.failed", error=str(exc), exc_info=True)
@@ -348,29 +343,27 @@ class SioService:
 
         try:
             await self.teardown()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.log.warning("teardown.failed", error=str(exc))
         await registry.close_all()
         self.log.info("service.stopped", **self._counters)
 
     def run(self) -> None:
         """Entry point for ``python -m sio_<service>``."""
-        try:
+        with contextlib.suppress(KeyboardInterrupt):  # pragma: no cover - interactive
             asyncio.run(self.serve())
-        except KeyboardInterrupt:  # pragma: no cover - interactive
-            pass
 
     def stop(self) -> None:
         self._stopping.set()
 
     # ------------------------------------------------------------------ test helper
-    async def drain(self, limit: int = 1000, *, timeout: float = 5.0) -> int:
+    async def drain(self, limit: int = 1000, *, timeout_s: float = 5.0) -> int:
         """Consume up to ``limit`` messages, then return. Used by tests and one-shot jobs."""
         topics = [str(t) for t in self.subscribes]
         if not topics:
             return 0
         handled = 0
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + timeout_s
         agen = self.bus.consume(
             topics, group=self.group, consumer=self.consumer_id, block_ms=100, batch=limit
         )
@@ -378,7 +371,7 @@ class SioService:
             while handled < limit and time.monotonic() < deadline:
                 try:
                     message = await asyncio.wait_for(
-                        agen.__anext__(),  # type: ignore[attr-defined]
+                        anext(agen),
                         timeout=max(0.05, deadline - time.monotonic()),
                     )
                 except (TimeoutError, StopAsyncIteration):
@@ -386,8 +379,12 @@ class SioService:
                 await self._handle(message)
                 handled += 1
         finally:
-            with contextlib.suppress(Exception):
-                await agen.aclose()  # type: ignore[attr-defined]
+            # The port promises an AsyncIterator; only generators can be closed. Closing when
+            # possible releases the adapter's consumer state promptly instead of at GC time.
+            closer = getattr(agen, "aclose", None)
+            if closer is not None:
+                with contextlib.suppress(Exception):
+                    await closer()
         return handled
 
     def describe(self) -> dict[str, Any]:

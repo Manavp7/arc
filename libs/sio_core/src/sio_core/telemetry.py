@@ -109,9 +109,7 @@ def configure_logging(
 
     # Route stdlib logging (uvicorn, redis, neo4j) through the same handler so output is
     # uniform and greppable rather than half-structured.
-    logging.basicConfig(
-        format="%(message)s", stream=sys.stderr, level=logging.WARNING, force=True
-    )
+    logging.basicConfig(format="%(message)s", stream=sys.stderr, level=logging.WARNING, force=True)
     for noisy in ("uvicorn.error", "uvicorn.access", "neo4j", "httpx", "httpcore"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
@@ -136,18 +134,24 @@ class Metrics:
         self.registry = CollectorRegistry()
         labels = {"service": service}
         self.consumed = Counter(
-            "sio_messages_consumed_total", "Messages consumed", ["service", "topic"],
+            "sio_messages_consumed_total",
+            "Messages consumed",
+            ["service", "topic"],
             registry=self.registry,
         )
         self.produced = Counter(
-            "sio_messages_produced_total", "Messages produced", ["service", "topic"],
+            "sio_messages_produced_total",
+            "Messages produced",
+            ["service", "topic"],
             registry=self.registry,
         )
         self.errors = Counter(
             "sio_errors_total", "Handler errors", ["service", "kind"], registry=self.registry
         )
         self.dead_lettered = Counter(
-            "sio_dead_lettered_total", "Messages dead-lettered", ["service", "topic"],
+            "sio_dead_lettered_total",
+            "Messages dead-lettered",
+            ["service", "topic"],
             registry=self.registry,
         )
         self.handler_seconds = Histogram(
@@ -165,7 +169,9 @@ class Metrics:
             registry=self.registry,
         )
         self.lag = Gauge(
-            "sio_consumer_lag", "Pending messages per topic", ["service", "topic"],
+            "sio_consumer_lag",
+            "Pending messages per topic",
+            ["service", "topic"],
             registry=self.registry,
         )
         self.up = Gauge("sio_up", "Service is running", ["service"], registry=self.registry)

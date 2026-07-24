@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
+from typing import Any
 
 from sio_schemas import BusMessage
 
@@ -19,10 +21,15 @@ def encode(message: BusMessage) -> dict[str, str]:
     return {FIELD: message.model_dump_json(by_alias=True)}
 
 
-def decode(
-    fields: dict[str, str] | dict[bytes, bytes], *, stream_id: str, delivery_count: int = 1
-) -> BusMessage:
-    raw = fields.get(FIELD) or fields.get(FIELD.encode())  # type: ignore[arg-type]
+def decode(fields: Mapping[Any, Any], *, stream_id: str, delivery_count: int = 1) -> BusMessage:
+    """Rebuild an envelope from a stream entry.
+
+    Accepts both text and byte keys/values: a Redis client may or may not be configured with
+    ``decode_responses``, and an adapter should not care.
+    """
+    raw = fields.get(FIELD)
+    if raw is None:
+        raw = fields.get(FIELD.encode())
     if raw is None:
         raise ValueError(f"bus entry {stream_id} has no {FIELD!r} field")
     if isinstance(raw, bytes):

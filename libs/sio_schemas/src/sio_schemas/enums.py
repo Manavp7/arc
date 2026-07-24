@@ -152,7 +152,7 @@ class Severity(StrEnum):
     def rank(self) -> int:
         return _SEVERITY_RANK[self]
 
-    def __lt__(self, other: object) -> bool:  # type: ignore[override]
+    def __lt__(self, other: object) -> bool:
         if isinstance(other, Severity):
             return self.rank < other.rank
         return NotImplemented

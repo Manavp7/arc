@@ -81,7 +81,7 @@ class RedisStreamBus:
                     approximate=True,
                 )
             )
-        except Exception as exc:  # noqa: BLE001 - surfaced as a domain error
+        except Exception as exc:
             raise BusError(f"publish to {message.topic} failed: {exc}") from exc
 
     # ------------------------------------------------------------------ consume
@@ -93,7 +93,7 @@ class RedisStreamBus:
             # mkstream so a consumer can start before the first producer exists — otherwise
             # service start order would matter, which on a laptop it never should.
             await self._redis.xgroup_create(str(topic), group, id="0", mkstream=True)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             if "BUSYGROUP" not in str(exc):
                 raise BusError(f"could not create group {group} on {topic}: {exc}") from exc
         self._known_groups.add(key)
@@ -135,7 +135,7 @@ class RedisStreamBus:
                 response = await self._redis.xreadgroup(
                     group, consumer, dict.fromkeys(names, ">"), count=count, block=block
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 raise BusError(f"xreadgroup failed for {names}: {exc}") from exc
 
             for topic, entries in response or []:
@@ -150,7 +150,7 @@ class RedisStreamBus:
         """Decode an entry, dead-lettering poison messages and over-retried ones."""
         try:
             message = decode(fields, stream_id=stream_id)
-        except Exception as exc:  # noqa: BLE001 - undecodable payloads must not wedge the stream
+        except Exception as exc:
             log.error("bus.undecodable", topic=topic, stream_id=stream_id, error=str(exc))
             await self._redis.xadd(
                 f"dlq.{topic}",
@@ -181,7 +181,7 @@ class RedisStreamBus:
             pending = await self._redis.xpending_range(
                 topic, group, min=stream_id, max=stream_id, count=1
             )
-        except Exception:  # noqa: BLE001 - counting must never break consumption
+        except Exception:
             return 1
         if not pending:
             return 1
@@ -227,14 +227,14 @@ class RedisStreamBus:
         for stream_id, fields in entries or []:
             try:
                 out.append(decode(fields, stream_id=stream_id))
-            except Exception as exc:  # noqa: BLE001 - skip corrupt history rather than fail replay
+            except Exception as exc:
                 log.warning("bus.replay_skip", topic=topic, stream_id=stream_id, error=str(exc))
         return out
 
     async def lag(self, topic: str, group: str) -> int:
         try:
             groups = await self._redis.xinfo_groups(str(topic))
-        except Exception:  # noqa: BLE001 - stream may not exist yet
+        except Exception:
             return 0
         for info in groups or []:
             if info.get("name") == group:
@@ -250,13 +250,13 @@ class RedisStreamBus:
     async def length(self, topic: str) -> int:
         try:
             return int(await self._redis.xlen(str(topic)))
-        except Exception:  # noqa: BLE001
+        except Exception:
             return 0
 
     async def ping(self) -> bool:
         try:
             return bool(await self._redis.ping())
-        except Exception:  # noqa: BLE001
+        except Exception:
             return False
 
     async def close(self) -> None:

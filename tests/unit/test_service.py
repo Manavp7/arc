@@ -9,11 +9,10 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
 from sio_core import MessageContext, SioService
-from sio_core.bus.memory import MemoryBus
 from sio_core.errors import ValidationFailed
 from sio_schemas import BusMessage, Detection, Event, EventType, Topic, new_id
 
@@ -68,7 +67,7 @@ async def test_service_consumes_and_publishes_downstream(settings, memory_bus) -
     detection = a_detection()
     await memory_bus.publish(Topic.DETECTIONS, detection, producer="perception")
 
-    handled = await service.drain(limit=5, timeout=2.0)
+    handled = await service.drain(limit=5, timeout_s=2.0)
 
     assert handled == 1
     assert [d.id for d in service.seen] == [detection.id]
@@ -83,7 +82,7 @@ async def test_downstream_messages_inherit_the_trace_id(settings, memory_bus) ->
     detection = a_detection()
     await memory_bus.publish(Topic.DETECTIONS, detection)
 
-    await service.drain(limit=1, timeout=2.0)
+    await service.drain(limit=1, timeout_s=2.0)
 
     [event] = await memory_bus.read_range(Topic.EVENTS)
     assert event.trace_id == detection.trace_id
@@ -95,7 +94,7 @@ async def test_duplicate_delivery_is_handled_once(settings, memory_bus) -> None:
     await memory_bus.publish_message(envelope)
     await memory_bus.publish_message(envelope)  # same message id: at-least-once redelivery
 
-    handled = await service.drain(limit=5, timeout=2.0)
+    handled = await service.drain(limit=5, timeout_s=2.0)
 
     assert handled == 2, "both deliveries are consumed"
     assert len(service.seen) == 1, "but the handler only ran once"
@@ -104,7 +103,7 @@ async def test_duplicate_delivery_is_handled_once(settings, memory_bus) -> None:
 async def test_acked_messages_clear_lag(settings, memory_bus) -> None:
     service = RecordingService(settings, memory_bus)
     await memory_bus.publish(Topic.DETECTIONS, a_detection())
-    await service.drain(limit=1, timeout=2.0)
+    await service.drain(limit=1, timeout_s=2.0)
     assert await memory_bus.lag(str(Topic.DETECTIONS), service.group) == 0
 
 
@@ -112,7 +111,7 @@ async def test_domain_errors_are_dead_lettered_not_retried(settings, memory_bus)
     service = RejectingService(settings, bus=memory_bus)
     await memory_bus.publish(Topic.DETECTIONS, a_detection())
 
-    await service.drain(limit=1, timeout=2.0)
+    await service.drain(limit=1, timeout_s=2.0)
 
     dlq = await memory_bus.read_range(f"dlq.{Topic.DETECTIONS}")
     assert len(dlq) == 1
@@ -126,7 +125,7 @@ async def test_unexpected_errors_leave_the_message_for_retry(settings, memory_bu
     FlakyService.attempts = 0
     await memory_bus.publish(Topic.DETECTIONS, a_detection())
 
-    await service.drain(limit=1, timeout=2.0)
+    await service.drain(limit=1, timeout_s=2.0)
 
     assert FlakyService.attempts == 1
     assert await memory_bus.lag(str(Topic.DETECTIONS), service.group) >= 1, (
@@ -138,7 +137,7 @@ async def test_unexpected_errors_leave_the_message_for_retry(settings, memory_bu
 async def test_health_reports_adapters_lag_and_counters(settings, memory_bus) -> None:
     service = RecordingService(settings, memory_bus)
     await memory_bus.publish(Topic.DETECTIONS, a_detection())
-    await service.drain(limit=1, timeout=2.0)
+    await service.drain(limit=1, timeout_s=2.0)
 
     health = await service.health()
 

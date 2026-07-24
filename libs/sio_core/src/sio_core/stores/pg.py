@@ -50,7 +50,7 @@ class PgPool:
             async with await self._conn() as conn, conn.cursor() as cur:
                 await cur.execute(sql, params)
                 return cur.rowcount
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise StoreError(f"postgres execute failed: {exc}") from exc
 
     async def execute_many(self, sql: str, rows: Sequence[Sequence[Any]]) -> int:
@@ -60,7 +60,7 @@ class PgPool:
             async with await self._conn() as conn, conn.cursor() as cur:
                 await cur.executemany(sql, rows)
                 return cur.rowcount
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise StoreError(f"postgres executemany failed: {exc}") from exc
 
     async def fetch(self, sql: str, params: Sequence[Any] | None = None) -> list[dict[str, Any]]:
@@ -70,7 +70,7 @@ class PgPool:
             async with await self._conn() as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(sql, params)
                 return list(await cur.fetchall())
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise StoreError(f"postgres fetch failed: {exc}") from exc
 
     async def fetchrow(
@@ -88,7 +88,7 @@ class PgPool:
     async def ping(self) -> bool:
         try:
             return await self.fetchval("SELECT 1") == 1
-        except Exception:  # noqa: BLE001
+        except Exception:
             return False
 
     async def extensions(self) -> set[str]:

@@ -31,7 +31,9 @@ class Mission(TenantScoped, Traced):
     state: MissionState = MissionState.DRAFT
     objectives: list[MissionObjective] = Field(default_factory=list)
     assignees: list[str] = Field(default_factory=list, description="User ids")
-    resources: list[str] = Field(default_factory=list, description="Entity ids: drones, patrols, docks")
+    resources: list[str] = Field(
+        default_factory=list, description="Entity ids: drones, patrols, docks"
+    )
     commander: str | None = None
     zone_id: str | None = None
     geo: Geo | None = None
@@ -81,7 +83,9 @@ class WorkflowRun(TenantScoped, Traced):
     started_ts: Timestamp = Field(default_factory=utc_now)
     finished_ts: Timestamp | None = None
     runner: str = Field(default="temporal", description="temporal | inline")
-    external_id: str | None = Field(default=None, description="Temporal workflow id, when applicable")
+    external_id: str | None = Field(
+        default=None, description="Temporal workflow id, when applicable"
+    )
     entity_ids: list[str] = Field(default_factory=list)
     explanation: Explanation = Field(default_factory=Explanation)
 
@@ -97,7 +101,9 @@ class SimulationRun(TenantScoped, Traced):
     """A what-if scenario execution (PRD M11)."""
 
     run_id: str = Field(default_factory=lambda: new_id("sim"))
-    scenario: str = Field(description="gate_closure | fire_spread | dock_breakdown | flood_level | …")
+    scenario: str = Field(
+        description="gate_closure | fire_spread | dock_breakdown | flood_level | …"
+    )
     params: dict[str, Any] = Field(default_factory=dict)
     status: RunStatus = RunStatus.PENDING
     started_ts: Timestamp = Field(default_factory=utc_now)
@@ -107,7 +113,8 @@ class SimulationRun(TenantScoped, Traced):
     )
     results: dict[str, Any] = Field(default_factory=dict)
     kpi_deltas: dict[str, float] = Field(
-        default_factory=dict, description="Projected change per KPI, e.g. {'throughput_per_h': -12.5}"
+        default_factory=dict,
+        description="Projected change per KPI, e.g. {'throughput_per_h': -12.5}",
     )
     impacted_entities: list[str] = Field(default_factory=list)
     timeline: list[dict[str, Any]] = Field(default_factory=list)
@@ -160,8 +167,12 @@ class AuditRecord(TenantScoped, Traced):
     details: dict[str, Any] = Field(default_factory=dict)
 
     @classmethod
-    def for_denial(cls, actor: str, action: str, resource: str, reason: str, **kw: Any) -> AuditRecord:
-        return cls(actor=actor, action=action, resource=resource, allowed=False, reason=reason, **kw)
+    def for_denial(
+        cls, actor: str, action: str, resource: str, reason: str, **kw: Any
+    ) -> AuditRecord:
+        return cls(
+            actor=actor, action=action, resource=resource, allowed=False, reason=reason, **kw
+        )
 
 
 class WebhookSubscription(TenantScoped):
@@ -169,7 +180,9 @@ class WebhookSubscription(TenantScoped):
 
     webhook_id: str = Field(default_factory=lambda: new_id("whk"))
     url: str
-    topics: list[str] = Field(default_factory=list, description="Bus topics or event types to forward")
+    topics: list[str] = Field(
+        default_factory=list, description="Bus topics or event types to forward"
+    )
     secret: str | None = Field(default=None, description="HMAC-SHA256 signing secret")
     active: bool = True
     created_ts: Timestamp = Field(default_factory=utc_now)

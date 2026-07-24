@@ -87,9 +87,7 @@ class MemoryVectorStore:
         self._items.pop((tenant_id, collection, item_id), None)
 
     async def count(self, collection: str, *, tenant_id: str) -> int:
-        return sum(
-            1 for (tid, coll, _) in self._items if tid == tenant_id and coll == collection
-        )
+        return sum(1 for (tid, coll, _) in self._items if tid == tenant_id and coll == collection)
 
     async def ping(self) -> bool:
         return True
@@ -173,7 +171,7 @@ class PgVectorStore:
                    1 - (embedding <=> %s::vector) AS score,
                    metadata
               FROM embeddings
-             WHERE {' AND '.join(clauses)}
+             WHERE {" AND ".join(clauses)}
              ORDER BY embedding <=> %s::vector
              LIMIT %s
             """,

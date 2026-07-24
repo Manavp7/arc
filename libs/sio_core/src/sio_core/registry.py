@@ -173,7 +173,7 @@ async def close_all() -> None:
             continue
         try:
             await close()
-        except Exception as exc:  # noqa: BLE001 - shutdown must not raise
+        except Exception as exc:
             log.warning("registry.close_failed", adapter=key, error=str(exc))
     _instances.clear()
 

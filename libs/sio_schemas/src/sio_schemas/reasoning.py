@@ -137,9 +137,12 @@ class DecisionOption(SioModel):
     target_entity_id: str | None = None
     params: dict[str, Any] = Field(default_factory=dict)
     score: float = Field(description="Higher is better; the objective value from the solver")
-    expected_effect: str = Field(description="Plain-language effect, e.g. 'contains fire in ~4 min'")
+    expected_effect: str = Field(
+        description="Plain-language effect, e.g. 'contains fire in ~4 min'"
+    )
     expected_metrics: dict[str, float] = Field(
-        default_factory=dict, description="Quantified effects: eta_s, coverage_pct, cost, risk_delta"
+        default_factory=dict,
+        description="Quantified effects: eta_s, coverage_pct, cost, risk_delta",
     )
     cost: float = 0.0
     risk: float = Field(default=0.0, ge=0.0, le=1.0)

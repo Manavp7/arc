@@ -92,7 +92,9 @@ class BBox(SioModel):
     @model_validator(mode="after")
     def _ordered(self) -> BBox:
         if self.x2 < self.x1 or self.y2 < self.y1:
-            raise ValueError(f"bbox corners out of order: ({self.x1},{self.y1})-({self.x2},{self.y2})")
+            raise ValueError(
+                f"bbox corners out of order: ({self.x1},{self.y1})-({self.x2},{self.y2})"
+            )
         return self
 
     @property

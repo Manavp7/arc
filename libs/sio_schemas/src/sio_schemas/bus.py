@@ -7,18 +7,16 @@ end-to-end explanations possible.
 
 from __future__ import annotations
 
-from typing import Any, TypeVar
+from typing import Any
 
 from pydantic import Field
 
 from .base import SCHEMA_VERSION, SioModel, TenantScoped, Timestamp, new_id, utc_now
 
-M = TypeVar("M", bound=SioModel)
-
 _REGISTRY: dict[str, type[SioModel]] = {}
 
 
-def register_payload(model: type[M]) -> type[M]:
+def register_payload[M: SioModel](model: type[M]) -> type[M]:
     """Register a model so :meth:`BusMessage.decode` can rebuild it from ``kind``."""
     _REGISTRY[model.__name__] = model
     return model
@@ -74,7 +72,7 @@ class BusMessage(TenantScoped):
             kwargs["trace_id"] = inherited_trace
         return cls(**kwargs)
 
-    def decode(self, model: type[M]) -> M:
+    def decode[M: SioModel](self, model: type[M]) -> M:
         """Validate the payload as ``model``, propagating the envelope's trace id."""
         payload = dict(self.payload)
         if "trace_id" in model.model_fields and not payload.get("trace_id"):
