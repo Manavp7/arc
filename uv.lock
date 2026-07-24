@@ -11,6 +11,7 @@ members = [
     "sio",
     "sio-api",
     "sio-core",
+    "sio-fusion",
     "sio-ingest",
     "sio-perception",
     "sio-schemas",
@@ -2812,6 +2813,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "sio-api" },
     { name = "sio-core" },
+    { name = "sio-fusion" },
     { name = "sio-ingest" },
     { name = "sio-perception" },
     { name = "sio-schemas" },
@@ -2833,6 +2835,7 @@ dev = [
 requires-dist = [
     { name = "sio-api", editable = "services/api" },
     { name = "sio-core", editable = "libs/sio_core" },
+    { name = "sio-fusion", editable = "services/fusion" },
     { name = "sio-ingest", editable = "services/ingest" },
     { name = "sio-perception", editable = "services/perception" },
     { name = "sio-schemas", editable = "libs/sio_schemas" },
@@ -2916,6 +2919,30 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
 ]
 provides-extras = ["kafka", "qdrant"]
+
+[[package]]
+name = "sio-fusion"
+version = "0.1.0"
+source = { editable = "services/fusion" }
+dependencies = [
+    { name = "numpy" },
+    { name = "sio-core" },
+    { name = "sio-schemas" },
+]
+
+[package.optional-dependencies]
+filterpy = [
+    { name = "filterpy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "filterpy", marker = "extra == 'filterpy'", specifier = ">=1.4.5" },
+    { name = "numpy", specifier = ">=2.0" },
+    { name = "sio-core", editable = "libs/sio_core" },
+    { name = "sio-schemas", editable = "libs/sio_schemas" },
+]
+provides-extras = ["filterpy"]
 
 [[package]]
 name = "sio-ingest"
