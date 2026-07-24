@@ -83,7 +83,7 @@ def ensure_source_images(samples_dir: Path) -> list[Path]:
         if not path.exists():
             print(f"  fetching {name}")
             request = urllib.request.Request(url, headers={"User-Agent": "sio-make-samples/0.1"})
-            with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310 - fixed https
+            with urllib.request.urlopen(request, timeout=60) as response:
                 path.write_bytes(response.read())
         paths.append(path)
     return paths
@@ -95,7 +95,6 @@ def extract_sprites(
     """Cut objects out of photographs along their segmentation masks."""
     import cv2
     import numpy as np
-
     from sio_perception.detectors.onnx_yolo import OnnxYoloSegDetector, decode_rle
 
     seg_model = model_dir / "yolo26n-seg.onnx"
@@ -166,8 +165,6 @@ def verify_sprites_are_detectable(
     fault would look like a bug in perception rather than in the fixture.
     """
     import cv2
-    import numpy as np
-
     from sio_perception.detectors.onnx_yolo import OnnxYoloDetector
 
     detector = OnnxYoloDetector(model_dir / "yolo26n.onnx", conf_threshold=0.3, threads=2)
@@ -200,7 +197,7 @@ def verify_sprites_are_detectable(
     return detectable
 
 
-def synthetic_yard_background(width: int, height: int, *, seed: int = 7) -> "object":
+def synthetic_yard_background(width: int, height: int, *, seed: int = 7) -> object:
     """A plausible yard surface: asphalt with noise, lane markings and a horizon.
 
     Not decoration — texture matters. A flat grey field makes every composited object a
@@ -243,7 +240,7 @@ def synthetic_yard_background(width: int, height: int, *, seed: int = 7) -> "obj
     return frame
 
 
-def composite(frame: "object", rgba: "object", x: int, y: int) -> None:
+def composite(frame: object, rgba: object, x: int, y: int) -> None:
     """Alpha-composite an RGBA sprite onto a BGR frame, clipped at the edges."""
     import numpy as np
 
@@ -326,7 +323,7 @@ def render_demo_clip(
                 writer.write(cv2.imread(str(path)))
             writer.release()
             print(f"  wrote {video_path.relative_to(REPO_ROOT)}")
-    except Exception as exc:  # noqa: BLE001 - the clip is optional
+    except Exception as exc:
         print(f"  (mp4 encode unavailable: {exc})")
 
     return out_dir

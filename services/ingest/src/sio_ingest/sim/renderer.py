@@ -98,7 +98,6 @@ class CameraRenderer:
         if not self.available:
             return None
         import cv2
-        import numpy as np
 
         frame = self._background(source_id).copy()
         placed = 0

@@ -8,10 +8,8 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
-from sio_core import MessageContext, SioService
+from sio_core import MessageContext, SioService, get_blob
 from sio_schemas import BusMessage, Modality, Observation, Topic
-
-from sio_core import get_blob
 
 from .connectors.base import (
     Connector,
@@ -205,7 +203,7 @@ class IngestService(SioService):
         try:
             await self.blob.put(observation.raw_ref, rendered, content_type="image/jpeg")
             self._frames_written += 1
-        except Exception as exc:  # noqa: BLE001 - a storage hiccup must not stop ingestion
+        except Exception as exc:
             self.metrics.errors.labels(service=self.name, kind="blob").inc()
             self.log.warning("frame.store_failed", key=observation.raw_ref, error=str(exc))
             observation.raw_ref = None

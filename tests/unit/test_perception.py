@@ -501,15 +501,15 @@ def test_stale_frames_are_skipped() -> None:
 
     service = PerceptionService.__new__(PerceptionService)
     service.settings = Settings(_env_file=None, perception_max_age_s=60.0)  # type: ignore[call-arg]
-    service._stale_skipped = 0  # noqa: SLF001
-    service._warned_stale = False  # noqa: SLF001
+    service._stale_skipped = 0
+    service._warned_stale = False
     service.log = type("L", (), {"warning": lambda *a, **k: None})()  # type: ignore[assignment]
 
-    assert service._is_stale(5.0) is False  # noqa: SLF001
-    assert service._is_stale(59.9) is False  # noqa: SLF001
-    assert service._is_stale(120.0) is True  # noqa: SLF001
-    assert service._is_stale(3600.0) is True  # noqa: SLF001
-    assert service._stale_skipped == 2  # noqa: SLF001
+    assert service._is_stale(5.0) is False
+    assert service._is_stale(59.9) is False
+    assert service._is_stale(120.0) is True
+    assert service._is_stale(3600.0) is True
+    assert service._stale_skipped == 2
 
 
 def test_frame_rate_cap_is_per_camera() -> None:
@@ -519,8 +519,8 @@ def test_frame_rate_cap_is_per_camera() -> None:
 
     service = PerceptionService.__new__(PerceptionService)
     service.settings = Settings(_env_file=None, perception_fps=2.0)  # type: ignore[call-arg]
-    service._last_inference_at = {}  # noqa: SLF001
+    service._last_inference_at = {}
 
-    assert service._due("cam-a") is True  # noqa: SLF001
-    assert service._due("cam-a") is False, "same camera, too soon"  # noqa: SLF001
-    assert service._due("cam-b") is True, "a different camera must not be blocked"  # noqa: SLF001
+    assert service._due("cam-a") is True
+    assert service._due("cam-a") is False, "same camera, too soon"
+    assert service._due("cam-b") is True, "a different camera must not be blocked"
