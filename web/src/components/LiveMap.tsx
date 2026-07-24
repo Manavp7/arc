@@ -7,15 +7,11 @@
  * difference between smooth and juddering.
  */
 
-import {
-  CollisionFilterExtension,
-  type CollisionFilterExtensionProps,
-} from "@deck.gl/extensions";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import { GeoJsonLayer, IconLayer, PathLayer, ScatterplotLayer, TextLayer } from "@deck.gl/layers";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 import maplibregl from "maplibre-gl";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { basemapStyle, entityColour, SEVERITY_COLOURS } from "../lib/basemap";
 import { positionedEntities, useSioStore } from "../store";
 import type { Entity, SioEvent, Zone } from "../types";
@@ -77,13 +73,119 @@ function zoneLayer(zones: Zone[]) {
 
 const LABELLED_TYPES = new Set(["truck", "vehicle", "drone", "forklift"]);
 
-function entityLayers(entities: Entity[], selectedId: string | null, onSelect: (id: string) => void) {
+const LABEL_SIZE = 11;
+const LABEL_OFFSET_Y = -14;
+const LABEL_FONT = "system-ui, sans-serif";
+/** deck.gl rasterises its font atlas at 64 px and scales down, so measure there and scale too. */
+const ATLAS_FONT_SIZE = 64;
+/** Breathing room around each label box, so survivors are visibly separated, not merely disjoint. */
+const LABEL_PADDING = 2;
+
+const advanceCache = new Map<string, number>();
+let measureContext: CanvasRenderingContext2D | null | undefined;
+
+/** Width of one character at atlas size, cached — the label set is ~30 strings over ASCII. */
+function charAdvance(char: string): number {
+  const cached = advanceCache.get(char);
+  if (cached !== undefined) return cached;
+  if (measureContext === undefined) {
+    measureContext = document.createElement("canvas").getContext("2d");
+    if (measureContext) measureContext.font = `${ATLAS_FONT_SIZE}px ${LABEL_FONT}`;
+  }
+  // Half an em is a serviceable mean advance where 2D canvas is unavailable (jsdom).
+  const advance = measureContext
+    ? measureContext.measureText(char).width
+    : ATLAS_FONT_SIZE * 0.5;
+  advanceCache.set(char, advance);
+  return advance;
+}
+
+/** Rendered width in pixels. Summed per character, which is how TextLayer lays glyphs out. */
+function labelWidth(text: string): number {
+  let atlasWidth = 0;
+  for (const char of text) atlasWidth += charAdvance(char);
+  return (atlasWidth * LABEL_SIZE) / ATLAS_FONT_SIZE;
+}
+
+/** Which label an operator would rather keep: the selection, then trucks, then the rest. */
+function labelPriority(entity: Entity, selectedId: string | null): number {
+  if (entity.entity_id === selectedId) return 2;
+  return entity.type === "truck" || entity.type === "vehicle" ? 1 : 0;
+}
+
+interface LabelBox {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/**
+ * Choose which labels to draw, dropping any that would collide with a higher-priority one.
+ *
+ * Restricting *which* entities get labels does not stop two of them standing in the same place:
+ * two forklifts parked 0.75 m apart put two labels inside the same 51 px of screen and rendered
+ * them glyph-on-glyph — visibly bold and unreadable.
+ *
+ * deck.gl ships a CollisionFilterExtension for exactly this, and it is the obvious thing to reach
+ * for, but on 9.3.7 attaching it makes the layer draw *nothing at all*: the collision map itself
+ * rasterises correctly, yet every instance is discarded, and deck throws
+ * `accessor "getCollisionPriority" is not a function` from its own attribute updater once the
+ * extension's `draw()` has swapped `layer.props` for a clone. It reproduces on a bare
+ * ScatterplotLayer too, so it is not a TextLayer quirk. Every entity label vanished. Doing the
+ * test here costs one pass over ~30 boxes and cannot silently erase the layer.
+ */
+function deconflictLabels(
+  entities: Entity[],
+  selectedId: string | null,
+  project: (position: [number, number]) => { x: number; y: number },
+): Entity[] {
+  const ranked = entities
+    .filter(
+      (entity) =>
+        !entity.is_static &&
+        entity.label &&
+        (LABELLED_TYPES.has(entity.type) || entity.entity_id === selectedId),
+    )
+    // Ties break on id rather than on array order: co-located entities arrive in a different
+    // order on each stream message, and without a stable key the surviving label of a tied pair
+    // would flip between them twice a second.
+    .sort(
+      (a, b) =>
+        labelPriority(b, selectedId) - labelPriority(a, selectedId) ||
+        (a.entity_id < b.entity_id ? -1 : 1),
+    );
+
+  const kept: Entity[] = [];
+  const taken: LabelBox[] = [];
+  for (const entity of ranked) {
+    const { x, y } = project([entity.state.geo!.lon, entity.state.geo!.lat]);
+    const halfWidth = labelWidth(entity.label!) / 2 + LABEL_PADDING;
+    const halfHeight = LABEL_SIZE / 2 + LABEL_PADDING;
+    const box: LabelBox = {
+      x0: x - halfWidth,
+      x1: x + halfWidth,
+      y0: y + LABEL_OFFSET_Y - halfHeight,
+      y1: y + LABEL_OFFSET_Y + halfHeight,
+    };
+    const collides = taken.some(
+      (other) => other.x0 < box.x1 && box.x0 < other.x1 && other.y0 < box.y1 && box.y0 < other.y1,
+    );
+    if (collides) continue;
+    taken.push(box);
+    kept.push(entity);
+  }
+  return kept;
+}
+
+function entityLayers(
+  entities: Entity[],
+  labelled: Entity[],
+  selectedId: string | null,
+  onSelect: (id: string) => void,
+) {
   const movers = entities.filter((entity) => !entity.is_static);
   const fixtures = entities.filter((entity) => entity.is_static);
-  const labelled = movers.filter(
-    (entity) =>
-      entity.label && (LABELLED_TYPES.has(entity.type) || entity.entity_id === selectedId),
-  );
 
   return [
     new ScatterplotLayer<Entity>({
@@ -117,33 +219,23 @@ function entityLayers(entities: Entity[], selectedId: string | null, onSelect: (
       transitions: { getPosition: 400 },
       updateTriggers: { getLineColor: [selectedId], getLineWidth: [selectedId] },
     }),
-    new TextLayer<Entity, CollisionFilterExtensionProps<Entity>>({
+    new TextLayer<Entity>({
       id: "entity-labels",
+      // Already de-conflicted by the caller: whatever is in here is drawn.
       data: labelled,
       getPosition: (entity) => [entity.state.geo!.lon, entity.state.geo!.lat],
       getText: (entity) => entity.label ?? "",
-      getSize: 11,
+      getSize: LABEL_SIZE,
       getColor: [220, 228, 236, 200],
-      getPixelOffset: [0, -14],
+      getPixelOffset: [0, LABEL_OFFSET_Y],
       // No font atlas is bundled, so use the browser's default sans stack.
-      fontFamily: "system-ui, sans-serif",
+      fontFamily: LABEL_FONT,
       // An explicit character set instead of "auto": auto builds the atlas lazily and uploads an
       // empty canvas on the first frame, which WebGL reports as
       // "INVALID_VALUE: texSubImage2D: no canvas". Entity labels are ASCII (names, plates, ids).
       characterSet: LABEL_CHARSET,
       pickable: false,
       updateTriggers: { getText: [selectedId] },
-      // Collision filtering, because restricting *which* entities get labels does not stop two of
-      // them standing in the same place. Two forklifts parked 0.75 m apart put two labels inside the
-      // same 51 px of screen and rendered them glyph-on-glyph — visibly bold and unreadable. The
-      // extension drops the lower-priority label instead of overprinting; priority favours the
-      // selected entity, then trucks, so the label that survives is the one an operator wants.
-      extensions: [new CollisionFilterExtension()],
-      collisionEnabled: true,
-      collisionGroup: "entity-labels",
-      getCollisionPriority: (entity: Entity) =>
-        entity.entity_id === selectedId ? 100 : entity.type === "truck" ? 10 : 0,
-      collisionTestProps: { sizeScale: 1.2 },
     }),
   ];
 }
@@ -179,6 +271,8 @@ export function LiveMap() {
   const zones = useSioStore((state) => state.zones);
   const selectedId = useSioStore((state) => state.selectedEntityId);
   const selectEntity = useSioStore((state) => state.selectEntity);
+  /** Bumped whenever the camera moves, to re-run the screen-space label de-confliction. */
+  const [cameraVersion, setCameraVersion] = useState(0);
 
   // Create the map once. React 19's strict-mode double-invoke makes a guard essential here:
   // two MapLibre instances on one container leak a WebGL context each.
@@ -208,13 +302,41 @@ export function LiveMap() {
     };
   }, []);
 
+  // Runs after the effect above, so the map exists by the time this subscribes. MapLibre fires
+  // `move` on every frame of a pan or zoom, so coalesce to at most one recompute per frame.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    let queued = false;
+    const bump = () => {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(() => {
+        queued = false;
+        setCameraVersion((version) => version + 1);
+      });
+    };
+    map.on("move", bump);
+    return () => {
+      map.off("move", bump);
+    };
+  }, []);
+
+  // Which labels survive depends on where the camera puts them, so this has to be recomputed on
+  // camera moves as well as on data changes. `cameraVersion` is the signal, not an input.
+  const labelled = useMemo(() => {
+    const map = mapRef.current;
+    if (!map) return [];
+    return deconflictLabels(entities, selectedId, (position) => map.project(position));
+  }, [entities, selectedId, cameraVersion]);
+
   const layers = useMemo(
     () => [
       zoneLayer(zones),
-      ...entityLayers(entities, selectedId, selectEntity),
+      ...entityLayers(entities, labelled, selectedId, selectEntity),
       eventLayer(events),
     ],
-    [zones, entities, events, selectedId, selectEntity],
+    [zones, entities, labelled, events, selectedId, selectEntity],
   );
 
   useEffect(() => {
