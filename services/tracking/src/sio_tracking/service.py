@@ -15,16 +15,17 @@ from sio_schemas import (
     Geo,
     Topic,
     Track,
+    TrackStatus,
     Velocity,
     utc_now,
 )
-from sio_schemas import (
-    TrackState as SchemaTrackState,
-)
-from sio_schemas import (
-    TrackState as _State,  # noqa: F401 - kept for clarity of the two TrackState names
-)
-from sio_schemas.perception import TrackState as TrackStatePoint
+
+# Two similarly-named things, kept deliberately distinct: `TrackStatus` is the lifecycle enum on the
+# envelope (tentative/confirmed/lost/removed), while `TrackState` is one timestep of a track's path.
+# An earlier version aliased the *model* as `SchemaTrackState` and then read `.CONFIRMED` off it,
+# which raises AttributeError('CONFIRMED') — 1,130 frames were tracked and not one track was ever
+# published. Hence the explicit, unaliased names.
+from sio_schemas.perception import TrackState as TrackPathPoint
 
 from .bytetrack import ByteTracker, TrackState, displacement
 from .bytetrack import Track as InternalTrack
@@ -178,7 +179,7 @@ class TrackingService(SioService):
     def _to_schema_track(self, internal: InternalTrack, sample: Detection) -> Track:
         """Convert an internal track into the published envelope."""
         states = [
-            TrackStatePoint(
+            TrackPathPoint(
                 ts=sample.ts,
                 bbox=historic,
                 confidence=internal.confidence,
@@ -194,9 +195,9 @@ class TrackingService(SioService):
             states=states,
             confidence=internal.confidence,
             source_id=sample.source_id,
-            status=SchemaTrackState.CONFIRMED
+            status=TrackStatus.CONFIRMED
             if internal.state is TrackState.CONFIRMED
-            else SchemaTrackState.LOST,
+            else TrackStatus.LOST,
             start_ts=sample.ts,
             last_ts=sample.ts,
             hits=internal.hits,

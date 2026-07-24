@@ -232,6 +232,34 @@ class ApiService(SioService):
             """PRD M6: 'cameras covering Gate B'."""
             return await read.cameras_covering(tenant_id=current_tenant(), zone_id=zone_id)
 
+        @api.get("/search/frames")
+        async def search_frames(
+            q: str,
+            limit: int = Query(default=12, le=50),
+            source_id: str | None = None,
+        ) -> dict[str, Any]:
+            """Semantic frame search (PRD M2).
+
+            Proxied from the world model rather than reimplemented, so the query is embedded by the
+            same model that embedded the frames. Two implementations would drift, and a search that
+            embeds its query differently from its index returns confident nonsense.
+            """
+            import httpx
+
+            url = f"http://127.0.0.1:{self.settings.worldmodel_port}/search/frames"
+            try:
+                async with httpx.AsyncClient(timeout=20.0) as client:
+                    response = await client.get(
+                        url, params={"q": q, "limit": limit, "source_id": source_id}
+                    )
+                    response.raise_for_status()
+                    return dict(response.json())
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"semantic search unavailable (is the worldmodel service running?): {exc}",
+                ) from exc
+
         @api.get("/measurements")
         async def measurements(
             metric: str,

@@ -229,6 +229,23 @@ def _draw_fire(frame: Any, tick: int) -> None:
 
     rng = np.random.default_rng(tick)
     centre_x, centre_y = FRAME_WIDTH // 2, int(FRAME_HEIGHT * 0.62)
+
+    # Smoke first, so the flame sits in front of it.
+    #
+    # Every puff goes onto one overlay and is blended **once**. The first version called
+    # addWeighted(overlay, 0.25, frame, 0.75) inside the loop, once per puff — blending the *entire
+    # frame* toward grey forty times over, which leaves (0.75)^40 ≈ 1e-5 of the original. The rendered
+    # fire was effectively invisible: 39 fire-coloured pixels in a frame that should have had tens of
+    # thousands, and the whole scene washed out. Nothing but looking at the stored pixels found it.
+    smoke = frame.copy()
+    for _ in range(40):
+        x = int(centre_x + rng.normal(0, 70))
+        y = int(centre_y - 90 + rng.normal(0, 60))
+        radius = int(rng.integers(20, 55))
+        grey = int(rng.integers(120, 190))
+        cv2.circle(smoke, (x, y), radius, (grey, grey, grey), -1)
+    cv2.addWeighted(smoke, 0.35, frame, 0.65, 0, frame)
+
     for _ in range(80):
         x = int(centre_x + rng.normal(0, 55))
         y = int(centre_y + rng.normal(0, 42))
@@ -240,12 +257,3 @@ def _draw_fire(frame: Any, tick: int) -> None:
             int(rng.integers(225, 255)),
         )
         cv2.circle(frame, (x, y), radius, colour, -1)
-    # Smoke above the flame.
-    for _ in range(40):
-        x = int(centre_x + rng.normal(0, 70))
-        y = int(centre_y - 90 + rng.normal(0, 60))
-        radius = int(rng.integers(20, 55))
-        grey = int(rng.integers(120, 190))
-        overlay = frame.copy()
-        cv2.circle(overlay, (x, y), radius, (grey, grey, grey), -1)
-        cv2.addWeighted(overlay, 0.25, frame, 0.75, 0, frame)

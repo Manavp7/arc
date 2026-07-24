@@ -388,3 +388,112 @@ def test_cross_camera_can_be_disabled() -> None:
 def test_cross_camera_describes_itself_honestly() -> None:
     description = CrossCameraAssociator().describe()
     assert "hypotheses" in description["note"], "the output must not read as an assertion of fact"
+
+
+# ------------------------------------------------- envelope conversion (regression)
+def test_internal_track_converts_to_a_valid_envelope() -> None:
+    """Regression: every message failed with AttributeError('CONFIRMED').
+
+    ``sio_schemas`` exports both ``TrackStatus`` (the lifecycle enum on the envelope) and
+    ``TrackState`` (one timestep of a path). The service had aliased the *model* and then read
+    ``.CONFIRMED`` off it, so 1,130 frames were tracked and zero tracks were ever published. Nothing
+    in the unit ring covered the conversion, so it took reading the live log to find.
+    """
+    from sio_tracking.service import TrackingService
+
+    from sio_schemas import Detection, TrackStatus
+
+    service = TrackingService.__new__(TrackingService)
+    internal = make_internal(7, "truck", unit_vector(3), hits=9)
+    internal.state = TrackState.CONFIRMED
+    internal.history = [BBox(x1=10, y1=20, x2=110, y2=140)]
+
+    sample = Detection(
+        observation_id="obs_1",
+        **{"class": "truck"},
+        confidence=0.9,
+        source_id="cam-gate-a",
+        bbox=BBox(x1=10, y1=20, x2=110, y2=140),
+    )
+    envelope = service._to_schema_track(internal, sample)
+
+    assert envelope.status is TrackStatus.CONFIRMED
+    assert envelope.track_id == "trk-cam-gate-a-7"
+    assert envelope.class_name == "truck"
+    assert envelope.source_id == "cam-gate-a"
+    assert envelope.embedding is not None and len(envelope.embedding) == 32
+    assert envelope.states and envelope.states[0].bbox is not None
+    # And it must survive the wire, which is the point of converting at all.
+    from sio_schemas import Track as TrackEnvelope
+
+    assert TrackEnvelope.model_validate(envelope.to_wire()).track_id == envelope.track_id
+
+
+def test_lost_tracks_are_reported_as_lost() -> None:
+    from sio_tracking.service import TrackingService
+
+    from sio_schemas import Detection, TrackStatus
+
+    service = TrackingService.__new__(TrackingService)
+    internal = make_internal(1, "person", unit_vector(4))
+    internal.state = TrackState.LOST
+    internal.history = [BBox(x1=0, y1=0, x2=20, y2=40)]
+    sample = Detection(
+        observation_id="o",
+        **{"class": "person"},
+        confidence=0.7,
+        source_id="cam-a",
+        bbox=BBox(x1=0, y1=0, x2=20, y2=40),
+    )
+    assert service._to_schema_track(internal, sample).status is TrackStatus.LOST
+
+
+def test_detections_carry_their_embedding_through_the_envelope() -> None:
+    """Regression: perception recorded the vector's dimension and dropped the vector."""
+    from sio_perception.service import PerceptionService
+
+    result = VisionResult(
+        label="truck",
+        confidence=0.9,
+        bbox=BBox(x1=1, y1=2, x2=30, y2=40),
+        embedding=tuple(unit_vector(9)),
+        attrs={"reid_dim": 32},
+    )
+    attrs = PerceptionService._detection_attrs(result)
+    assert "embedding" in attrs, "the vector must be on the wire, not just its dimension"
+    assert len(attrs["embedding"]) == 32
+
+    # And tracking must read it back into a VisionResult the tracker can use.
+    from sio_tracking.service import TrackingService
+
+    from sio_schemas import Detection
+
+    detection = Detection(
+        observation_id="o",
+        **{"class": "truck"},
+        confidence=0.9,
+        source_id="cam-a",
+        bbox=BBox(x1=1, y1=2, x2=30, y2=40),
+        attrs=attrs,
+    )
+    restored = TrackingService._to_vision_result(detection)
+    assert restored.embedding is not None and len(restored.embedding) == 32
+
+
+def test_cross_camera_proposes_each_pair_once() -> None:
+    """A persistent track must not re-propose the same hypothesis every frame.
+
+    Observed live: 16 sightings produced 714 "links". That is not evidence, it is noise fusion has to
+    filter. The match is still *returned* on every observation, so a track's cross_camera_of stays
+    populated; only the proposal is deduplicated.
+    """
+    associator = CrossCameraAssociator(reid_threshold=0.7)
+    associator.MIN_TRANSIT_S = 0.0
+    vector = unit_vector(5)
+
+    associator.observe("cam-a", make_internal(1, "truck", vector), envelope("t1"))
+    for _ in range(10):
+        matches = associator.observe("cam-b", make_internal(1, "truck", vector), envelope("t2"))
+        assert matches == ["t1"], "the match must keep being reported"
+
+    assert associator.link_count == 1, f"expected one proposal, got {associator.link_count}"

@@ -127,7 +127,7 @@ class PerceptionService(SioService):
                 model_name=self.detector.name
                 if not result.attrs.get("heuristic")
                 else "fire-heuristic",
-                attrs=result.attrs,
+                attrs=self._detection_attrs(result),
             )
             await ctx.publish(Topic.DETECTIONS, detection)
             self._detections += 1
@@ -203,6 +203,25 @@ class PerceptionService(SioService):
         await self._store_redacted(observation, image, results)
         return results
 
+    @staticmethod
+    def _detection_attrs(result: VisionResult) -> dict[str, Any]:
+        """Attributes for the published detection, **including the ReID vector itself**.
+
+        The vector has to travel on the wire: tracking needs it in the same message, and a reference
+        it would have to fetch per detection would add a round trip to every association. Rounded to
+        four decimals — well inside the noise of an int8-quantised encoder — which roughly halves the
+        JSON to ~3.5 kB per detection, about 28 kB/s at eight detections a second. If that ever
+        matters the honest next step is int8 plus base64, not dropping the data.
+
+        This existed as a bug first: perception computed the embeddings, recorded only their
+        *dimension* in ``attrs``, and discarded the values — so tracking's appearance matching had
+        nothing to match on and silently never fired.
+        """
+        attrs = dict(result.attrs)
+        if result.embedding is not None:
+            attrs["embedding"] = [round(float(value), 4) for value in result.embedding]
+        return attrs
+
     def _attach_embeddings(
         self, image: np.ndarray, results: list[VisionResult]
     ) -> list[VisionResult]:
@@ -230,7 +249,7 @@ class PerceptionService(SioService):
                 bbox=original.bbox,
                 mask_rle=original.mask_rle,
                 embedding=tuple(vector),
-                attrs={**original.attrs, "reid_dim": len(vector)},
+                attrs={**original.attrs, "reid_dim": len(vector), "reid_model": self.reid.name},
             )
         return updated
 

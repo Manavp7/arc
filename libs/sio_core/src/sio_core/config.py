@@ -162,6 +162,12 @@ class Settings(BaseSettings):
     warning rather than failing to start.
     """
     perception_fps: float = 2.0
+    frame_index_hz: float = 0.5
+    """How often each camera's frames are embedded for semantic search.
+
+    Lower than the frame rate on purpose: at 2 fps consecutive frames are near duplicates, so
+    embedding every one costs ~60 ms of CPU to add almost no information.
+    """
     perception_max_age_s: float = 60.0
     """Skip frames older than this.
 

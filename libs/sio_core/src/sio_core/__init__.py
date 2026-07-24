@@ -17,7 +17,16 @@ from .errors import (
 )
 from .explain import ExplanationBuilder, merge_explanations
 from .ports import BlobStore, Bus, GraphStore, VectorStore
-from .registry import close_all, get_blob, get_bus, get_graph, get_pg_pool, get_vectors, override
+from .registry import (
+    close_all,
+    get_blob,
+    get_bus,
+    get_embedder,
+    get_graph,
+    get_pg_pool,
+    get_vectors,
+    override,
+)
 from .service import MessageContext, SioService
 from .stores.pg import PgPool
 from .telemetry import (
@@ -59,6 +68,7 @@ __all__ = [
     "current_tenant",
     "get_blob",
     "get_bus",
+    "get_embedder",
     "get_graph",
     "get_logger",
     "get_pg_pool",

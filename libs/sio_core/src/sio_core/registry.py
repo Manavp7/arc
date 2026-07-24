@@ -127,6 +127,47 @@ def get_vectors(settings: Settings | None = None) -> VectorStore:
     return _cached(f"vectors:{backend}", factory)
 
 
+def get_embedder(settings: Settings | None = None) -> Any:
+    """The image+text embedder (PRD M2 semantic search, M7 entity vectors).
+
+    Falls back to :class:`HashEmbedder` when CLIP's weights are missing — but loudly, because a hash
+    embedder is *not* semantic: identical queries still match, and nothing else does. Silently
+    substituting it would turn "semantic search returns nothing useful" into a mystery instead of a
+    missing download.
+    """
+    cfg = settings or get_settings()
+    backend = cfg.embedder
+
+    def factory() -> Any:
+        from .vision.clip_embedder import HashEmbedder, OnnxClipEmbedder
+
+        if backend == "hash":
+            log.info("registry.embedder", backend="hash", note="deterministic, not semantic")
+            return HashEmbedder()
+        if backend == "clip":
+            vision = cfg.model_path(cfg.clip_vision_model)
+            text = cfg.model_path(cfg.clip_text_model)
+            tokenizer = cfg.model_path(cfg.clip_tokenizer)
+            if not (vision.exists() and text.exists() and tokenizer.exists()):
+                log.warning(
+                    "registry.embedder_fallback",
+                    reason="CLIP weights not found",
+                    looked_in=str(cfg.model_dir),
+                    using="hash",
+                    effect="semantic search will not work; exact-query matching only",
+                    hint="run: just models",
+                )
+                return HashEmbedder()
+            try:
+                return OnnxClipEmbedder(vision, text, tokenizer, threads=cfg.ort_threads)
+            except Exception as exc:
+                log.error("registry.embedder_failed", error=str(exc), using="hash")
+                return HashEmbedder()
+        raise ConfigError(f"unknown SIO_EMBEDDER={backend!r}")
+
+    return _cached(f"embedder:{backend}", factory)
+
+
 def get_blob(settings: Settings | None = None) -> BlobStore:
     cfg = settings or get_settings()
     backend = cfg.blob_backend

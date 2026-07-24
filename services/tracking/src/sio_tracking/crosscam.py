@@ -91,7 +91,10 @@ class CrossCameraAssociator:
         self.max_sightings = max_sightings
         self.sightings: dict[str, Sighting] = {}
         self.links: list[Link] = []
+        self._proposed: set[frozenset[str]] = set()
+        """Pairs already proposed, so a persistent track does not re-propose every frame."""
         self.link_count = 0
+        self.duplicate_proposals = 0
         self.rejected_time = 0
         self.rejected_similarity = 0
 
@@ -122,6 +125,17 @@ class CrossCameraAssociator:
                 self.rejected_similarity += 1
                 continue
             matches.append(sighting.track_id)
+
+            # Propose each pair once. A persistent track re-observed every frame would otherwise
+            # re-propose the same hypothesis on every frame: 16 sightings produced 714 "links",
+            # which is not evidence, it is noise that fusion has to filter. The *match* is still
+            # returned every time, so the track's `cross_camera_of` stays populated — only the
+            # proposal is deduplicated.
+            pair = frozenset((envelope.track_id, sighting.track_id))
+            if pair in self._proposed:
+                continue
+            self._proposed.add(pair)
+
             link = Link(
                 left=envelope.track_id,
                 right=sighting.track_id,
@@ -165,6 +179,13 @@ class CrossCameraAssociator:
         # Links are a diagnostic, not a store; the world model holds the real relationships.
         if len(self.links) > 200:
             del self.links[:-200]
+        # Forget proposals for tracks that have aged out, so a returning vehicle can be linked again
+        # on a later visit rather than being suppressed forever by a set that only grows.
+        if len(self._proposed) > 5_000:
+            live = set(self.sightings)
+            self._proposed = {
+                pair for pair in self._proposed if any(member in live for member in pair)
+            }
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -172,6 +193,7 @@ class CrossCameraAssociator:
             "reid_threshold": self.reid_threshold,
             "tracked_sightings": len(self.sightings),
             "links_proposed": self.link_count,
+            "distinct_pairs_tracked": len(self._proposed),
             "rejected_on_time": self.rejected_time,
             "rejected_on_similarity": self.rejected_similarity,
             "recent_links": [link.describe() for link in self.links[-10:]],

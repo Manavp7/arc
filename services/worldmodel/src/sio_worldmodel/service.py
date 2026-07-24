@@ -2,13 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Any
 
 from fastapi import FastAPI
 
-from sio_core import MessageContext, SioService, get_graph, get_pg_pool
+from sio_core import (
+    MessageContext,
+    SioService,
+    get_blob,
+    get_embedder,
+    get_graph,
+    get_pg_pool,
+    get_vectors,
+)
 from sio_core.tenancy import current_tenant
-from sio_schemas import BusMessage, Entity, Relationship, Topic, Track
+from sio_schemas import BusMessage, Entity, Observation, Relationship, Topic, Track
 
 
 class WorldModelService(SioService):
@@ -22,16 +32,26 @@ class WorldModelService(SioService):
     """
 
     name = "worldmodel"
-    subscribes = (Topic.ENTITIES, Topic.TRACKS)
+    subscribes = (Topic.ENTITIES, Topic.TRACKS, Topic.RAW_FRAMES)
     tick_interval_s = 30.0
+
+    FRAME_COLLECTION = "frames"
+    """pgvector collection holding CLIP embeddings of stored frames."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.graph = get_graph(self.settings)
         self.pool = get_pg_pool(self.settings)
+        self.vectors = get_vectors(self.settings)
+        self.blob = get_blob(self.settings)
+        self.embedder = get_embedder(self.settings)
         self._entities_seen = 0
         self._relationships_seen = 0
         self._states_written = 0
+        self._frames_indexed = 0
+        self._frames_skipped = 0
+        self._embed_ms: list[float] = []
+        self._last_embed_at: dict[str, float] = {}
 
     # ----------------------------------------------------------------- lifecycle
     async def setup(self) -> None:
@@ -53,7 +73,18 @@ class WorldModelService(SioService):
         checks: dict[str, str] = {}
         checks["graph"] = "ok" if await self.graph.ping() else "unreachable"
         checks["postgres"] = "ok" if await self.pool.ping() else "unreachable"
+        checks["vectors"] = "ok" if await self.vectors.ping() else "unreachable"
         return checks
+
+    async def health_info(self) -> dict[str, str]:
+        return {
+            "embedder": self.embedder.name,
+            "frames_indexed": str(self._frames_indexed),
+            "frames_skipped": str(self._frames_skipped),
+            "mean_embed_ms": f"{sum(self._embed_ms) / len(self._embed_ms):.0f}"
+            if self._embed_ms
+            else "n/a",
+        }
 
     # ------------------------------------------------------------------ handling
     async def on_message(self, message: BusMessage, ctx: MessageContext) -> None:
@@ -63,6 +94,8 @@ class WorldModelService(SioService):
             await self._handle_relationship(message.decode(Relationship))
         elif message.kind == "Track":
             await self._handle_track(message.decode(Track))
+        elif message.kind == "Observation" and message.topic == str(Topic.RAW_FRAMES):
+            await self._index_frame(message.decode(Observation), ctx)
         else:
             # An unknown payload is not an error: a newer producer may publish something this
             # consumer has never heard of, and skipping it is the correct forward-compatible
@@ -228,6 +261,123 @@ class WorldModelService(SioService):
         )
         self._states_written += 1
 
+    # ------------------------------------------------------------- frame indexing
+    async def _index_frame(self, observation: Observation, ctx: MessageContext) -> None:
+        """Embed a stored frame and index it, so every frame is searchable (PRD M2).
+
+        Rate-limited per camera and skipped for stale frames. At 2 fps consecutive frames are near
+        duplicates, so embedding every one costs ~60 ms of CPU each to add almost no information — and
+        after a restart the replayed backlog would otherwise be embedded in full before anything
+        current was.
+        """
+        if not observation.raw_ref:
+            return
+        if ctx.age_s > self.settings.perception_max_age_s:
+            self._frames_skipped += 1
+            return
+        interval = 1.0 / max(0.05, self.settings.frame_index_hz)
+        now = time.monotonic()
+        if now - self._last_embed_at.get(observation.source_id, 0.0) < interval:
+            self._frames_skipped += 1
+            return
+        self._last_embed_at[observation.source_id] = now
+
+        try:
+            data = await self.blob.get(observation.raw_ref)
+        except Exception:
+            self._frames_skipped += 1
+            return
+
+        vector, width, height = await asyncio.to_thread(self._embed_bytes, data)
+        if vector is None:
+            return
+
+        frame_id = str(observation.payload.get("frame_id") or observation.id)
+        await self.pool.execute(
+            """
+            INSERT INTO frames (
+                tenant_id, frame_id, source_id, ts, object_key, width, height,
+                redacted, detections, trace_id
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (tenant_id, frame_id) DO UPDATE SET
+                object_key = EXCLUDED.object_key,
+                detections = GREATEST(frames.detections, EXCLUDED.detections)
+            """,
+            (
+                observation.tenant_id,
+                frame_id,
+                observation.source_id,
+                observation.ts,
+                observation.raw_ref,
+                width,
+                height,
+                bool(self.settings.blur_faces or self.settings.blur_plates),
+                len(observation.payload.get("visible", [])),
+                observation.trace_id,
+            ),
+        )
+        await self.vectors.upsert(
+            self.FRAME_COLLECTION,
+            frame_id,
+            vector,
+            tenant_id=observation.tenant_id,
+            metadata={
+                "source_id": observation.source_id,
+                "object_key": observation.raw_ref,
+                "ts": observation.ts.isoformat(),
+                "embedder": self.embedder.name,
+            },
+            ts=observation.ts,
+        )
+        self._frames_indexed += 1
+
+    def _embed_bytes(self, data: bytes) -> tuple[list[float] | None, int | None, int | None]:
+        """Decode and embed one frame. Runs in a worker thread."""
+        try:
+            import cv2
+            import numpy as np
+        except ImportError:
+            return None, None, None
+        image = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            return None, None, None
+        started = time.perf_counter()
+        vector = self.embedder.embed_image(image)
+        self._embed_ms = [*self._embed_ms[-49:], (time.perf_counter() - started) * 1000]
+        return vector, int(image.shape[1]), int(image.shape[0])
+
+    async def search_frames(
+        self, query: str, *, tenant_id: str, limit: int = 12, source_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Semantic frame search: text in, frames out (PRD M2 acceptance criterion).
+
+        The query is embedded with the *same* model that embedded the frames, which is the whole
+        reason the embedder is shared rather than per-service.
+        """
+        vector = await asyncio.to_thread(self.embedder.embed_text, query)
+        filters = {"source_id": source_id} if source_id else None
+        hits = await self.vectors.search(
+            self.FRAME_COLLECTION,
+            vector,
+            tenant_id=tenant_id,
+            limit=limit,
+            filters=filters,
+        )
+        return [
+            {
+                "frame_id": frame_id,
+                "score": round(score, 4),
+                "source_id": metadata.get("source_id"),
+                "ts": metadata.get("ts"),
+                "object_key": metadata.get("object_key"),
+                "media_url": f"/media/{metadata.get('object_key')}"
+                if metadata.get("object_key")
+                else None,
+                "embedder": metadata.get("embedder"),
+            }
+            for frame_id, score, metadata in hits
+        ]
+
     # ---------------------------------------------------------------------- tick
     async def tick(self) -> None:
         counts = await self.graph.counts(tenant_id=current_tenant())
@@ -237,10 +387,23 @@ class WorldModelService(SioService):
             relationships=counts.get("relationships", 0),
             open_relationships=counts.get("open_relationships", 0),
             states_written=self._states_written,
+            frames_indexed=self._frames_indexed,
+            frames_skipped=self._frames_skipped,
+            mean_embed_ms=round(sum(self._embed_ms) / len(self._embed_ms), 1)
+            if self._embed_ms
+            else None,
         )
 
     # --------------------------------------------------------------------- routes
     def routes(self, app: FastAPI) -> None:
+        @app.get("/search/frames", tags=["worldmodel"])
+        async def search(q: str, limit: int = 12, source_id: str | None = None) -> dict[str, Any]:
+            """Semantic frame search. `q` is natural language: 'a truck at the gate'."""
+            results = await self.search_frames(
+                q, tenant_id=current_tenant(), limit=limit, source_id=source_id
+            )
+            return {"query": q, "embedder": self.embedder.name, "results": results}
+
         @app.get("/counts", tags=["worldmodel"])
         async def counts() -> dict[str, Any]:
             tenant = current_tenant()
