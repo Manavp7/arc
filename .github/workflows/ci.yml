@@ -1,0 +1,164 @@
+name: ci
+
+# Three jobs, deliberately:
+#   check         — the phase gate on Linux (fast, no infrastructure)
+#   check-macos   — the same gate on macOS, because macOS is the supported platform and a
+#                   Linux-only green tick would let the Mac path rot (plan risk R-j)
+#   integration   — the real datastores, brought up by our own bootstrap script rather than by
+#                   service containers, so CI exercises the code a developer actually runs
+#
+# No Docker anywhere, matching the PRD's constraint.
+
+on:
+  push:
+    branches: ["main", "cursor/**"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: "1"
+  SIO_LOG_LEVEL: WARNING
+
+jobs:
+  check:
+    name: check (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install just
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
+            | bash -s -- --to "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Sync python workspace
+        run: uv sync --frozen
+
+      - name: Install web dependencies
+        run: npm ci --prefix web
+
+      - name: Configure environment
+        run: cp .env.example .env
+
+      - name: just check
+        run: just check
+
+      - name: Verify exported JSON schemas are current
+        run: uv run --no-sync python -m sio_schemas.export --check --out docs/schemas
+
+  check-macos:
+    name: check (macos)
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install just
+        run: brew install just
+
+      - name: Sync python workspace
+        run: uv sync --frozen
+
+      - name: Install web dependencies
+        run: npm ci --prefix web
+
+      - name: Configure environment
+        run: cp .env.example .env
+
+      # The gate must pass on a Mac with no datastores installed — that is the promise the
+      # infra-free unit ring exists to keep.
+      - name: just check
+        run: just check
+
+      - name: just doctor (expected to report missing datastores, not to crash)
+        run: bash scripts/doctor.sh || true
+
+  integration:
+    name: integration (live datastores)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install just
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
+            | bash -s -- --to "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # Uses the project's own bootstrap: if setup breaks for a developer, CI breaks too.
+      - name: Bootstrap datastores
+        run: bash scripts/bootstrap.sh --minimal
+
+      - name: Start postgres and redis
+        run: bash scripts/services.sh start postgres redis
+
+      - name: Initialise the schema
+        run: just db-init
+
+      - name: Doctor
+        run: bash scripts/doctor.sh || true
+
+      # Neo4j and MinIO are not installed in this job, so the port-selected fallbacks are
+      # exercised instead — which also proves the adapter seams work.
+      - name: Integration tests
+        env:
+          SIO_TEST_INFRA: "1"
+          SIO_GRAPH_BACKEND: postgres
+          SIO_BLOB_BACKEND: file
+          SIO_VECTOR_BACKEND: pgvector
+          SIO_BUS_BACKEND: redis
+        run: uv run --no-sync pytest tests/integration -m infra
+
+      - name: Bus contract against real Redis
+        env:
+          SIO_TEST_INFRA: "1"
+        run: uv run --no-sync pytest tests/unit/test_bus_contract.py
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          echo "--- service logs ---"
+          tail -n 100 .sio/logs/*.log || true
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sio-logs
+          path: .sio/logs/
+          retention-days: 5
