@@ -1,0 +1,71 @@
+# Process layout for `just dev` when mprocs is installed (PRD §10).
+#
+# mprocs gives each service its own scrollable pane, which is the nicest way to watch a
+# streaming pipeline on a laptop. Everything here mirrors scripts/supervisor.py, which is the
+# no-TUI fallback used in CI and by the e2e tests — if you add a service, add it to both.
+#
+#   brew install mprocs        (macOS)
+#   cargo install mprocs      (Linux, or download a release binary)
+#
+# Keys: <ctrl-a> then q to quit, x to stop a process, r to restart, arrows to switch panes.
+
+procs:
+  # --- API and world model: everything else depends on these ------------------
+  api:
+    shell: uv run --no-sync python -m sio_api
+    autostart: true
+  worldmodel:
+    shell: uv run --no-sync python -m sio_worldmodel
+  spatial:
+    shell: uv run --no-sync python -m sio_spatial
+  governance:
+    shell: uv run --no-sync python -m sio_governance
+
+  # --- perception pipeline ---------------------------------------------------
+  perception:
+    shell: uv run --no-sync python -m sio_perception
+  tracking:
+    shell: uv run --no-sync python -m sio_tracking
+  fusion:
+    shell: uv run --no-sync python -m sio_fusion
+  events:
+    shell: uv run --no-sync python -m sio_events
+
+  # --- reasoning and action -------------------------------------------------
+  prediction:
+    shell: uv run --no-sync python -m sio_prediction
+  simulation:
+    shell: uv run --no-sync python -m sio_simulation
+  decision:
+    shell: uv run --no-sync python -m sio_decision
+  copilot:
+    shell: uv run --no-sync python -m sio_copilot
+  mcp:
+    shell: uv run --no-sync python -m sio_mcp
+  agents:
+    shell: uv run --no-sync python -m sio_agents
+  workflow:
+    shell: uv run --no-sync python -m sio_workflow
+  alerts:
+    shell: uv run --no-sync python -m sio_alerts
+  missions:
+    shell: uv run --no-sync python -m sio_missions
+  analytics:
+    shell: uv run --no-sync python -m sio_analytics
+
+  # --- signal sources and UI ------------------------------------------------
+  ingest:
+    shell: uv run --no-sync python -m sio_ingest
+  web:
+    shell: cd web && npm run dev
+
+  # --- convenience panes ----------------------------------------------------
+  doctor:
+    shell: bash scripts/doctor.sh
+    autostart: false
+  seed:
+    shell: uv run --no-sync python scripts/seed.py
+    autostart: false
+  demo:
+    shell: uv run --no-sync python scripts/demo.py
+    autostart: false

@@ -79,7 +79,7 @@ install_node() {
 }
 
 # ------------------------------------------------------------------- datastores: macOS
-brew_install() {
+macos_brew_install() {
   formula="$1"
   if brew list --formula "${formula}" >/dev/null 2>&1; then
     ok "${formula} (already installed)"
@@ -92,24 +92,24 @@ brew_install() {
 
 bootstrap_macos_datastores() {
   have brew || die "Homebrew is required on macOS: https://brew.sh"
-  brew_install "${SIO_BREW_POSTGRES}"
-  brew_install "${SIO_BREW_POSTGIS}"
-  brew_install "${SIO_BREW_PGVECTOR}"
-  brew_install "${SIO_BREW_REDIS}"
+  macos_brew_install "${SIO_BREW_POSTGRES}"
+  macos_brew_install "${SIO_BREW_POSTGIS}"
+  macos_brew_install "${SIO_BREW_PGVECTOR}"
+  macos_brew_install "${SIO_BREW_REDIS}"
   if [ "${PROFILE}" != "minimal" ]; then
-    brew_install "${SIO_BREW_NEO4J}"
-    brew_install "${SIO_BREW_MINIO}"
-    brew_install "${SIO_BREW_TEMPORAL}"
+    macos_brew_install "${SIO_BREW_NEO4J}"
+    macos_brew_install "${SIO_BREW_MINIO}"
+    macos_brew_install "${SIO_BREW_TEMPORAL}"
   fi
   if [ "${PROFILE}" = "full" ]; then
-    brew_install "${SIO_BREW_OLLAMA}"
-    brew_install "${SIO_BREW_GRAFANA}"
-    brew_install "${SIO_BREW_GSTREAMER}"
+    macos_brew_install "${SIO_BREW_OLLAMA}"
+    macos_brew_install "${SIO_BREW_GRAFANA}"
+    macos_brew_install "${SIO_BREW_GSTREAMER}"
   fi
 }
 
 # ------------------------------------------------------------------- datastores: Linux
-apt_install() {
+linux_apt_install() {
   missing=""
   for pkg in "$@"; do
     if ! dpkg -s "${pkg}" >/dev/null 2>&1; then
@@ -127,14 +127,14 @@ apt_install() {
   ok "installed${missing}"
 }
 
-install_neo4j_tarball() {
+linux_install_neo4j() {
   target="${SIO_STATE_DIR}/neo4j"
   if [ -x "${target}/bin/neo4j" ]; then
     ok "neo4j ${SIO_NEO4J_VERSION} (already installed under .sio/neo4j)"
     return 0
   fi
   log "downloading neo4j ${SIO_NEO4J_VERSION}"
-  have java || apt_install default-jre-headless
+  have java || linux_apt_install default-jre-headless
   archive="${SIO_STATE_DIR}/neo4j.tar.gz"
   download "${SIO_NEO4J_TARBALL_URL}" "${archive}"
   rm -rf "${target}" && mkdir -p "${target}"
@@ -182,9 +182,9 @@ install_ollama_linux() {
 
 bootstrap_linux_datastores() {
   have apt-get || die "this Linux path expects apt-get (Debian/Ubuntu)"
-  apt_install "${SIO_APT_POSTGRES}" "${SIO_APT_POSTGIS}" "${SIO_APT_PGVECTOR}" "${SIO_APT_REDIS}"
+  linux_apt_install "${SIO_APT_POSTGRES}" "${SIO_APT_POSTGIS}" "${SIO_APT_PGVECTOR}" "${SIO_APT_REDIS}"
   if [ "${PROFILE}" != "minimal" ]; then
-    install_neo4j_tarball
+    linux_install_neo4j
     install_minio_binary
     install_temporal_binary
   fi

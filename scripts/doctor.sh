@@ -10,6 +10,9 @@
 # connect, a database without its extensions, a bucket that exists but is not writable) is
 # reported as a failure, because those are the states that waste an afternoon.
 
+# no-errexit: the doctor's job is to check *everything* and report every problem at once.
+# Exiting on the first failed probe would hide the other nine, which is the opposite of useful.
+# The exit status is computed explicitly from the failure count at the end.
 set -uo pipefail
 # shellcheck source=scripts/lib.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
