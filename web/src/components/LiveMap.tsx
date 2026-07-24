@@ -7,6 +7,10 @@
  * difference between smooth and juddering.
  */
 
+import {
+  CollisionFilterExtension,
+  type CollisionFilterExtensionProps,
+} from "@deck.gl/extensions";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import { GeoJsonLayer, IconLayer, PathLayer, ScatterplotLayer, TextLayer } from "@deck.gl/layers";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
@@ -113,7 +117,7 @@ function entityLayers(entities: Entity[], selectedId: string | null, onSelect: (
       transitions: { getPosition: 400 },
       updateTriggers: { getLineColor: [selectedId], getLineWidth: [selectedId] },
     }),
-    new TextLayer<Entity>({
+    new TextLayer<Entity, CollisionFilterExtensionProps<Entity>>({
       id: "entity-labels",
       data: labelled,
       getPosition: (entity) => [entity.state.geo!.lon, entity.state.geo!.lat],
@@ -129,6 +133,17 @@ function entityLayers(entities: Entity[], selectedId: string | null, onSelect: (
       characterSet: LABEL_CHARSET,
       pickable: false,
       updateTriggers: { getText: [selectedId] },
+      // Collision filtering, because restricting *which* entities get labels does not stop two of
+      // them standing in the same place. Two forklifts parked 0.75 m apart put two labels inside the
+      // same 51 px of screen and rendered them glyph-on-glyph — visibly bold and unreadable. The
+      // extension drops the lower-priority label instead of overprinting; priority favours the
+      // selected entity, then trucks, so the label that survives is the one an operator wants.
+      extensions: [new CollisionFilterExtension()],
+      collisionEnabled: true,
+      collisionGroup: "entity-labels",
+      getCollisionPriority: (entity: Entity) =>
+        entity.entity_id === selectedId ? 100 : entity.type === "truck" ? 10 : 0,
+      collisionTestProps: { sizeScale: 1.2 },
     }),
   ];
 }

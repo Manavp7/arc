@@ -98,7 +98,10 @@ function EntityDetail() {
     );
   }
 
-  const dwellMinutes = Math.round(
+  // Time on site: first observation to most recent. This is the figure UC1 ("entered today and
+  // stayed more than 15 minutes") turns on. Dock-specific dwell is a different measure and belongs
+  // to the zone-dwell rule in Phase 3, so this row is labelled honestly rather than "dwell".
+  const onSiteMinutes = Math.round(
     (new Date(entity.last_seen).getTime() - new Date(entity.first_seen).getTime()) / 60000,
   );
 
@@ -115,8 +118,8 @@ function EntityDetail() {
         <dd>{entity.type}</dd>
         <dt>confidence</dt>
         <dd>{Math.round(entity.confidence * 100)}%</dd>
-        <dt>dwell</dt>
-        <dd>{dwellMinutes} min</dd>
+        <dt>on site</dt>
+        <dd>{onSiteMinutes} min</dd>
         {entity.state.zone_id && (
           <>
             <dt>zone</dt>

@@ -46,7 +46,11 @@ class ReadModel:
             clauses.append("last_seen >= %s")
             params.append(since)
         if active_within_s:
-            clauses.append("last_seen >= %s")
+            # Static infrastructure is exempt. A camera's `last_seen` is written once, when it is
+            # registered, and never refreshed — it has nothing to report. Applying a recency window
+            # to it does not hide it *temporarily*, it hides it permanently: every dock, gate, camera
+            # and sensor vanished from the live map while only the zone polygons remained.
+            clauses.append("(is_static OR last_seen >= %s)")
             params.append(utc_now() - timedelta(seconds=active_within_s))
         if not include_static:
             clauses.append("is_static = false")
