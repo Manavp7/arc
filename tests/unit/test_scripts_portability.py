@@ -26,7 +26,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = sorted((REPO_ROOT / "scripts").glob("*.sh"))
 
 GNU_ONLY = [
-    (re.compile(r"\bsed\s+-i\s+(?!['\"]?\.)"), "sed -i needs a backup suffix on BSD/macOS: sed -i ''"),
+    (
+        re.compile(r"\bsed\s+-i\s+(?!['\"]?\.)"),
+        "sed -i needs a backup suffix on BSD/macOS: sed -i ''",
+    ),
     (re.compile(r"\breadlink\s+-f\b"), "readlink -f is GNU-only; use cd/pwd or python"),
     (re.compile(r"\bdate\s+-d\b"), "date -d is GNU-only; use date -r or python"),
     (re.compile(r"\bgrep\s+-P\b"), "grep -P is GNU-only; use grep -E"),
@@ -215,7 +218,18 @@ def test_justfile_documents_every_public_recipe() -> None:
         previous = lines[index - 1].strip() if index else ""
         if not previous.startswith("#"):
             undocumented.append(name)
-    allowed = {"api", "web", "fmt", "lint", "typecheck", "test-all", "demo-reset",
-               "services-stop", "services-status", "services-restart", "web-check"}
+    allowed = {
+        "api",
+        "web",
+        "fmt",
+        "lint",
+        "typecheck",
+        "test-all",
+        "demo-reset",
+        "services-stop",
+        "services-status",
+        "services-restart",
+        "web-check",
+    }
     unexpected = set(undocumented) - allowed
     assert not unexpected, f"add a comment above these recipes: {sorted(unexpected)}"

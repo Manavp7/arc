@@ -1,0 +1,454 @@
+/* SIO operator console.
+ *
+ * Dark by default: this is a wall-display and night-shift tool, and a white page beside a live
+ * camera feed is genuinely uncomfortable to watch for hours. Hand-written CSS rather than a
+ * framework — the whole surface is one shell plus a handful of panels, and a utility framework
+ * would be more bytes than the app.
+ */
+
+:root {
+  --bg: #0b0f14;
+  --bg-panel: #111720;
+  --bg-elev: #17202b;
+  --border: #223040;
+  --text: #dfe6ee;
+  --text-dim: #8fa0b3;
+  --accent: #4ea1ff;
+  --ok: #7ad489;
+  --warn: #ffc457;
+  --danger: #f05a4b;
+  --radius: 6px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+code {
+  font-family: var(--mono);
+  background: var(--bg-elev);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------------ layout */
+.app {
+  display: grid;
+  grid-template-rows: 48px 1fr 64px;
+  height: 100%;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.topbar h1 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  margin: 0;
+}
+
+.topbar h1 span {
+  color: var(--text-dim);
+  font-weight: 400;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  margin-left: 10px;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.stat {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  min-height: 0;
+}
+
+.map-pane {
+  position: relative;
+  min-height: 0;
+}
+
+/* --------------------------------------------------------------------- map */
+.map-root,
+.map-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.map-legend {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 10px;
+  background: rgba(17, 23, 32, 0.85);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 11px;
+  color: var(--text-dim);
+  backdrop-filter: blur(4px);
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.legend-item i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.legend-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+/* Keep MapLibre's chrome consistent with the dark shell. */
+.maplibregl-ctrl-group {
+  background: var(--bg-panel) !important;
+  border: 1px solid var(--border) !important;
+}
+
+.maplibregl-ctrl-group button + button {
+  border-top: 1px solid var(--border) !important;
+}
+
+.maplibregl-ctrl-scale {
+  background: rgba(17, 23, 32, 0.8) !important;
+  border-color: var(--border) !important;
+  color: var(--text-dim) !important;
+}
+
+/* ------------------------------------------------------------------- rail */
+.rail {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border);
+  min-height: 0;
+}
+
+.tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  flex: 1;
+  padding: 10px 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  border-bottom: 2px solid transparent;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab-active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.rail-body {
+  overflow-y: auto;
+  padding: 10px;
+  min-height: 0;
+}
+
+.empty {
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 8px 4px;
+}
+
+/* -------------------------------------------------------------- event feed */
+.feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.feed-item {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  padding: 8px 10px;
+}
+
+.feed-item.sev-info {
+  border-left-color: #6ea0d2;
+}
+.feed-item.sev-low {
+  border-left-color: #6ebea0;
+}
+.feed-item.sev-medium {
+  border-left-color: var(--warn);
+}
+.feed-item.sev-high {
+  border-left-color: #f59646;
+}
+.feed-item.sev-critical {
+  border-left-color: var(--danger);
+}
+
+.feed-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.feed-type {
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: capitalize;
+}
+
+.feed-head time,
+.feed-meta {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.feed-summary {
+  margin: 5px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.feed-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.chip {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: rgba(78, 161, 255, 0.14);
+  color: #a8cdff;
+  border: 1px solid rgba(78, 161, 255, 0.25);
+}
+
+.chip-quiet {
+  background: rgba(143, 160, 179, 0.12);
+  color: var(--text-dim);
+  border-color: transparent;
+}
+
+/* ----------------------------------------------------------- entity detail */
+.detail {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  width: 260px;
+  max-height: calc(100% - 24px);
+  overflow-y: auto;
+  background: rgba(17, 23, 32, 0.95);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  backdrop-filter: blur(6px);
+}
+
+.detail header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.detail header strong {
+  font-size: 13px;
+}
+
+.detail header button {
+  color: var(--text-dim);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.detail dl {
+  display: grid;
+  grid-template-columns: 78px 1fr;
+  gap: 4px 8px;
+  margin: 0 0 10px;
+  font-size: 12px;
+}
+
+.detail dt {
+  color: var(--text-dim);
+}
+
+.detail dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.detail h4 {
+  margin: 10px 0 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.sources {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sources li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sources em {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------- timeline */
+.timeline-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+}
+
+.timeline-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+/* --------------------------------------------------------------- badges */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text-dim);
+}
+
+.badge .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.badge-live {
+  color: var(--ok);
+  border-color: rgba(122, 212, 137, 0.4);
+}
+
+.badge-connecting,
+.badge-reconnecting {
+  color: var(--warn);
+  border-color: rgba(255, 196, 87, 0.4);
+}
+
+.badge-reconnecting .dot {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.badge-closed {
+  color: var(--danger);
+  border-color: rgba(240, 90, 75, 0.4);
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@media (max-width: 1100px) {
+  .workspace {
+    grid-template-columns: 1fr 300px;
+  }
+}

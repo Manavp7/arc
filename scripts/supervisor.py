@@ -44,8 +44,17 @@ RUN_DIR = STATE_DIR / "run"
 SUPERVISOR_STATE = RUN_DIR / "supervisor.json"
 
 COLOURS = [
-    "\033[36m", "\033[32m", "\033[33m", "\033[35m", "\033[34m", "\033[91m",
-    "\033[92m", "\033[93m", "\033[95m", "\033[94m", "\033[96m",
+    "\033[36m",
+    "\033[32m",
+    "\033[33m",
+    "\033[35m",
+    "\033[34m",
+    "\033[91m",
+    "\033[92m",
+    "\033[93m",
+    "\033[95m",
+    "\033[94m",
+    "\033[96m",
 ]
 RESET = "\033[0m"
 
@@ -155,6 +164,9 @@ class Supervisor:
         self.specs = specs
         self.restart_limit = restart_limit
         self.processes: dict[str, asyncio.subprocess.Process] = {}
+        # Output-forwarding tasks are held here: an un-referenced task may be
+        # garbage-collected mid-run, which would silently stop tailing a service.
+        self._pumps: set[asyncio.Task[None]] = set()
         self.restarts: dict[str, int] = {}
         self.colours = {
             spec.name: COLOURS[index % len(COLOURS)] for index, spec in enumerate(specs)
@@ -188,12 +200,12 @@ class Supervisor:
         except (ImportError, ValueError):
             return False
 
-    async def wait_for_health(self, spec: ProcessSpec, timeout: float = 30.0) -> bool:
+    async def wait_for_health(self, spec: ProcessSpec, timeout_s: float = 30.0) -> bool:
         if spec.health_port is None:
             return True
         import httpx
 
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + timeout_s
         url = f"http://127.0.0.1:{spec.health_port}/health"
         async with httpx.AsyncClient(timeout=2.0) as client:
             while time.monotonic() < deadline:
@@ -208,12 +220,13 @@ class Supervisor:
                         payload = response.json()
                         self.say(
                             spec.name,
-                            f"healthy on :{spec.health_port} "
-                            f"(status={payload.get('status', '?')})",
+                            f"healthy on :{spec.health_port} (status={payload.get('status', '?')})",
                         )
                         return True
                 await asyncio.sleep(0.4)
-        self.say(spec.name, f"did not become healthy on :{spec.health_port} within {timeout:.0f}s")
+        self.say(
+            spec.name, f"did not become healthy on :{spec.health_port} within {timeout_s:.0f}s"
+        )
         return False
 
     # ---------------------------------------------------------------------- running
@@ -237,7 +250,9 @@ class Supervisor:
         )
         self.processes[spec.name] = process
         self.say(spec.name, f"started (pid {process.pid})")
-        asyncio.create_task(self._pump(spec, process, log_path))
+        pump = asyncio.create_task(self._pump(spec, process, log_path), name=f"pump-{spec.name}")
+        self._pumps.add(pump)
+        pump.add_done_callback(self._pumps.discard)
         return True
 
     async def _pump(
@@ -268,8 +283,7 @@ class Supervisor:
         if count >= self.restart_limit:
             self.say(
                 spec.name,
-                f"not restarting: {count} failures already. "
-                f"see .sio/logs/{spec.name}.log",
+                f"not restarting: {count} failures already. see .sio/logs/{spec.name}.log",
             )
             return
         self.restarts[spec.name] = count + 1
@@ -290,9 +304,7 @@ class Supervisor:
             if self.stopping.is_set():
                 break
             batch = [spec for spec in self.specs if spec.tier == tier]
-            print(
-                f"\n=== tier {tier}: {', '.join(spec.name for spec in batch)} ===", flush=True
-            )
+            print(f"\n=== tier {tier}: {', '.join(spec.name for spec in batch)} ===", flush=True)
             for spec in batch:
                 await self.start(spec)
             # Only wait on processes that actually launched. Health-waiting a service that was
@@ -300,9 +312,7 @@ class Supervisor:
             launched = [spec for spec in batch if spec.name in self.processes]
             results = await asyncio.gather(*(self.wait_for_health(spec) for spec in launched))
             unhealthy = [
-                spec.name
-                for spec, healthy in zip(launched, results, strict=True)
-                if not healthy
+                spec.name for spec, healthy in zip(launched, results, strict=True) if not healthy
             ]
             if unhealthy:
                 print(f"!!! unhealthy in tier {tier}: {', '.join(unhealthy)}", flush=True)
@@ -414,9 +424,25 @@ def main(argv: list[str] | None = None) -> int:
     ports = {
         name: cfg.port_for(name)
         for name in (
-            "api", "ingest", "perception", "tracking", "fusion", "worldmodel", "spatial",
-            "events", "prediction", "simulation", "decision", "copilot", "mcp", "agents",
-            "workflow", "alerts", "missions", "analytics", "governance",
+            "api",
+            "ingest",
+            "perception",
+            "tracking",
+            "fusion",
+            "worldmodel",
+            "spatial",
+            "events",
+            "prediction",
+            "simulation",
+            "decision",
+            "copilot",
+            "mcp",
+            "agents",
+            "workflow",
+            "alerts",
+            "missions",
+            "analytics",
+            "governance",
         )
     }
     specs = build_process_table(args.profile, ports, cfg.web_port)
