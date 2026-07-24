@@ -58,7 +58,16 @@ function query(params: Record<string, string | number | boolean | undefined>): s
 export const api = {
   health: () => request<HealthStatus>("/health"),
 
-  entities: (params: { type?: string; zone_id?: string; limit?: number; since?: string } = {}) =>
+  entities: (
+    params: {
+      type?: string;
+      zone_id?: string;
+      limit?: number;
+      since?: string;
+      active_within_s?: number;
+      include_static?: boolean;
+    } = {},
+  ) =>
     request<Entity[]>(`/entities${query(params)}`),
 
   entity: (entityId: string) => request<Entity>(`/entities/${encodeURIComponent(entityId)}`),

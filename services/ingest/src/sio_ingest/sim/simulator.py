@@ -109,6 +109,10 @@ class YardSimulator:
         # Wall-clock anchor for the internal clock, so simulation seconds can be reported as real
         # timestamps.
         self.started_utc = utc_now()
+        # Run identity. Agent ids restart from 0001 every run, so without this a restart would
+        # resurrect the previous run's entities and inherit their lifetimes through the store's
+        # merge — trucks reported an hour on site moments after boot.
+        self.run_id = new_id("run").split("_", 1)[-1][-6:].lower()
         self._last_frame_at: dict[str, float] = {}
         self._last_gps_at: dict[str, float] = {}
         self._last_sensor_at: dict[str, float] = {}
@@ -455,7 +459,7 @@ class YardSimulator:
             first_seen = self.started_utc + timedelta(seconds=agent.spawned_at)
             entities.append(
                 Entity(
-                    entity_id=f"sim-{agent.agent_id}",
+                    entity_id=f"sim-{self.run_id}-{agent.agent_id}",
                     type=agent.entity_type,
                     label=agent.label,
                     first_seen=first_seen,

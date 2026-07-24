@@ -77,17 +77,32 @@ def test_site_geojson_export_is_complete() -> None:
 
 
 # ------------------------------------------------------------------------ determinism
+def agent_key(entity_id: str) -> str:
+    """The stable part of a simulated entity id, with the per-run prefix removed."""
+    return entity_id.split("-", 2)[-1]
+
+
 def test_the_same_seed_produces_the_same_yard() -> None:
-    """The e2e scenario tests depend on this."""
+    """The e2e scenario tests depend on this.
+
+    Determinism here means *behaviour*: same seed, same cast, same trajectories. It deliberately
+    does **not** extend to entity ids, which carry a per-run prefix so that restarting the simulator
+    creates a new cast rather than resurrecting the previous run's entities and inheriting their
+    lifetimes through the store's lifetime merge (six trucks reported 89 minutes on site seconds
+    after a restart).
+    """
     a, b = YardSimulator(seed=99), YardSimulator(seed=99)
+    assert a.run_id != b.run_id, "each run must be distinguishable from the last"
     run_for(a, 30)
     run_for(b, 30)
     positions_a = [
-        (e.entity_id, e.state.geo.lat, e.state.geo.lon) for e in a.ground_truth_entities()
-    ]  # type: ignore[union-attr]
+        (agent_key(e.entity_id), e.state.geo.lat, e.state.geo.lon)  # type: ignore[union-attr]
+        for e in a.ground_truth_entities()
+    ]
     positions_b = [
-        (e.entity_id, e.state.geo.lat, e.state.geo.lon) for e in b.ground_truth_entities()
-    ]  # type: ignore[union-attr]
+        (agent_key(e.entity_id), e.state.geo.lat, e.state.geo.lon)  # type: ignore[union-attr]
+        for e in b.ground_truth_entities()
+    ]
     assert positions_a == positions_b
 
 

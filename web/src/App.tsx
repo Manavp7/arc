@@ -18,6 +18,15 @@ import type { Entity, SioEvent } from "./types";
 
 type RailTab = "events" | "copilot" | "alerts" | "decisions" | "missions";
 
+/**
+ * How recently an entity must have been observed to appear in the live view.
+ *
+ * SIO deletes nothing (PRD M2), so `/entities` legitimately returns every entity that has ever
+ * existed — including ones from an earlier run that will never move again. On a live map those are
+ * ghosts. Full history remains reachable through the timeline and `/world/at`.
+ */
+const LIVE_WINDOW_S = 300;
+
 function ConnectionBadge() {
   const connection = useSioStore((state) => state.connection);
   const lastMessageAt = useSioStore((state) => state.lastMessageAt);
@@ -168,7 +177,7 @@ export default function App() {
     (async () => {
       try {
         const [entities, events, zones] = await Promise.all([
-          api.entities({ limit: 500 }),
+          api.entities({ limit: 500, active_within_s: LIVE_WINDOW_S }),
           api.events({ limit: 50 }),
           api.zones().catch(() => []),
         ]);
