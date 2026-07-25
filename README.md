@@ -118,7 +118,7 @@ docs/              PRD, architecture, deployment, governance, GPU swap, models, 
 | 4 | Copilot + MCP, workflows, decisions, agents, alerts, the console panels | **done** |
 | 4.7 | **Ship checkpoint** — `just demo`, `docs/DEMO.md`, quickstart re-verified, e2e smoke | **done** |
 | 5 | Governance enforced: authn/authz, PII redaction, immutable audit, multi-tenancy | **done** |
-| 6 | Simulation (M11) and analytics (M19) **done** incl. in-app views; mission control, developer platform | **in progress** |
+| 6 | Simulation (M11), analytics (M19) and the developer platform (M22: SDKs, webhooks, plugins, no-code builder) **done**; mission control (M17) outstanding | **in progress** |
 | 7 | Real connectors (RTSP/STAC/MAVLink/MQTT), 3D twin, GPU/production overlay | — |
 | 8 | Evaluation harnesses (mAP/HOTA/copilot), performance benchmarks, docs | — |
 
@@ -140,6 +140,18 @@ gave. `just sdk-demo` runs the quickstart; [docs/SDK.md](docs/SDK.md) explains w
 Outbound, `services/webhooks` posts signed deliveries to your endpoint with retries and a delivery log — see
 [services/webhooks/README.md](services/webhooks/README.md), which covers why a body-only signature can be
 replayed for ever.
+
+## Composing it without writing code
+
+The **builder** tab composes the activities the platform already has into a new response — trigger, conditions,
+steps — and the JSON it writes is executed by the *same* engine as the Python playbooks, with the same retries,
+compensation, cooldowns and run records. Adding a new activity is still a code change, deliberately: dispatching
+a drone is code, and a builder that pretended otherwise ends up with a JSON file containing a Python expression.
+
+Validation is the product. It reports every problem at once, each naming the valid options — `there is no
+activity called 'launch_missile'` followed by the eight that exist — because a validator revealing one problem
+per attempt turns a five-minute task into twenty. A cycle comes back as `a → c → b → a`, and it is refused
+because compensation runs in reverse order and a cycle has no order to reverse.
 
 ## Extending it without changing it
 
