@@ -225,6 +225,12 @@ class Settings(BaseSettings):
     speed_limit_kmh: float = 20.0
     anomaly_contamination: float = 0.02
     anomaly_warmup: int = 200
+    anomaly_detector: str = "auto"
+    """``auto`` (robust z-score), or ``pyod`` for IsolationForest where it is installed.
+
+    The default is the attributable one: a per-feature robust z-score says *which* measurement was odd,
+    which is what an operator can act on. A forest gives a score and needs SHAP or a permutation study
+    to explain it."""
 
     # --- prediction ---------------------------------------------------------
     forecast_horizon_s: float = 1800.0

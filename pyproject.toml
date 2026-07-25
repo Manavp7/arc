@@ -19,6 +19,7 @@ dependencies = [
     "sio-tracking",
     "sio-fusion",
     "sio-spatial",
+    "sio-events",
 ]
 
 [tool.uv]
@@ -37,6 +38,7 @@ sio-perception = { workspace = true }
 sio-tracking = { workspace = true }
 sio-fusion = { workspace = true }
 sio-spatial = { workspace = true }
+sio-events = { workspace = true }
 
 [dependency-groups]
 dev = [

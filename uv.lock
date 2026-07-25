@@ -11,6 +11,7 @@ members = [
     "sio",
     "sio-api",
     "sio-core",
+    "sio-events",
     "sio-fusion",
     "sio-ingest",
     "sio-perception",
@@ -2074,6 +2075,23 @@ wheels = [
 ]
 
 [[package]]
+name = "pyod"
+version = "3.6.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "joblib" },
+    { name = "matplotlib" },
+    { name = "numba" },
+    { name = "numpy" },
+    { name = "scikit-learn" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e7/fa/e4cdc9ff3c64ff5cd8bc3a98fe0bbd9890a5cc98fa448069d594227668e2/pyod-3.6.2.tar.gz", hash = "sha256:b6c660a0878bfab357d617ef72ea3d79cf695ed7545fa326b7ae2b520acfab83", size = 347385, upload-time = "2026-07-20T04:11:09.08Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5e/6e/48111e0e8756f24dca0e255971734ea18a4905b0e0b66c0452452e3563d5/pyod-3.6.2-py3-none-any.whl", hash = "sha256:029e1558d7120df4aab457cbf9acadbd7de95ed3fa9b14d43c5e45ca53530561", size = 412187, upload-time = "2026-07-20T04:11:06.845Z" },
+]
+
+[[package]]
 name = "pyparsing"
 version = "3.3.2"
 source = { registry = "https://pypi.org/simple" }
@@ -2834,6 +2852,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "sio-api" },
     { name = "sio-core" },
+    { name = "sio-events" },
     { name = "sio-fusion" },
     { name = "sio-ingest" },
     { name = "sio-perception" },
@@ -2857,6 +2876,7 @@ dev = [
 requires-dist = [
     { name = "sio-api", editable = "services/api" },
     { name = "sio-core", editable = "libs/sio_core" },
+    { name = "sio-events", editable = "services/events" },
     { name = "sio-fusion", editable = "services/fusion" },
     { name = "sio-ingest", editable = "services/ingest" },
     { name = "sio-perception", editable = "services/perception" },
@@ -2942,6 +2962,34 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
 ]
 provides-extras = ["kafka", "qdrant"]
+
+[[package]]
+name = "sio-events"
+version = "0.1.0"
+source = { editable = "services/events" }
+dependencies = [
+    { name = "numpy" },
+    { name = "pyyaml" },
+    { name = "sio-core" },
+    { name = "sio-schemas" },
+]
+
+[package.optional-dependencies]
+anomaly = [
+    { name = "pyod" },
+    { name = "scikit-learn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", specifier = ">=2.0" },
+    { name = "pyod", marker = "extra == 'anomaly'", specifier = ">=2.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "scikit-learn", marker = "extra == 'anomaly'", specifier = ">=1.5" },
+    { name = "sio-core", editable = "libs/sio_core" },
+    { name = "sio-schemas", editable = "libs/sio_schemas" },
+]
+provides-extras = ["anomaly"]
 
 [[package]]
 name = "sio-fusion"

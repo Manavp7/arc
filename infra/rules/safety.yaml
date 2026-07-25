@@ -1,0 +1,131 @@
+# Safety rules.
+#
+# Everything here is data. Adding a rule means adding a document to this directory and waiting for the
+# next hot reload — no code change, no deploy, no restart (PRD M22).
+#
+# Fields available to `field:` come from the fact contract in sio_events/facts.py. That contract is
+# deliberately small: exposing every internal payload field would couple these files to service
+# internals, so renaming something inside a service would break a YAML file nobody remembers writing.
+
+rules:
+  - id: fire_detected
+    emits: fire_detected
+    severity: critical
+    description: >
+      Flame signature in a camera frame. Fires on the raw DETECTION rather than on a tracked or fused
+      entity, because the latency of the full pipeline is unacceptable for fire: better to raise it now
+      at lower confidence than three seconds later with a track id attached.
+    kinds: [detection]
+    when:
+      - field: class
+        op: in
+        value: [fire, flame]
+      - field: confidence
+        op: gte
+        value: 0.35
+    cooldown_seconds: 30
+    cooldown_key: [source_id]
+    confidence: 0.7
+    explanation: >
+      Flame detected by {source_id} with confidence {confidence}. Fire rules trip on the raw detection
+      to keep latency low, so confirm against the frame before acting.
+
+  - id: smoke_detected
+    emits: smoke_detected
+    severity: high
+    description: Smoke signature, which often precedes a visible flame.
+    kinds: [detection]
+    when:
+      - field: class
+        op: in
+        value: [smoke]
+      - field: confidence
+        op: gte
+        value: 0.4
+    cooldown_seconds: 60
+    cooldown_key: [source_id]
+    confidence: 0.6
+
+  - id: temperature_spike
+    emits: temperature_spike
+    severity: high
+    description: >
+      A temperature reading well above the yard's normal range. Threshold rather than anomaly detection
+      on purpose: for a quantity with a known safe operating range, a fixed limit is easier to defend to
+      an operator than a model's opinion.
+    kinds: [observation]
+    when:
+      - field: metric
+        op: eq
+        value: temperature_c
+      - field: value
+        op: gte
+        value: 60
+    cooldown_seconds: 120
+    cooldown_key: [source_id]
+    confidence: 0.95
+    explanation: "{source_id} read {value} °C in {zone_id}, above the 60 °C limit."
+
+  - id: person_fell
+    emits: person_fell
+    severity: high
+    description: >
+      A person detection whose box becomes markedly wider than tall. A crude proxy for a fall, and
+      stated as such: it also matches someone crouching or lying down deliberately, which is why the
+      confidence is low and the explanation says so.
+    kinds: [detection]
+    when:
+      - field: class
+        op: eq
+        value: person
+      - field: aspect_ratio
+        op: gte
+        value: 1.4
+      - field: confidence
+        op: gte
+        value: 0.5
+    cooldown_seconds: 60
+    cooldown_key: [source_id]
+    confidence: 0.45
+    explanation: >
+      A person-shaped detection at {source_id} is wider than it is tall, which is consistent with a
+      fall but also with crouching. Worth a look, not worth a siren.
+
+  - id: machine_stopped
+    emits: machine_stopped
+    severity: medium
+    description: >
+      A sensor that was reporting has gone quiet. This is an ABSENCE rule: it cannot be driven by
+      arriving messages, because the whole point is that nothing arrived. It only fires for subjects
+      that established a baseline first, so starting the engine does not declare every machine stopped.
+    kinds: [observation]
+    when:
+      - field: metric
+        op: in
+        value: [machine_state, vibration_mm_s, power_kw]
+    absence:
+      after_seconds: 180
+      group_by: [source_id]
+      requires_history: 3
+    cooldown_seconds: 600
+    cooldown_key: [source_id]
+    confidence: 0.8
+    explanation: >
+      {source_id} stopped reporting {silence_s}s ago after {reports_before_silence} readings. Either the
+      machine stopped or its link did, and the difference matters — check the link first.
+
+  - id: power_failure
+    emits: power_failure
+    severity: high
+    description: A power reading at or near zero from a circuit that was drawing load.
+    kinds: [observation]
+    when:
+      - field: metric
+        op: eq
+        value: power_kw
+      - field: value
+        op: lte
+        value: 0.1
+    cooldown_seconds: 300
+    cooldown_key: [source_id]
+    confidence: 0.85

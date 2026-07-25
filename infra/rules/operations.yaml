@@ -1,0 +1,105 @@
+# Operational rules — the ones a yard manager cares about daily.
+
+rules:
+  - id: speeding
+    emits: speeding
+    severity: medium
+    description: >
+      A vehicle over the yard speed limit. Uses the MAXIMUM speed over a short window rather than the
+      instantaneous value, because a single noisy fix can put a parked truck at 40 km/h and a rule that
+      believes one sample will cry wolf until it is switched off.
+    kinds: [entity]
+    when:
+      - field: entity_type
+        op: in
+        value: [truck, vehicle, forklift]
+      - field: speed_kmh
+        op: gte
+        value: 20
+    window:
+      aggregate: max
+      of: speed_kmh
+      seconds: 10
+      group_by: [entity_id]
+      op: gte
+      value: 20
+    cooldown_seconds: 60
+    cooldown_key: [entity_id]
+    confidence: 0.8
+    explanation: >
+      {label} was travelling at {speed_kmh} km/h, over the 20 km/h yard limit. Measured as the peak over
+      ten seconds, so a single bad fix cannot trigger it.
+
+  - id: dwell_exceeded
+    emits: dwell_exceeded
+    severity: medium
+    description: >
+      A vehicle at a dock for longer than the target turnaround. Fires on the spatial service's exit
+      event, which carries the measured dwell, rather than on a timer here — one component measures
+      dwell, and it is the one that knows when the visit began.
+    kinds: [event]
+    when:
+      - field: event_type
+        op: eq
+        value: zone_exited
+      - field: entity_type
+        op: in
+        value: [truck, vehicle]
+      - field: dwell_s
+        op: gte
+        value: 900
+      - field: zone_id
+        op: matches
+        value: "^dock"
+    cooldown_seconds: 60
+    confidence: 0.95
+    explanation: >
+      A {entity_type} spent {dwell_s}s at {zone_id}, over the 15-minute turnaround target.
+
+  - id: congestion
+    emits: congestion
+    severity: medium
+    description: >
+      More vehicles in a zone than it is meant to hold. Counts distinct vehicles over a minute so that a
+      queue passing through does not register the same truck repeatedly.
+    kinds: [entity]
+    when:
+      - field: entity_type
+        op: in
+        value: [truck, vehicle, forklift]
+      - field: zone_id
+        op: exists
+    window:
+      aggregate: count_distinct
+      of: entity_id
+      seconds: 60
+      group_by: [zone_id]
+      op: gte
+      value: 5
+    cooldown_seconds: 300
+    cooldown_key: [zone_id]
+    confidence: 0.8
+    explanation: "Five or more distinct vehicles were in {zone_id} within a minute."
+
+  - id: entity_appeared
+    emits: entity_appeared
+    severity: info
+    description: >
+      A newly fused entity crossing the corroboration threshold. Requires more than one sensor, because
+      "something appeared" is only interesting once it is not a one-sensor artefact — and a feed of
+      single-sensor appearances is the fastest way to make an operator stop reading the event list.
+    kinds: [entity]
+    when:
+      - field: observations
+        op: gte
+        value: 5
+      - field: is_static
+        op: eq
+        value: false
+      - field: attributes.modalities.1
+        op: exists
+    cooldown_seconds: 3600
+    cooldown_key: [entity_id]
+    confidence: 0.9
+    explanation: >
+      {label} is now corroborated by more than one sensor ({observations} observations).

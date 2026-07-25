@@ -1,0 +1,141 @@
+# Security and access rules.
+#
+# Several of these are rules ABOUT EVENTS rather than about raw data. `zone_breach` composes on the
+# spatial service's `unauthorized_entry`, instead of re-deriving geometry here — the spatial service
+# owns point-in-polygon, and a second implementation would eventually disagree with the first.
+
+rules:
+  - id: zone_breach
+    emits: zone_breach
+    severity: critical
+    description: >
+      A vehicle in a restricted zone. Composes on the spatial service's unauthorized_entry event and
+      narrows it by entity type, which is why it can be a rule rather than code.
+    kinds: [event]
+    when:
+      - field: event_type
+        op: eq
+        value: unauthorized_entry
+      - field: restricted
+        op: eq
+        value: true
+      - field: entity_type
+        op: in
+        value: [truck, vehicle, forklift]
+    cooldown_seconds: 120
+    confidence: 0.9
+    explanation: >
+      A {entity_type} entered restricted zone {zone_id}. Vehicles in restricted areas are escalated
+      above people because the consequences of being wrong are asymmetric.
+
+  - id: unauthorized_entry_person
+    emits: unauthorized_entry
+    severity: high
+    description: A person in a restricted zone.
+    kinds: [event]
+    when:
+      - field: event_type
+        op: eq
+        value: unauthorized_entry
+      - field: entity_type
+        op: eq
+        value: person
+    cooldown_seconds: 120
+    confidence: 0.85
+
+  - id: forced_door
+    emits: forced_door
+    severity: high
+    description: A door sensor reporting open when the site should be closed, or opened without a badge.
+    kinds: [observation]
+    when:
+      - field: metric
+        op: eq
+        value: door_state
+      - field: payload.forced
+        op: eq
+        value: true
+    cooldown_seconds: 300
+    cooldown_key: [source_id]
+    confidence: 0.9
+
+  - id: crowd_gathering
+    emits: crowd_gathering
+    severity: medium
+    description: >
+      Several distinct people in one zone within a minute. Counts DISTINCT entity ids, not messages —
+      counting messages would let one person standing still under a 4 Hz camera look like a crowd, which
+      is the sort of bug that produces confident nonsense.
+    kinds: [entity]
+    when:
+      - field: entity_type
+        op: eq
+        value: person
+      - field: zone_id
+        op: exists
+    window:
+      aggregate: count_distinct
+      of: entity_id
+      seconds: 60
+      group_by: [zone_id]
+      op: gte
+      value: 4
+    cooldown_seconds: 180
+    cooldown_key: [zone_id]
+    confidence: 0.75
+    explanation: >
+      Four or more distinct people were in {zone_id} within a minute. Counting distinct identities
+      rather than sightings, so one person under a fast camera cannot look like a crowd.
+
+  - id: suspicious_meeting
+    emits: suspicious_meeting
+    severity: medium
+    description: >
+      Two or more people lingering in a restricted or low-traffic zone. Weak on its own; useful as a
+      prompt, and labelled as such in the explanation.
+    kinds: [event]
+    when:
+      - field: event_type
+        op: eq
+        value: zone_entered
+      - field: entity_type
+        op: eq
+        value: person
+      - field: zone_id
+        op: in
+        value: [fuel_store, warehouse, office]
+    window:
+      aggregate: count_distinct
+      of: entity_id
+      seconds: 120
+      group_by: [zone_id]
+      op: gte
+      value: 2
+    cooldown_seconds: 300
+    cooldown_key: [zone_id]
+    confidence: 0.5
+    explanation: >
+      Two or more people entered {zone_id} within two minutes. This is a prompt to look, not a finding —
+      colleagues walking to the same place look identical to this rule.
+
+  - id: abandoned_package
+    emits: abandoned_package
+    severity: medium
+    description: >
+      A stationary unattended object. Requires the object to be still AND to have been observed enough
+      times to rule out a one-frame detection artefact.
+    kinds: [entity]
+    when:
+      - field: entity_type
+        op: in
+        value: [package, unknown]
+      - field: speed_mps
+        op: lte
+        value: 0.2
+      - field: observations
+        op: gte
+        value: 30
+      - field: zone_id
+        op: exists
+    cooldown_seconds: 600
+    confidence: 0.5
