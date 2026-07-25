@@ -31,6 +31,7 @@ import os
 import signal
 import sys
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -81,10 +82,12 @@ class ProcessSpec:
         return None
 
 
-def python_service(name: str, port: int, tier: int, *, optional: bool = True) -> ProcessSpec:
+def python_service(
+    name: str, port: int, tier: int, *, optional: bool = True, args: Sequence[str] = ()
+) -> ProcessSpec:
     return ProcessSpec(
         name=name,
-        command=[sys.executable, "-m", f"sio_{name}"],
+        command=[sys.executable, "-m", f"sio_{name}", *args],
         tier=tier,
         health_port=port,
         optional=optional,
@@ -129,7 +132,10 @@ def build_process_table(profile: str, ports: dict[str, int], web_port: int) -> l
         python_service("simulation", ports.get("simulation", 8109), 3),
         python_service("decision", ports.get("decision", 8110), 3),
         python_service("copilot", ports.get("copilot", 8111), 3),
-        python_service("mcp", ports.get("mcp", 8112), 3),
+        # --http, because `python -m sio_mcp` alone speaks stdio: it would sit waiting on a pipe nobody
+        # is writing to, with no port for the supervisor to health-check. Desktop clients launch the
+        # stdio form themselves; a supervised service is the HTTP one.
+        python_service("mcp", ports.get("mcp", 8112), 3, args=("--http",)),
         python_service("agents", ports.get("agents", 8113), 3),
         python_service("workflow", ports.get("workflow", 8114), 3),
         python_service("alerts", ports.get("alerts", 8115), 3),
