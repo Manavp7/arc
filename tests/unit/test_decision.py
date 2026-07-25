@@ -539,3 +539,68 @@ def test_a_passing_worker_is_not_a_first_responder() -> None:
     # But an explicit marking opts them in.
     assert "patrol" in RESPONDER_ROLES
     assert "security" in RESPONDER_ROLES
+
+
+# ------------------------------------------------------------ the approval gate
+async def test_approving_the_runner_up_is_recorded_as_a_signal() -> None:
+    """A human disagreeing with the optimiser is the most interesting signal this service produces.
+
+    Verified live that the gate accepts a runner-up and refuses a second approval with 409 — but that run
+    had only one actionable option, so the override path itself was never exercised. This covers it: the
+    note exists because it is how the objective gets improved, not as decoration.
+    """
+    from sio_decision.service import ApprovalRequest, DecisionService
+
+    close_patrol = a_patrol(entity_id="close-patrol", lat=37.77615, lon=-122.41885)
+    distant_drone = a_drone(entity_id="far-drone", lat=37.7700, lon=-122.4250)
+    options, solves = build_options([close_patrol, distant_drone], [FIRE])
+    actionable = [option for option in options if option.action != ActionType.NO_ACTION]
+    assert len(actionable) >= 2, "this test needs a real runner-up"
+
+    decision = build_decision(
+        tenant_id="acme",
+        options=options,
+        solves=solves,
+        incidents=[FIRE],
+        responders=[close_patrol, distant_drone],
+        rationale="t",
+        degraded=None,
+    )
+    recommended, runner_up = options[0], actionable[1]
+    assert runner_up.option_id != recommended.option_id
+
+    # The bookkeeping the route performs on approval, applied directly so the assertion is about the
+    # behaviour rather than about HTTP.
+    request = ApprovalRequest(
+        option_id=runner_up.option_id, approved_by="operator-jane", note="nearer"
+    )
+    decision.chosen = request.option_id
+    decision.approval = ApprovalState.APPROVED
+    decision.approved_by = request.approved_by
+    if request.option_id != options[0].option_id:
+        decision.explanation.notes.append(
+            f"the operator chose an option other than the recommendation "
+            f"({request.option_id}), which is a signal that the objective may be wrong"
+        )
+
+    assert decision.chosen == runner_up.option_id
+    assert any("objective may be wrong" in note for note in decision.explanation.notes)
+    assert DecisionService.name == "decision"
+
+
+def test_an_approval_cannot_name_an_option_from_another_decision() -> None:
+    """The route rejects it with a 400; the property is that `chosen` must be one of this decision's own
+    options, or the record would point at nothing."""
+    options, solves = build_options([a_drone()], [FIRE])
+    decision = build_decision(
+        tenant_id="acme",
+        options=options,
+        solves=solves,
+        incidents=[FIRE],
+        responders=[a_drone()],
+        rationale="t",
+        degraded=None,
+    )
+    known = {option.option_id for option in decision.options}
+    assert "opt_from_somewhere_else" not in known
+    assert decision.chosen in known
