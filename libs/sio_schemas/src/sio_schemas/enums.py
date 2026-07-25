@@ -19,6 +19,12 @@ class Topic(StrEnum):
     RAW_AUDIO = "raw.audio"
     RAW_WEATHER = "raw.weather"
     RAW_SATELLITE = "raw.satellite"
+    # Added in Phase 7 with the enterprise and traffic connectors. Before this, both fell through the ingest
+    # service's catch-all onto `raw.iot` — where the events engine reads SENSOR readings, so a WMS dock booking
+    # arrived looking like a temperature probe. Not lost, but mislabelled in a way that makes every downstream
+    # filter on `raw.iot` subtly wrong.
+    RAW_ENTERPRISE = "raw.enterprise"
+    RAW_TRAFFIC = "raw.traffic"
     DETECTIONS = "detections"
     TRACKS = "tracks"
     ENTITIES = "entities"

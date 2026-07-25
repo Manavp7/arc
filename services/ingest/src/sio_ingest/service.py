@@ -35,6 +35,16 @@ TOPIC_BY_MODALITY: dict[Modality, Topic] = {
     Modality.RFID: Topic.RAW_IOT,
     Modality.WEATHER: Topic.RAW_WEATHER,
     Modality.SATELLITE: Topic.RAW_SATELLITE,
+    # Phase 7. Enterprise rows and traffic incidents used to fall through to `raw.iot`, which is where the
+    # events engine reads sensor readings — so a dock booking arrived looking like a temperature probe.
+    Modality.ENTERPRISE: Topic.RAW_ENTERPRISE,
+    Modality.TRAFFIC: Topic.RAW_TRAFFIC,
+    # Range sensors are frames of a sort: both produce a spatial snapshot the perception stack interprets.
+    Modality.RADAR: Topic.RAW_FRAMES,
+    Modality.LIDAR: Topic.RAW_FRAMES,
+    # A scanned manifest or a typed note is enterprise data by another route.
+    Modality.DOCUMENT: Topic.RAW_ENTERPRISE,
+    Modality.MANUAL: Topic.RAW_ENTERPRISE,
 }
 
 
@@ -71,6 +81,8 @@ class IngestService(SioService):
         # Set here rather than as a class attribute: a mutable class-level dict would be shared by every
         # service instance in a test process, so one test's failures would appear in another's health report.
         self._plugin_errors: dict[str, str] = {}
+        # Instance-level, so one test's warnings do not suppress another's.
+        self._unmapped_warned: set[Modality] = set()
         cfg = self.settings
         discovered = discover_plugins()
         if discovered:
@@ -286,7 +298,26 @@ class IngestService(SioService):
         if isinstance(connector, SimulatorConnector):
             return connector.topic_for(observation)
         topic = TOPIC_BY_MODALITY.get(observation.modality)
-        return str(topic) if topic else str(Topic.RAW_IOT)
+        if topic is not None:
+            return str(topic)
+        # An unmapped modality falls back to `raw.iot`, and says so ONCE.
+        #
+        # The fallback existed before and was silent, which is how the Phase 7 enterprise connector came to
+        # publish WMS dock bookings onto the topic the events engine reads temperature probes from — the
+        # connector logged "3 rows read", every counter was healthy, and the rows were simply on the wrong
+        # topic. A silent catch-all makes a routing mistake indistinguishable from correct behaviour.
+        #
+        # Once per modality, not once per message: a mislabelled source publishing at 15Hz would otherwise
+        # bury the rest of the log in the same line.
+        if observation.modality not in self._unmapped_warned:
+            self._unmapped_warned.add(observation.modality)
+            self.log.warning(
+                "ingest.unmapped_modality",
+                modality=str(observation.modality),
+                falling_back_to=str(Topic.RAW_IOT),
+                fix="add it to TOPIC_BY_MODALITY; raw.iot is where sensor readings are read from",
+            )
+        return str(Topic.RAW_IOT)
 
     async def _apply_backpressure(self, topic: str) -> None:
         """Slow down when consumers fall behind.

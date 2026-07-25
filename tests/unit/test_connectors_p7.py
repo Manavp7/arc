@@ -783,3 +783,45 @@ async def test_every_connector_reports_health_before_it_has_started(kind: str) -
     status = await build_connector(a_config(kind)).health()
     assert isinstance(status, str)
     assert status
+
+
+# --- routing -----------------------------------------------------------------------------------------
+def test_every_modality_routes_to_a_topic() -> None:
+    """The gap the Phase 7 connectors exposed.
+
+    `TOPIC_BY_MODALITY` had no entry for ENTERPRISE or TRAFFIC, and the fallback was a *silent* `raw.iot` — which
+    is where the events engine reads sensor readings. So a WMS dock booking arrived on the bus looking like a
+    temperature probe: not lost, but mislabelled in a way that makes every downstream filter on `raw.iot` subtly
+    wrong, while the connector logged "3 rows read" and every counter said healthy.
+
+    Asserted over the whole enum rather than the six modalities that happened to be mapped, so the next
+    connector to introduce a modality fails here instead of quietly becoming IoT.
+    """
+    from sio_ingest.service import TOPIC_BY_MODALITY
+
+    unmapped = [str(modality) for modality in Modality if modality not in TOPIC_BY_MODALITY]
+    assert not unmapped, (
+        "these modalities fall through to raw.iot, where sensor readings are read from: "
+        f"{unmapped}. Add them to TOPIC_BY_MODALITY."
+    )
+
+
+def test_the_unmapped_fallback_is_loud() -> None:
+    """A silent catch-all makes a routing mistake indistinguishable from correct behaviour.
+
+    Once per modality rather than per message, because a mislabelled source at 15Hz would otherwise bury the
+    rest of the log in one line.
+    """
+    from sio_ingest import service as ingest_service
+
+    source = Path(ingest_service.__file__).read_text()
+    assert "ingest.unmapped_modality" in source
+    assert "_unmapped_warned" in source
+
+
+def test_enterprise_and_traffic_have_their_own_topics() -> None:
+    """Rather than sharing the sensor topic, which is what made this a bug rather than a tidiness question."""
+    from sio_schemas import Topic
+
+    assert str(Topic.RAW_ENTERPRISE) == "raw.enterprise"
+    assert str(Topic.RAW_TRAFFIC) == "raw.traffic"
