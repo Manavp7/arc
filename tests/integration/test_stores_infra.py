@@ -432,3 +432,57 @@ async def test_minio_bucket_exists(cfg) -> None:  # type: ignore[no-untyped-def]
         f"bucket {cfg.minio_bucket!r} is missing — scripts/init_minio.py must run during setup"
     )
     await store.close()
+
+
+# ------------------------------------------------- dual-write consistency (regression)
+async def test_a_relationship_lands_in_both_stores(pool, cfg) -> None:  # type: ignore[no-untyped-def]
+    """The world model writes edges to the graph *and* to the relational projection.
+
+    Regression: an earlier version wrote only the graph, so 59 SEEN_BY edges existed in Neo4j while
+    the API — which reads Postgres — reported zero relationships. Each store looked fine on its own,
+    which is exactly why this needs asserting across both.
+    """
+    from sio_worldmodel.service import WorldModelService
+
+    from sio_core.stores.graph_neo4j import Neo4jGraphStore
+
+    service = WorldModelService.__new__(WorldModelService)
+    service.pool = pool
+    graph = Neo4jGraphStore(cfg.neo4j_uri, cfg.neo4j_user, cfg.neo4j_password, cfg.neo4j_database)
+    if not await graph.ping():
+        await graph.close()
+        pytest.skip("neo4j not reachable")
+    service.graph = graph
+    service._relationships_seen = 0
+
+    truck = an_entity()
+    camera = Entity(entity_id=new_id("cam"), tenant_id=TENANT, type="camera", is_static=True)
+    await graph.upsert_entities([truck, camera])
+
+    relationship = Relationship(
+        tenant_id=TENANT,
+        **{"from": truck.entity_id, "to": camera.entity_id},
+        type=RelationshipType.SEEN_BY,
+        confidence=0.9,
+    )
+    await service._handle_relationship(relationship)
+
+    # In Postgres...
+    row = await pool.fetchrow(
+        "SELECT type, from_id, to_id FROM relationships WHERE tenant_id = %s AND rel_id = %s",
+        (TENANT, relationship.id),
+    )
+    assert row is not None, "the edge is missing from the relational projection"
+    assert row["type"] == "seen_by"
+
+    # ...and in the graph.
+    neighbours = await graph.neighbors(truck.entity_id, tenant_id=TENANT)
+    assert any(entity.entity_id == camera.entity_id for _rel, entity in neighbours), (
+        "the edge is missing from the graph"
+    )
+
+    await pool.execute("DELETE FROM relationships WHERE tenant_id = %s", (TENANT,))
+    await graph.raw_query.__self__._run(
+        "MATCH (e:Entity {tenant_id: $tenant_id}) DETACH DELETE e", {"tenant_id": TENANT}
+    )
+    await graph.close()

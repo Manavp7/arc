@@ -109,7 +109,38 @@ class WorldModelService(SioService):
         self._entities_seen += 1
 
     async def _handle_relationship(self, relationship: Relationship) -> None:
+        """Persist an edge to the graph *and* to the relational projection.
+
+        Both, because they answer different questions and different consumers read each: the graph
+        answers multi-hop traversal for the copilot, the table backs SQL joins, timeline replay and
+        analytics. An earlier version wrote only the graph, so 59 SEEN_BY edges existed in Neo4j while
+        the API — which reads Postgres — reported zero relationships. Everything looked fine from
+        either side alone.
+        """
         await self.graph.upsert_relationship(relationship)
+        await self.pool.execute(
+            """
+            INSERT INTO relationships (
+                rel_id, tenant_id, from_id, type, to_id,
+                ts_valid_from, ts_valid_to, confidence, payload
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+            ON CONFLICT (tenant_id, rel_id) DO UPDATE SET
+                ts_valid_to = EXCLUDED.ts_valid_to,
+                confidence  = EXCLUDED.confidence,
+                payload     = EXCLUDED.payload
+            """,
+            (
+                relationship.id,
+                relationship.tenant_id,
+                relationship.from_id,
+                str(relationship.type),
+                relationship.to_id,
+                relationship.ts_valid_from,
+                relationship.ts_valid_to,
+                relationship.confidence,
+                relationship.to_json(),
+            ),
+        )
         self._relationships_seen += 1
 
     async def _handle_track(self, track: Track) -> None:
