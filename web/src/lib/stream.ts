@@ -6,6 +6,7 @@
  * WebSocket for future bidirectional use.
  */
 
+import * as session from "./session";
 import type { StreamMessage } from "../types";
 
 export type StreamHandler = (message: StreamMessage) => void;
@@ -46,7 +47,21 @@ export function connectStream({ topics, onMessage, onStatus }: StreamOptions): (
   let attempt = 0;
   let timer: number | undefined;
 
-  const open = () => {
+  const open = async () => {
+    if (closed) return;
+    // The session cookie must exist before the EventSource opens.
+    //
+    // `EventSource` cannot send an Authorization header — the browser API provides no way to set one — so
+    // the SSE feed authenticates by cookie, which `session.ensure()` writes. Opening the stream first
+    // would 401, and since EventSource reconnects automatically that would become a silent retry loop with
+    // a permanently blank map.
+    try {
+      await session.ensure();
+    } catch (error) {
+      onStatus?.("closed");
+      console.warn("stream: could not obtain a session", error);
+      return;
+    }
     if (closed) return;
     const query = topics?.length ? `?topics=${encodeURIComponent(topics.join(","))}` : "";
     onStatus?.(attempt === 0 ? "connecting" : "reconnecting");
@@ -82,11 +97,11 @@ export function connectStream({ topics, onMessage, onStatus }: StreamOptions): (
       attempt += 1;
       const delay = Math.min(10_000, 500 * 2 ** Math.min(attempt, 5));
       onStatus?.("reconnecting");
-      timer = window.setTimeout(open, delay);
+      timer = window.setTimeout(() => void open(), delay);
     };
   };
 
-  open();
+  void open();
 
   return () => {
     closed = true;

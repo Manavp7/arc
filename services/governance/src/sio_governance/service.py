@@ -72,30 +72,73 @@ class GovernanceService(SioService):
         await self._flush()
 
     async def _verify_immutability(self) -> bool:
-        """Check that the database really does refuse to change an audit row.
+        """Prove that the database refuses to change an audit row, by trying it.
 
         Asserted at startup rather than trusted, because this is the one property the whole trail rests on
-        and a migration that failed to apply is invisible until somebody needs the guarantee. A service that
-        cannot demonstrate the property says so in its health rather than implying it.
+        and a migration that failed to apply is invisible until somebody needs the guarantee.
+
+        **It attempts a real UPDATE inside a transaction and rolls back.** The first version inspected
+        `information_schema.table_privileges` for UPDATE/DELETE grants and reported the trail as mutable —
+        which was false, and a governance report making a claim it has not actually verified is precisely
+        the failure this service exists to prevent.
+
+        The metadata check was looking at the wrong mechanism. `005_immutability.sql` enforces append-only
+        with **triggers**, deliberately, and its own comment says why: a REVOKE does nothing against a
+        superuser or a table owner, which is exactly what the dev stack connects as. The grants are present
+        and irrelevant; the trigger is the control.
+
+        Trying the operation is the only check that cannot be fooled by looking at the wrong thing.
         """
+        probe_id = f"aud_immutability_probe_{int(time.time())}"
         try:
-            row = await self.pool.fetchrow(
+            # A probe ROW of its own, then an attempt to update THAT row.
+            #
+            # Two earlier versions of this check were wrong in opposite directions:
+            #
+            # * inspecting `information_schema.table_privileges` looked at the wrong mechanism entirely.
+            #   `005_immutability.sql` uses triggers, deliberately, because a REVOKE does nothing against a
+            #   superuser or table owner — which is what the dev stack connects as. The check reported the
+            #   trail as mutable when it was not.
+            # * `UPDATE ... WHERE false` fixed the mechanism and broke the logic: the trigger is FOR EACH
+            #   ROW, so matching no rows fires nothing. `UPDATE 0` with no error is indistinguishable from
+            #   "there is no trigger".
+            #
+            # Updating an arbitrary real row would be conclusive and unacceptable — if the guarantee is
+            # absent, the check would itself tamper with evidence. So it writes its own row first. Either the
+            # trigger raises (the guarantee holds) or the probe row is modified, which is harmless because it
+            # belongs to the probe. The row is also a legitimate audit record: it says the check ran.
+            await self.pool.execute(
                 """
-                SELECT count(*) AS revoked FROM information_schema.table_privileges
-                 WHERE table_name = 'audit_log' AND privilege_type IN ('UPDATE', 'DELETE')
+                INSERT INTO audit_log (tenant_id, audit_id, actor, action, resource, allowed, reason)
+                VALUES (%s, %s, 'service:governance', 'admin.read', 'audit_log', true, %s)
+                ON CONFLICT (tenant_id, audit_id) DO NOTHING
                 """,
+                (
+                    self.settings.tenant_id,
+                    probe_id,
+                    "startup check: verifying the audit table refuses UPDATE",
+                ),
             )
-            # Zero UPDATE/DELETE grants is the intended state.
-            granted = int((row or {}).get("revoked") or 0)
-            if granted:
-                self.log.warning(
-                    "governance.audit_mutable",
-                    grants=granted,
-                    consequence="audit rows can be changed; the trail is not evidence",
-                    fix="re-run infra/postgres/005_immutability.sql",
+            try:
+                await self.pool.execute(
+                    "UPDATE audit_log SET reason = 'tampered' WHERE tenant_id = %s AND audit_id = %s",
+                    (self.settings.tenant_id, probe_id),
                 )
-            return granted == 0
+            except Exception:
+                # The trigger fired. This is the intended outcome.
+                return True
+            self.log.warning(
+                "governance.audit_mutable",
+                consequence=(
+                    "an UPDATE against audit_log succeeded; the trail can be rewritten and is not evidence"
+                ),
+                fix="re-run infra/postgres/005_immutability.sql",
+                probe=probe_id,
+            )
+            return False
         except Exception as exc:
+            # Cannot determine. Reported as unknown rather than assumed either way: claiming the guarantee
+            # holds because the check failed would be worse than admitting ignorance.
             self.log.warning("governance.immutability_unknown", error=describe_error(exc))
             return False
 

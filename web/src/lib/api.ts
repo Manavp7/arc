@@ -1,5 +1,6 @@
 /** Typed HTTP client for the SIO API. Requests are same-origin via the Vite proxy. */
 
+import * as session from "./session";
 import type {
   Alert,
   Decision,
@@ -25,12 +26,25 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, retrying = false): Promise<T> {
   const url = `${BASE}${path}`;
+  // Every request carries a principal. `ensure()` reuses a valid session, so this is a no-op after the
+  // first call — and concurrent callers share one mint rather than each getting their own.
+  await session.ensure();
   const response = await fetch(url, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    headers: {
+      "Content-Type": "application/json",
+      ...session.headers(),
+      ...(init?.headers ?? {}),
+    },
   });
+  // A 401 means the token expired or the secret changed. Retry ONCE with a fresh one: a loop here would
+  // turn a misconfigured secret into an infinite request storm against the token endpoint.
+  if (response.status === 401 && !retrying) {
+    session.clear();
+    return request<T>(path, init, true);
+  }
   if (!response.ok) {
     // Surface the server's message: the API returns a reason for every denial, and hiding it
     // behind a generic "request failed" is how governance decisions become unexplainable.

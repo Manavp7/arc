@@ -26,6 +26,10 @@ export default defineConfig(({ mode }) => {
       host: true,
       proxy: {
         "/api": { target: apiTarget, changeOrigin: true },
+        // The dev token issuer. Without this the console cannot authenticate at all — it would request
+        // /auth/dev/token from vite, get a 404 and an HTML body, and report "could not obtain a token"
+        // while the API sat there perfectly willing to issue one.
+        "/auth": { target: apiTarget, changeOrigin: true },
         "/graphql": { target: apiTarget, changeOrigin: true },
         "/media": { target: apiTarget, changeOrigin: true },
         // SSE must not be buffered: the live map depends on events arriving as they happen.
