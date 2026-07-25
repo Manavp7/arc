@@ -383,3 +383,82 @@ def test_the_tide_model_is_a_pure_function_of_time() -> None:
 def test_asyncio_is_available_for_the_async_tests() -> None:
     """Trivial, and it catches a missing anyio/asyncio plugin before six tests error confusingly."""
     assert asyncio.get_event_loop_policy() is not None
+
+
+# --- the three pitfalls, as checks ---------------------------------------------------------------
+#
+# Each of these cost an attempt while building the example, and each failed SILENTLY: the rule loaded, reported
+# enabled, and matched nothing. Prose in docs/PLUGINS.md is not a guard, so the conventions are asserted here.
+def test_the_five_fact_kinds_are_what_a_rule_can_narrow_to() -> None:
+    """A rule narrowed to a kind that does not exist is filtered out before its conditions run.
+
+    I wrote `kinds: ("iot",)` — a modality, not a fact kind — and the rule sat loaded and enabled, matching
+    nothing, with no error anywhere.
+    """
+    import ast
+
+    facts = (ROOT / "services" / "events" / "src" / "sio_events" / "facts.py").read_text()
+    kinds = {
+        node.value.value
+        for node in ast.walk(ast.parse(facts))
+        if isinstance(node, ast.keyword)
+        and node.arg == "kind"
+        and isinstance(node.value, ast.Constant)
+    }
+    assert kinds == {"entity", "observation", "event", "detection", "track"}, (
+        f"the documented fact kinds have changed: {sorted(kinds)}; update docs/PLUGINS.md"
+    )
+    assert "iot" not in kinds, "a modality is not a fact kind"
+
+
+def test_an_observation_payload_is_reachable_under_payload() -> None:
+    """The second pitfall. A connector's own fields need a dotted path.
+
+    `water_level_m` matched nothing; `payload.water_level_m` matched. Both loaded without complaint.
+    """
+    from sio_events.facts import fact_from_observation
+
+    from sio_schemas import Geo, Modality, Observation, utc_now
+
+    fact = fact_from_observation(
+        Observation(
+            tenant_id="acme",
+            source_id="gauge-1",
+            modality=Modality.IOT,
+            ts=utc_now(),
+            geo=Geo(lat=1.0, lon=2.0),
+            confidence=0.9,
+            payload={"water_level_m": 2.4},
+        )
+    )
+    assert fact.kind == "observation", "the fact kind for a sensor reading"
+    assert fact.fields["payload"]["water_level_m"] == 2.4
+    # And NOT at the top level, which is the mistake worth pinning.
+    assert "water_level_m" not in fact.fields
+
+
+@needs_demo
+def test_the_example_rule_uses_the_conventions_it_documents() -> None:
+    """The example is the reference a plugin author copies, so it has to be right.
+
+    It was wrong twice — a modality for a fact kind, and a bare field name for a payload path — and both times
+    everything reported success.
+    """
+    from sio_plugin_demo.rules import tide_flood_warning
+
+    rule = tide_flood_warning()
+    assert rule["kinds"] == ("observation",), "a fact kind, not a modality"
+    assert rule["when"][0]["field"] == "payload.water_level_m", "payload fields need a dotted path"
+
+
+def test_the_plugin_guide_documents_all_three_pitfalls() -> None:
+    """Because I will forget, and so will the next author.
+
+    Checked rather than trusted: a section that quietly disappears in an edit takes the only record of these
+    with it.
+    """
+    guide = (ROOT / "docs" / "PLUGINS.md").read_text()
+    assert "FACT kinds, not modalities" in guide
+    assert "payload.*" in guide
+    for kind in ("observation", "detection", "track", "entity", "event"):
+        assert f"`{kind}`" in guide, f"the guide does not list the {kind!r} fact kind"

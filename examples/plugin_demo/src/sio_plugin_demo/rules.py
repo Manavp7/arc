@@ -48,10 +48,25 @@ def tide_flood_warning() -> dict[str, Any]:
             f"Water level above {level} m at a tide gauge. Added by sio-plugin-demo, which also supplies the "
             f"gauge connector that produces the reading."
         ),
-        # Only IoT observations, so the rule never evaluates a camera frame. Narrowing by kind is cheaper than
-        # a condition and it keeps the rule out of the hot path for signals it cannot possibly match.
-        "kinds": ("iot",),
-        "when": [{"field": "water_level_m", "op": ">=", "value": level}],
+        # "observation", not "iot".
+        #
+        # The kind is the FACT kind the events engine assigns — one of entity, observation, event, detection,
+        # track — not the observation's modality. I wrote "iot" and the rule was filtered out before its
+        # condition was ever evaluated, so it sat loaded and enabled and matched nothing.
+        #
+        # Second wrong guess in this one rule, and the same class as the first: writing against a plausible
+        # convention instead of the real one, with no error either time. Narrowing by kind is still worth doing
+        # — it keeps the rule out of the hot path for signals it cannot possibly match — but the value has to
+        # be right, and docs/PLUGINS.md now lists the five.
+        "kinds": ("observation",),
+        # `payload.water_level_m`, not `water_level_m`.
+        #
+        # The platform exposes a sensor observation's payload as a nested dict under `payload`, so a rule
+        # reaches its own connector's fields with a dotted path. I got this wrong first time and the rule
+        # loaded, enabled, matching nothing — the worst failure shape available, because everything reported
+        # success. The convention was documented only in a docstring inside the events service, which a plugin
+        # author is told not to read; it is now in docs/PLUGINS.md.
+        "when": [{"field": "payload.water_level_m", "op": ">=", "value": level}],
         # Twenty minutes, because a tide crosses a threshold slowly and re-crosses it on the noise. A short
         # cooldown here would produce a burst of identical warnings on one rising tide, which is how an alert
         # channel gets muted.
