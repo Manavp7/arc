@@ -1925,3 +1925,288 @@ code {
   font-size: 9px;
   margin: 0 0 4px;
 }
+
+/* --- analytics ------------------------------------------------------------------------------ */
+
+.analytics-head {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.analytics-windows {
+  display: flex;
+  gap: 2px;
+}
+
+.window-btn {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 2px 7px;
+}
+
+.window-btn-active {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.analytics-generated {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
+.analytics-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 9px;
+}
+
+.analytics-card header {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.analytics-card h4 {
+  font-size: 12px;
+  margin: 0;
+}
+
+.analytics-sub {
+  color: var(--text-dim);
+  font-size: 10px;
+  margin-left: auto;
+}
+
+.analytics-card header > div .analytics-sub {
+  margin-left: 0;
+}
+
+.analytics-note {
+  color: var(--text-dim);
+  font-size: 9px;
+  line-height: 1.45;
+  margin: 6px 0 0;
+}
+
+/* The finding, styled to be read before the bars beneath it. The service computes the shape of a
+   distribution precisely because a reader cannot infer it from a chart, so burying this would undo
+   the whole point of computing it. */
+.analytics-shape {
+  background: rgba(78, 161, 255, 0.09);
+  border-left: 2px solid var(--accent);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.5;
+  margin: 0 0 8px;
+  padding: 6px 8px;
+}
+
+/* --- risk ----------------------------------------------------------------------------------- */
+
+.risk-score {
+  font-family: var(--mono);
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.risk-low {
+  color: var(--ok);
+}
+.risk-moderate {
+  color: #9ccc65;
+}
+.risk-elevated {
+  color: var(--warn);
+}
+.risk-high {
+  color: var(--danger);
+}
+
+.risk-band {
+  font-size: 12px;
+  text-transform: capitalize;
+}
+
+.risk-drivers {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10px;
+  line-height: 1.45;
+  margin: 0 0 6px;
+  padding-left: 15px;
+}
+
+.risk-terms table {
+  border-collapse: collapse;
+  font-size: 9px;
+  margin-top: 6px;
+  width: 100%;
+}
+
+.risk-terms th {
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-weight: 400;
+  padding: 2px 4px;
+  text-align: left;
+}
+
+.risk-terms td {
+  border-bottom: 1px solid rgba(34, 48, 64, 0.5);
+  padding: 2px 4px;
+}
+
+.risk-terms td:not(:first-child) {
+  font-family: var(--mono);
+  text-align: right;
+}
+
+/* --- histogram and bars --------------------------------------------------------------------- */
+
+.histogram {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.histogram-row {
+  align-items: center;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: 52px 1fr 34px 30px;
+}
+
+.histogram-label,
+.histogram-count,
+.histogram-share {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
+.histogram-count,
+.histogram-share {
+  text-align: right;
+}
+
+.histogram-track,
+.bar-track {
+  background: var(--bg);
+  border-radius: 2px;
+  height: 10px;
+  overflow: hidden;
+}
+
+.histogram-bar,
+.bar-fill {
+  background: linear-gradient(90deg, rgba(78, 161, 255, 0.55), rgba(78, 161, 255, 0.85));
+  height: 100%;
+}
+
+.analytics-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.analytics-bars li {
+  align-items: center;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: 84px 1fr 40px;
+}
+
+.bar-label {
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar-value {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 9px;
+  text-align: right;
+}
+
+/* Raw Markdown, monospaced, selectable. The report is meant to be COPIED into a ticket or a handover
+   note — rendering it here would make the reader retype what they came for. */
+.analytics-report {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 9px;
+  line-height: 1.45;
+  padding: 6px;
+  resize: vertical;
+  width: 100%;
+}
+
+/* --- the heatmap legend on the map ----------------------------------------------------------- */
+
+.heatmap-legend {
+  background: rgba(11, 15, 20, 0.88);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  bottom: 44px;
+  color: var(--text-dim);
+  font-size: 9px;
+  left: 8px;
+  line-height: 1.5;
+  max-width: 260px;
+  padding: 6px 8px;
+  position: absolute;
+  z-index: 5;
+}
+
+.heatmap-legend strong {
+  color: var(--text);
+}
+
+.heatmap-scale {
+  display: flex;
+  height: 8px;
+  margin: 4px 0 2px;
+}
+
+.heatmap-scale i {
+  flex: 1;
+}
+
+.heatmap-toggle {
+  background: rgba(11, 15, 20, 0.88);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 10px;
+  left: 8px;
+  padding: 4px 8px;
+  position: absolute;
+  top: 8px;
+  z-index: 5;
+}
+
+.heatmap-toggle-active {
+  border-color: var(--accent);
+  color: var(--text);
+}

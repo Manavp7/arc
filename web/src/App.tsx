@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertsPanel } from "./components/AlertsPanel";
+import { AnalyticsPanel } from "./components/AnalyticsPanel";
 import { CopilotPanel } from "./components/CopilotPanel";
 import { DecisionsPanel } from "./components/DecisionsPanel";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -30,7 +31,14 @@ import { connectStream } from "./lib/stream";
 import { openAlerts, useSioStore } from "./store";
 import type { Alert, Entity, SioEvent } from "./types";
 
-type RailTab = "events" | "alerts" | "decisions" | "copilot" | "missions" | "forecast";
+type RailTab =
+  | "events"
+  | "alerts"
+  | "decisions"
+  | "copilot"
+  | "missions"
+  | "forecast"
+  | "analytics";
 
 /**
  * How recently an entity must have been observed to appear in the live view.
@@ -310,7 +318,17 @@ export default function App() {
 
         <aside className="rail">
           <nav className="tabs">
-            {(["events", "alerts", "decisions", "copilot", "missions", "forecast"] as RailTab[]).map(
+            {(
+              [
+                "events",
+                "alerts",
+                "decisions",
+                "copilot",
+                "missions",
+                "forecast",
+                "analytics",
+              ] as RailTab[]
+            ).map(
               (name) => (
                 <button
                   key={name}
@@ -337,6 +355,7 @@ export default function App() {
               {tab === "copilot" && <CopilotPanel onExplain={onExplain} />}
               {tab === "missions" && <MissionsPanel />}
               {tab === "forecast" && <ForecastPanel />}
+              {tab === "analytics" && <AnalyticsPanel />}
             </ErrorBoundary>
           </div>
         </aside>

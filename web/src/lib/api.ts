@@ -201,6 +201,60 @@ export const api = {
       >;
     }>("/forecasts/latest"),
 
+  analyticsSummary: (hours = 24) =>
+    request<{
+      window_hours: number;
+      generated_at: string;
+      counts: Record<string, number>;
+      dwell: {
+        overall: {
+          count: number;
+          mean: number;
+          percentiles: Record<string, number>;
+          histogram: Array<{ from: number; to: number | null; count: number; share: number }>;
+          shape: string;
+        };
+        by_zone: Record<string, never>;
+        open_visits_excluded: number;
+      };
+      throughput: { totals: Record<string, number>; entries_per_hour: number; smoothing: string };
+      utilisation: { zones: Array<{ zone_id: string; visits: number; utilisation: number }> };
+      risk: {
+        score: number;
+        band: string;
+        drivers: string[];
+        formula: string;
+        terms: Record<
+          string,
+          { normalised: number; weight: number; contributes: number; why: string }
+        >;
+      };
+    }>(`/analytics/summary${query({ hours })}`),
+
+  analyticsHeatmap: (hours = 6, resolution = 11) =>
+    request<{
+      resolution: number;
+      edge_length_m: number;
+      cells: Array<{
+        h3: string;
+        lat: number;
+        lon: number;
+        observations: number;
+        entities: number;
+        zone_id: string | null;
+        types: Record<string, number>;
+        // The hexagon's vertices as [lon, lat]. Sent by the server so the browser needs no H3 library.
+        boundary: Array<[number, number]>;
+      }>;
+      total_observations: number;
+      max_observations: number;
+      measures?: string;
+      suppressed: { cells: number; observations: number; why: string };
+    }>(`/analytics/heatmap${query({ hours, resolution })}`),
+
+  analyticsReport: (hours = 24) =>
+    request<{ markdown: string }>(`/analytics/report${query({ hours })}`),
+
   workflowRuns: (limit = 20) =>
     request<{
       runs: number;

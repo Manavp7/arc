@@ -49,6 +49,8 @@ FORWARDED: list[tuple[str, str, Any]] = [
     # The one that broke. A generous timeout is passed here and nowhere else, which is exactly why
     # this call site had a different shape and was the one the rename missed.
     ("POST", "/api/copilot/ask", {"answer": "There are 12 vehicles on site.", "confidence": 0.8}),
+    ("GET", "/api/analytics/summary", {"counts": {}, "risk": {}}),
+    ("GET", "/api/analytics/heatmap", {"cells": [], "suppressed": {}}),
 ]
 
 
@@ -182,3 +184,37 @@ def test_no_forward_call_uses_the_old_timeout_keyword() -> None:
     calls = re.findall(r"await _forward\((?:[^()]|\([^()]*\))*\)", source)
     offenders = [call for call in calls if re.search(r"\btimeout\s*=", call)]
     assert not offenders, f"use http_timeout_s, not timeout: {offenders}"
+
+
+def test_a_downstream_that_speaks_markdown_is_forwarded_as_text(
+    monkeypatch: pytest.MonkeyPatch, auth_headers: dict[str, str]
+) -> None:
+    """Not every service answers JSON.
+
+    `/analytics/report` returns Markdown, and the forwarder originally called `response.json()`
+    unconditionally — so a perfectly good answer reached the caller as a 503 saying the service was
+    unreachable. A proxy has to forward what the downstream actually sent.
+    """
+    from sio_api.app import ApiService
+
+    class Markdown(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                content=b"# Site report\n\nMedian dwell 5 min.\n",
+                headers={"content-type": "text/plain; charset=utf-8"},
+                request=request,
+            )
+
+    original = httpx.AsyncClient.__init__
+
+    def patched(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> None:
+        kwargs["transport"] = Markdown()
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched)
+    with TestClient(ApiService().app) as client:
+        response = client.get("/api/analytics/report", headers=auth_headers)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["markdown"].startswith("# Site report")

@@ -8,13 +8,40 @@
  */
 
 import { MapboxOverlay } from "@deck.gl/mapbox";
-import { GeoJsonLayer, IconLayer, PathLayer, ScatterplotLayer, TextLayer } from "@deck.gl/layers";
+import {
+  GeoJsonLayer,
+  IconLayer,
+  PathLayer,
+  PolygonLayer,
+  ScatterplotLayer,
+  TextLayer,
+} from "@deck.gl/layers";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 import maplibregl from "maplibre-gl";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { api } from "../lib/api";
 import { basemapStyle, ENTITY_COLOURS, entityColour, SEVERITY_COLOURS } from "../lib/basemap";
 import { positionedEntities, useSioStore } from "../store";
 import type { Entity, SioEvent, Zone } from "../types";
+
+/** One aggregated H3 cell, with the boundary the server derived so the browser needs no H3 library. */
+interface HeatmapCell {
+  h3: string;
+  lat: number;
+  lon: number;
+  observations: number;
+  entities: number;
+  zone_id: string | null;
+  boundary: Array<[number, number]>;
+}
+
+interface HeatmapView {
+  resolution: number;
+  edge_length_m: number;
+  cells: HeatmapCell[];
+  max_observations: number;
+  suppressed: { cells: number; observations: number; why: string };
+}
 
 import "maplibre-gl/dist/maplibre-gl.css";
 
@@ -374,6 +401,41 @@ export function LiveMap() {
    * a legend that explains the two colours you can see is more useful than one that explains twelve you
    * cannot.
    */
+  /**
+   * The H3 occupancy heatmap, off by default.
+   *
+   * Off because it answers a different question from the live map: the map shows where things are NOW and the
+   * heatmap shows where they have been. Drawing both at once without asking makes the map harder to read for
+   * the sake of a view the operator did not request.
+   *
+   * Hexagons are drawn from boundaries the SERVER sends. The alternative was `@deck.gl/geo-layers` (~200 kB on
+   * a bundle already at 1.7 MB) or `h3-js` in the browser to recompute a boundary the server already has.
+   */
+  const [heatmap, setHeatmap] = useState<HeatmapView | null>(null);
+  const [showHeatmap, setShowHeatmap] = useState(false);
+
+  useEffect(() => {
+    if (!showHeatmap) return undefined;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const result = await api.analyticsHeatmap(6, 11);
+        if (!cancelled) setHeatmap(result);
+      } catch (error) {
+        if (!cancelled) {
+          console.warn("heatmap unavailable", error);
+          setHeatmap(null);
+        }
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => void load(), 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [showHeatmap]);
+
   const legendEntries = useMemo(() => {
     const counts = new Map<string, number>();
     for (const entity of entities) {
@@ -388,13 +450,51 @@ export function LiveMap() {
     return deconflictLabels(entities, selectedId, (position) => map.project(position));
   }, [entities, selectedId, cameraVersion]);
 
+  const heatmapLayer = useMemo(() => {
+    if (!showHeatmap || !heatmap?.cells?.length) return null;
+    const peak = Math.max(1, heatmap.max_observations);
+    return new PolygonLayer<HeatmapCell>({
+      id: "h3-heatmap",
+      data: heatmap.cells,
+      getPolygon: (cell) => cell.boundary,
+      // Linear in observations against the busiest cell. Not a log scale: on a yard the range is one order of
+      // magnitude, and a log scale would flatten the difference between a busy dock and a quiet lane — which
+      // is the only thing the reader is looking for.
+      getFillColor: (cell) => {
+        const intensity = cell.observations / peak;
+        return [
+          Math.round(60 + 195 * intensity),
+          Math.round(120 - 60 * intensity),
+          Math.round(200 - 160 * intensity),
+          Math.round(70 + 110 * intensity),
+        ];
+      },
+      getLineColor: [255, 255, 255, 30],
+      lineWidthMinPixels: 0.5,
+      stroked: true,
+      filled: true,
+      pickable: true,
+      // Layer ORDER puts this beneath everything else — see the note where the layer list is assembled.
+      // deck.gl 9 does not accept `depthTest` in `parameters`, and ordering is the clearer mechanism anyway:
+      // it is visible at the call site rather than hidden in a layer's options.
+    });
+  }, [showHeatmap, heatmap]);
+
   const layers = useMemo(() => {
     const entityStack = entityLayers(entities, labelled, selectedId, selectEntity);
     const labels = entityStack.pop();
     // Zones, then entities, then event rings annotating them, then text on top of everything. Text
     // last is not cosmetic: it is the only layer a human reads rather than glances at.
-    return [zoneLayer(zones), ...entityStack, eventLayer(events), labels];
-  }, [zones, entities, labelled, events, selectedId, selectEntity]);
+    // The heatmap goes FIRST, so everything else draws over it. A heatmap that covers the entity dots has
+    // replaced the live map rather than annotated it.
+    return [
+      ...(heatmapLayer ? [heatmapLayer] : []),
+      zoneLayer(zones),
+      ...entityStack,
+      eventLayer(events),
+      labels,
+    ];
+  }, [zones, entities, labelled, events, selectedId, selectEntity, heatmapLayer]);
 
   useEffect(() => {
     overlayRef.current?.setProps({ layers });
@@ -419,6 +519,41 @@ export function LiveMap() {
           colour the legend does not explain has to guess, and the honest answer ("we could not classify
           this") is more useful than a gap. Deriving the list means a new entity type can never again be
           invisible to the legend. */}
+      <button
+        type="button"
+        className={showHeatmap ? "heatmap-toggle heatmap-toggle-active" : "heatmap-toggle"}
+        onClick={() => setShowHeatmap(!showHeatmap)}
+        title="H3 occupancy heatmap, aggregated on the server"
+      >
+        {showHeatmap ? "heatmap on" : "heatmap"}
+      </button>
+
+      {showHeatmap && heatmap && (
+        <div className="heatmap-legend">
+          <strong>Occupancy</strong> — {heatmap.cells.length} cell(s) at ~
+          {heatmap.edge_length_m} m
+          <div className="heatmap-scale">
+            {[0, 0.25, 0.5, 0.75, 1].map((step) => (
+              <i
+                key={step}
+                style={{
+                  background: `rgba(${Math.round(60 + 195 * step)}, ${Math.round(120 - 60 * step)}, ${Math.round(200 - 160 * step)}, ${0.3 + 0.5 * step})`,
+                }}
+              />
+            ))}
+          </div>
+          quiet → busy (peak {heatmap.max_observations})
+          {/* Stated, never hidden. A heatmap that quietly drops cells looks like a quiet site, and the
+              operator has no way to tell the difference. */}
+          {heatmap.suppressed.cells > 0 && (
+            <div style={{ marginTop: 4 }}>
+              {heatmap.suppressed.cells} cell(s) withheld: fewer than 5 distinct entities, so the cell would
+              disclose an individual rather than an aggregate.
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="map-legend">
         {legendEntries.map(([type, count]) => (
           <span key={type} className="legend-item" title={`${count} on the map`}>

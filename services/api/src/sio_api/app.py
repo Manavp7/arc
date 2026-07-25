@@ -407,7 +407,12 @@ class ApiService(SioService):
                             detail=_detail_of(response)
                             or f"{service} returned {response.status_code}",
                         )
-                    return response.json()
+                    # Not every downstream speaks JSON. `/analytics/report` returns Markdown, and a
+                    # proxy that assumes otherwise fails with a JSONDecodeError — which reaches the caller
+                    # as a 503 saying the service is unreachable when it answered perfectly well.
+                    if "json" in response.headers.get("content-type", ""):
+                        return response.json()
+                    return response.text
             except HTTPException:
                 raise
             except Exception as exc:
@@ -566,6 +571,53 @@ class ApiService(SioService):
         @api.get("/agents/cycles", tags=["agents"])
         async def agent_cycles(request: Request) -> Any:
             return await _forward("agents", self.settings.agents_port, "/agents/cycles")
+
+        @api.get("/analytics/summary", tags=["analytics"])
+        async def analytics_summary(request: Request, hours: int = Query(24, ge=1, le=720)) -> Any:
+            return await _forward(
+                "analytics",
+                self.settings.analytics_port,
+                "/analytics/summary",
+                params={"hours": hours},
+                # Generous: the summary runs five queries including a percentile pass over every closed zone
+                # visit in the window. On a week's data that is seconds, not milliseconds, and a 15-second
+                # default would fail a request that was working.
+                http_timeout_s=60.0,
+                request=request,
+            )
+
+        @api.get("/analytics/heatmap", tags=["analytics"])
+        async def analytics_heatmap(
+            request: Request,
+            hours: int = Query(6, ge=1, le=168),
+            resolution: int = Query(11, ge=7, le=13),
+        ) -> Any:
+            return await _forward(
+                "analytics",
+                self.settings.analytics_port,
+                "/analytics/heatmap",
+                params={"hours": hours, "resolution": resolution},
+                http_timeout_s=60.0,
+                request=request,
+            )
+
+        @api.get("/analytics/report", tags=["analytics"])
+        async def analytics_report(request: Request, hours: int = Query(24, ge=1, le=720)) -> Any:
+            """The Markdown report.
+
+            Returned as a JSON-wrapped string rather than `text/markdown`, because everything else on this
+            surface is JSON and a single endpoint with a different content type is the kind of inconsistency
+            that costs a client author twenty minutes.
+            """
+            text = await _forward(
+                "analytics",
+                self.settings.analytics_port,
+                "/analytics/report",
+                params={"hours": hours},
+                http_timeout_s=60.0,
+                request=request,
+            )
+            return {"markdown": text if isinstance(text, str) else str(text)}
 
         @api.get("/audit", tags=["governance"])
         async def audit(request: Request, limit: int = Query(50, le=500)) -> Any:

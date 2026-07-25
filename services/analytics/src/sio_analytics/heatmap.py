@@ -49,6 +49,14 @@ class HexCell:
     entities: int
     zone_id: str | None = None
     types: dict[str, int] = field(default_factory=dict)
+    boundary: tuple[tuple[float, float], ...] = ()
+    """The hexagon's vertices as (lon, lat), so a client can draw it without an H3 library.
+
+    Sent from the server deliberately. The alternative is `@deck.gl/geo-layers` (~200 kB on a bundle already
+    at 1.7 MB) or `h3-js` in the browser, to recompute a boundary the server has already derived from the
+    index it just produced. Shipping six coordinate pairs per cell is cheaper than either, and it keeps the
+    browser free of any H3 knowledge — which is consistent with why the aggregation is server-side at all.
+    """
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -59,6 +67,7 @@ class HexCell:
             "entities": self.entities,
             "zone_id": self.zone_id,
             "types": self.types,
+            "boundary": [[round(lon, 6), round(lat, 6)] for lon, lat in self.boundary],
         }
 
 
@@ -150,11 +159,15 @@ def aggregate(
             heatmap.suppressed_observations += bucket["observations"]
             continue
         lat, lon = h3.cell_to_latlng(index)
+        # (lat, lon) from h3, flipped to (lon, lat) because that is the order GeoJSON and deck.gl use — and
+        # getting it backwards puts the whole yard in the Southern Ocean, which is at least an obvious failure.
+        boundary = tuple((point[1], point[0]) for point in h3.cell_to_boundary(index))
         heatmap.cells.append(
             HexCell(
                 h3_index=index,
                 lat=lat,
                 lon=lon,
+                boundary=boundary,
                 observations=bucket["observations"],
                 entities=entities,
                 zone_id=bucket["zone_id"],
