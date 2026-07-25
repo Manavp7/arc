@@ -103,7 +103,7 @@ docs/              PRD, architecture, deployment, governance, GPU swap, models, 
 | 1 | Skeleton that boots: ingest simulator → api → live map | **done** |
 | 2 | Perception → tracking → fusion → world model + semantic search | **done** |
 | 3 | Spatial engine, events + anomalies, forecasting, timeline replay | **done** |
-| 4 | Copilot + MCP, workflows, decisions, agents, alerts → **demo ships here** | copilot **done** |
+| 4 | Copilot + MCP, workflows, decisions, agents, alerts → **demo ships here** | copilot, MCP, workflows **done** |
 | 5 | Governance enforced: authn/authz, PII redaction, audit, multi-tenancy | — |
 | 6 | Simulation, mission control, analytics, developer platform (SDKs/webhooks/plugins) | — |
 | 7 | Real connectors (RTSP/STAC/MAVLink/MQTT), 3D twin, GPU/production overlay | — |
