@@ -11,7 +11,7 @@
  * so a row cannot show "acknowledged" if the write failed.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api";
 import type { Alert } from "../types";
@@ -32,6 +32,8 @@ export function AlertsPanel({ onExplain }: { onExplain: (subject: Explainable) =
   const [filter, setFilter] = useState<string>("live");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  /** Alerts this operator has just acted on, kept visible so their own action does not vanish. */
+  const justActed = useRef<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     try {
@@ -41,7 +43,15 @@ export function AlertsPanel({ onExplain }: { onExplain: (subject: Explainable) =
       // the default view free of resolved noise without inventing a server-side pseudo-state.
       const rows =
         filter === "live"
-          ? response.alerts.filter((alert) => alert.state === "open" || alert.state === "escalated")
+          ? response.alerts.filter(
+              (alert) =>
+                alert.state === "open" ||
+                alert.state === "escalated" ||
+                // Keep what this operator just acknowledged. Dropping it on the next poll made their own
+                // action visible for about four seconds and then vanish, which reads as the click having
+                // failed. It leaves on the poll after they navigate away.
+                justActed.current.has(alert.alert_id),
+            )
           : response.alerts;
       setAlerts(rows);
       setGroups(response.groups ?? []);
@@ -52,6 +62,9 @@ export function AlertsPanel({ onExplain }: { onExplain: (subject: Explainable) =
   }, [filter]);
 
   useEffect(() => {
+    // Switching filter is a deliberate change of view, so the "keep what I just acted on" set is dropped:
+    // carrying it over would leak acknowledged rows into a filter that explicitly excludes them.
+    justActed.current.clear();
     void load();
     const timer = window.setInterval(() => void load(), REFRESH_MS);
     return () => window.clearInterval(timer);
@@ -69,6 +82,7 @@ export function AlertsPanel({ onExplain }: { onExplain: (subject: Explainable) =
               : await api.resolveAlert(alert.alert_id, "resolved from the console");
         // Reconcile against what the server said, rather than assuming. A row that shows "acknowledged"
         // when the write failed is worse than one that did not appear to respond.
+        justActed.current.add(updated.alert_id);
         setAlerts((current) =>
           current.map((row) => (row.alert_id === updated.alert_id ? updated : row)),
         );
@@ -101,17 +115,25 @@ export function AlertsPanel({ onExplain }: { onExplain: (subject: Explainable) =
   );
 
   const counts = useMemo(() => {
-    const open = alerts.filter((alert) => alert.state === "open").length;
+    // "Needs attention" is open PLUS escalated, matching the top bar exactly. They disagreed before: the
+    // panel counted only state === "open" and read "0 open" while the header said "10 open alerts" — the
+    // same word meaning two things in one screen, and the panel's version implied an empty inbox that was
+    // in fact a hundred rows long.
     const escalated = alerts.filter((alert) => alert.state === "escalated").length;
-    return { open, escalated };
+    const open = alerts.filter((alert) => alert.state === "open").length;
+    return { open, escalated, attention: open + escalated };
   }, [alerts]);
 
   return (
     <div className="panel-body alerts-panel">
       <div className="alerts-head">
         <div className="alerts-counts">
-          {counts.escalated > 0 && <span className="pill pill-escalated">{counts.escalated} escalated</span>}
-          <span className="pill">{counts.open} open</span>
+          <span className="pill">{counts.attention} need attention</span>
+          {counts.escalated > 0 && (
+            <span className="pill pill-escalated" title="Unacknowledged past their escalation timer">
+              {counts.escalated} escalated
+            </span>
+          )}
           {groups.slice(0, 3).map((group) => (
             <span key={group.kind} className="pill pill-quiet">
               {group.kind.replace(/_/g, " ")} ×{group.count}
@@ -163,8 +185,14 @@ export function AlertsPanel({ onExplain }: { onExplain: (subject: Explainable) =
                 {alert.title}
                 {alert.count > 1 && <span className="alert-count">×{alert.count}</span>}
               </div>
-              {/* The number never appears without the sentence that justifies it. */}
+              {/* The number never appears without the sentence that justifies it — and that sentence is
+                  about the SCORE. The escalation reason is a different fact and gets its own line, having
+                  once overwritten this one so that every row's justification for its priority read
+                  "unacknowledged for 21 min". */}
               <div className="alert-reason">{alert.urgency_reason}</div>
+              {alert.escalation_reason && (
+                <div className="alert-escalation">{alert.escalation_reason}</div>
+              )}
               <div className="alert-meta">
                 <span className={`sev-tag sev-${alert.severity}`}>{alert.severity}</span>
                 {alert.zone_id && <span>{alert.zone_id}</span>}

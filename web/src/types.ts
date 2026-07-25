@@ -130,6 +130,7 @@ export interface Alert {
   ack_by?: string | null;
   assignee?: string | null;
   urgency_reason?: string | null;
+  escalation_reason?: string | null;
   decision_ids?: string[];
   explanation: Explanation;
 }

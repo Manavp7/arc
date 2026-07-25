@@ -178,18 +178,29 @@ code {
 }
 
 .tabs {
+  /* Six tabs, and they must fit. `flex: 1` alone let the row exceed the rail: the last tab was clipped
+     46px off-screen and gave the entire PAGE a horizontal scrollbar, so clicking it scrolled the app
+     sideways. `min-width: 0` is the part that matters — a flex item will not shrink below its content
+     width without it, however small its flex-basis. */
   display: flex;
   border-bottom: 1px solid var(--border);
+  overflow: hidden;
 }
 
 .tab {
-  flex: 1;
-  padding: 10px 4px;
-  font-size: 11px;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 10px 2px;
+  font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.02em;
   color: var(--text-dim);
   border-bottom: 2px solid transparent;
+  /* Truncate rather than wrap or overflow. A tab that wraps changes the row's height and shifts the
+     panel below it. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tab:hover {
@@ -1184,7 +1195,7 @@ code {
   padding: 7px 8px;
 }
 
-.mission-card.mission-succeeded {
+.mission-card.mission-completed {
   border-left-color: var(--ok);
 }
 .mission-card.mission-running {
@@ -1210,7 +1221,7 @@ code {
   text-transform: uppercase;
 }
 
-.mission-status-succeeded {
+.mission-status-completed {
   background: rgba(122, 212, 137, 0.18);
   color: var(--ok);
 }
@@ -1257,22 +1268,20 @@ code {
   width: 10px;
 }
 
-.step-ok .step-glyph,
-.step-succeeded .step-glyph {
+.step-completed .step-glyph {
   color: var(--ok);
 }
 .step-running .step-glyph {
   color: var(--accent);
 }
-.step-failed .step-glyph,
-.step-timed_out .step-glyph {
+.step-failed .step-glyph {
   color: var(--danger);
 }
 .step-compensated .step-glyph {
   color: var(--warn);
 }
 .step-pending .step-glyph,
-.step-skipped .step-glyph {
+.step-cancelled .step-glyph {
   color: var(--text-dim);
 }
 
@@ -1281,7 +1290,7 @@ code {
 }
 
 .step-pending .step-name,
-.step-skipped .step-name {
+.step-cancelled .step-name {
   color: var(--text-dim);
 }
 
@@ -1869,4 +1878,12 @@ code {
 .drawer-btn-danger {
   border-color: rgba(240, 90, 75, 0.4);
   color: #ffb4ab;
+}
+
+/* The escalation reason, distinct from the scoring reason above it. Amber because it is about a
+   process failure — nobody has looked at this — rather than about how serious the event is. */
+.alert-escalation {
+  color: var(--warn);
+  font-size: 9px;
+  margin-top: 2px;
 }

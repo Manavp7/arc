@@ -281,7 +281,10 @@ class AlertsService(SioService):
             alert.state = AlertState.ESCALATED
             alert.escalated_ts = now
             alert.explanation.notes.append(f"escalated: {reason}")
-            alert.urgency_reason = reason
+            # The scoring reason is NOT overwritten. It answers "why is this here", which escalation does
+            # not change — and overwriting it produced an inbox where every row's justification for its
+            # priority was the escalation timer, still reading "unacknowledged" after being acknowledged.
+            alert.escalation_reason = reason
             await self._persist(alert)
             self._escalated += 1
             await self._emit(alert, None)
@@ -308,8 +311,9 @@ class AlertsService(SioService):
             INSERT INTO alerts (
                 tenant_id, alert_id, title, group_key, severity, score, state, count, ts, last_ts,
                 geom, zone_id, event_ids, entity_ids, decision_ids, ack_by, ack_ts, escalated_ts,
-                resolved_ts, assignee, urgency_reason, payload
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                resolved_ts, assignee, urgency_reason, escalation_reason, payload
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                      %s::jsonb)
             ON CONFLICT (tenant_id, alert_id) DO UPDATE SET
                 severity       = EXCLUDED.severity,
                 score          = EXCLUDED.score,
@@ -325,6 +329,7 @@ class AlertsService(SioService):
                 resolved_ts    = EXCLUDED.resolved_ts,
                 assignee       = EXCLUDED.assignee,
                 urgency_reason = EXCLUDED.urgency_reason,
+                escalation_reason = EXCLUDED.escalation_reason,
                 payload        = EXCLUDED.payload
             """,
             (
@@ -349,6 +354,7 @@ class AlertsService(SioService):
                 alert.resolved_ts,
                 alert.assignee,
                 alert.urgency_reason,
+                alert.escalation_reason,
                 alert.to_json(),
             ),
         )
@@ -468,6 +474,9 @@ class AlertsService(SioService):
             alert.ack_by = request.ack_by
             alert.ack_ts = utc_now()
             alert.assignee = request.assignee or request.ack_by
+            # No longer unacknowledged, so the sentence saying it is must go. A stale reason is worse than
+            # none: it contradicts the state shown beside it.
+            alert.escalation_reason = None
             alert.explanation.notes.append(
                 f"acknowledged by {request.ack_by}"
                 + (f": {request.note}" if request.note else "")
@@ -499,7 +508,7 @@ class AlertsService(SioService):
             alert = await self._load(alert_id)
             alert.state = AlertState.ESCALATED
             alert.escalated_ts = utc_now()
-            alert.urgency_reason = reason
+            alert.escalation_reason = reason
             alert.explanation.notes.append(f"escalated by hand: {reason}")
             await self._persist(alert)
             self._escalated += 1

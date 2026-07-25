@@ -23,6 +23,14 @@ import { useSioStore } from "../store";
 import type { ReplayFrame } from "../types";
 
 const SPEEDS = [1, 5, 20, 60] as const;
+/**
+ * How often the strip re-asks how far history now extends.
+ *
+ * Ten seconds: fast enough that the window visibly tracks live time, slow enough that it is not a query per
+ * second for a value that changes by one second per second.
+ */
+const BOUNDS_REFRESH_MS = 10_000;
+
 const DEFAULT_WINDOW_MIN = 15;
 /** Debounce for scrub requests. Long enough to skip the middle of a drag, short enough to feel direct. */
 const SCRUB_DEBOUNCE_MS = 120;
@@ -74,19 +82,34 @@ export function Timeline() {
   }, [bounds, windowMin]);
 
   // --- load the extent of history, and the density strip for the chosen window -------------
+  //
+  // Polled, not fetched once. The first version had `[]` deps, so the window's end was pinned to the extent
+  // of history at mount and the strip read "live 07:31 - 07:46" for sixteen minutes of wall clock while the
+  // map, the feed and the alerts all moved. A timeline that does not advance is worse than no timeline: it
+  // is a clock that has stopped while still looking like a clock.
+  //
+  // Skipped while replaying, deliberately. During a replay the window must hold still — a scrubber whose
+  // scale slides underneath the handle is unusable, and the whole point of the replay is that the moment
+  // being examined stays put.
   useEffect(() => {
     let cancelled = false;
-    api
-      .timelineBounds()
-      .then((result) => {
-        if (cancelled || !result.start || !result.end) return;
-        setBounds({ start: result.start, end: result.end });
-      })
-      .catch(() => setStatus("history unavailable"));
+    const refresh = () => {
+      if (replayAt) return;
+      api
+        .timelineBounds()
+        .then((result) => {
+          if (cancelled || !result.start || !result.end) return;
+          setBounds({ start: result.start, end: result.end });
+        })
+        .catch(() => setStatus("history unavailable"));
+    };
+    refresh();
+    const timer = window.setInterval(refresh, BOUNDS_REFRESH_MS);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
-  }, []);
+  }, [replayAt]);
 
   useEffect(() => {
     let cancelled = false;

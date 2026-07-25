@@ -217,6 +217,19 @@ class Alert(TenantScoped, Traced):
     urgency_reason: str | None = Field(
         default=None, description="Why this ranks where it does — shown next to the score"
     )
+    escalation_reason: str | None = Field(
+        default=None,
+        description="Why this escalated. Separate from urgency_reason, which explains the SCORE.",
+    )
+    """Kept apart from `urgency_reason`, having learned the hard way that one field cannot serve both.
+
+    Escalation used to overwrite the scoring explanation, and the result was an inbox where every row's
+    justification for its priority read "unacknowledged for 21 min" — the escalation timer, which had
+    nothing to do with why the alert scored what it scored. Worse, the line survived acknowledgement, so a
+    row could say "acknowledged by operator" and "unacknowledged for 21 min" simultaneously.
+
+    Two different facts about an alert. Two fields.
+    """
 
     @property
     def is_open(self) -> bool:

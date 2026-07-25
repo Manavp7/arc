@@ -17,10 +17,11 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api } from "../lib/api";
+import type { RunStatus } from "../types";
 
 interface Step {
   name: string;
-  status: string;
+  status: RunStatus;
   attempts: number;
   error?: string | null;
   detail?: string | null;
@@ -29,7 +30,7 @@ interface Step {
 interface Run {
   run_id: string;
   playbook: string;
-  status: string;
+  status: RunStatus;
   progress: number;
   started: string;
   steps: Step[];
@@ -39,15 +40,24 @@ interface Run {
 
 const REFRESH_MS = 4000;
 
-const STATUS_GLYPH: Record<string, string> = {
-  ok: "✓",
-  succeeded: "✓",
+/**
+ * Typed as `Record<RunStatus, string>`, which is the point.
+ *
+ * The first version keyed on `Record<string, string>` and invented its own vocabulary — `ok`, `succeeded`,
+ * `skipped`, `timed_out` — none of which the service emits. It emits `completed`. So every step on a
+ * completed mission rendered as `·`, the fallback for "unknown", and the panel silently showed no status at
+ * all on the one thing the demo is about.
+ *
+ * With the union as the key type, a status the UI has not handled is a COMPILE ERROR, and a status the UI
+ * invents is too. The vocabulary now has exactly one definition and TypeScript enforces it.
+ */
+const STATUS_GLYPH: Record<RunStatus, string> = {
+  completed: "✓",
   running: "…",
   pending: "·",
   failed: "✕",
+  cancelled: "–",
   compensated: "↩",
-  skipped: "–",
-  timed_out: "⏱",
 };
 
 export function MissionsPanel() {
@@ -85,7 +95,9 @@ export function MissionsPanel() {
       {error && <p className="panel-error">{error}</p>}
 
       <div className="missions-head">
-        <span className="pill">{summary.runs} runs</span>
+        <span className="pill">
+          {summary.runs} {summary.runs === 1 ? "run" : "runs"}
+        </span>
         {summary.suppressed > 0 && (
           <span className="pill pill-quiet" title="Repeat triggers held back by the playbook's cooldown">
             {summary.suppressed} held by cooldown

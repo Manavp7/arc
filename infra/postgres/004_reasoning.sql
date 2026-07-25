@@ -91,6 +91,11 @@ CREATE TABLE IF NOT EXISTS alerts (
     resolved_ts    timestamptz,
     assignee       text,
     urgency_reason text,
+    -- Separate from urgency_reason, which explains the SCORE. One field could not serve both: escalation
+    -- overwrote the scoring reason, so every row's justification for its priority became the escalation
+    -- timer -- and it survived acknowledgement, so a row could read "acknowledged" and "unacknowledged
+    -- for 21 min" at the same time.
+    escalation_reason text,
     payload        jsonb NOT NULL DEFAULT '{}'::jsonb,
     PRIMARY KEY (tenant_id, alert_id)
 );
