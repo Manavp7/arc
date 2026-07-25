@@ -521,3 +521,21 @@ def test_a_decision_with_no_feasible_option_is_low_confidence() -> None:
         degraded=None,
     )
     assert decision.confidence <= 0.4
+
+
+# ------------------------------------------- who counts as a responder (regression)
+def test_a_passing_worker_is_not_a_first_responder() -> None:
+    """Live, a recommendation offered "Person 32Q4NH" as a responder to a fire.
+
+    Mapping every `person` entity to a patrol means an optimiser given the whole workforce will confidently
+    dispatch a stranger to a fire. **Being on site is not the same as being available.** A person becomes
+    dispatchable by being marked as one — a fact somebody has to assert, not one inferred from having legs.
+    """
+    from sio_decision.service import RESPONDER_KINDS, RESPONDER_ROLES
+
+    assert "person" not in RESPONDER_KINDS
+    assert "drone" in RESPONDER_KINDS
+    assert "forklift" in RESPONDER_KINDS
+    # But an explicit marking opts them in.
+    assert "patrol" in RESPONDER_ROLES
+    assert "security" in RESPONDER_ROLES

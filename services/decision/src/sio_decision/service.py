@@ -39,7 +39,19 @@ ACTIONABLE = {
     "dwell_exceeded": "dwell",
 }
 
-RESPONDER_KINDS = {"drone": "drone", "forklift": "patrol", "person": "patrol", "vehicle": "patrol"}
+#: Entity types that count as dispatchable, and what kind of responder they are.
+#:
+#: `person` is deliberately ABSENT. It was there, and a live recommendation offered "Person 32Q4NH" as a
+#: responder to a fire — a worker walking to their van is not a first responder, and an optimiser given the
+#: whole workforce will confidently dispatch a stranger. Being on site is not the same as being available.
+#:
+#: A person becomes dispatchable by being MARKED as one (see RESPONDER_ROLE_ATTRIBUTE), which is a fact
+#: somebody has to assert rather than one inferred from having legs.
+RESPONDER_KINDS = {"drone": "drone", "forklift": "patrol"}
+
+RESPONDER_ROLE_ATTRIBUTE = "role"
+#: Attribute values that opt an entity into the responder pool regardless of its type.
+RESPONDER_ROLES = {"patrol", "security", "responder", "marshal"}
 
 
 class ApprovalRequest(BaseModel):
@@ -195,12 +207,18 @@ class DecisionService(SioService):
                    ST_Y(geom::geometry) AS lat, ST_X(geom::geometry) AS lon
               FROM entities
              WHERE tenant_id = %s AND NOT is_static AND geom IS NOT NULL
-               AND type = ANY(%s)
+               AND (type = ANY(%s) OR payload->'attributes'->>%s = ANY(%s))
                AND last_seen >= now() - make_interval(secs => %s)
              ORDER BY last_seen DESC
              LIMIT 40
             """,
-            (self.settings.tenant_id, list(RESPONDER_KINDS), self.settings.fusion_max_stale_s),
+            (
+                self.settings.tenant_id,
+                list(RESPONDER_KINDS),
+                RESPONDER_ROLE_ATTRIBUTE,
+                sorted(RESPONDER_ROLES),
+                self.settings.fusion_max_stale_s,
+            ),
         )
         responders: list[Responder] = []
         for row in rows:
@@ -212,7 +230,14 @@ class DecisionService(SioService):
             responders.append(
                 Responder(
                     entity_id=str(row["entity_id"]),
-                    kind=RESPONDER_KINDS.get(str(row["type"]), "patrol"),
+                    # A marked role wins over the entity type: somebody asserting "this is a patrol" knows
+                    # more than a classifier that said "person".
+                    kind=(
+                        "patrol"
+                        if str(attributes.get(RESPONDER_ROLE_ATTRIBUTE, "")).lower()
+                        in RESPONDER_ROLES
+                        else RESPONDER_KINDS.get(str(row["type"]), "patrol")
+                    ),
                     lat=float(row["lat"]),
                     lon=float(row["lon"]),
                     # The entity's own typical speed, not its current one: a stationary drone is not a slow
