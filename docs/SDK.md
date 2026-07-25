@@ -160,22 +160,71 @@ and somebody who wants a live feed is better served by four lines of `asyncio.ru
 
 ## TypeScript
 
-The browser console is the reference TypeScript client and lives in `web/src/lib/`. It is not published as a
-package, and that is a deliberate deferral rather than an oversight: the console's client is shaped by the
-console's needs — a session in a cookie for SSE, a store to update — and extracting it would produce a package
-whose first job is to un-pick those assumptions.
+`sdk/ts`, with types **generated** from the API's OpenAPI schema.
 
-The honest path when it is wanted:
+```ts
+import { SioClient } from "@sio/sdk";
 
-```bash
-# The OpenAPI schema is served by the running API
-curl -s localhost:8000/openapi.json > openapi.json
-npx openapi-typescript openapi.json -o src/generated/sio.d.ts
+const sio = new SioClient();
+for (const entity of await sio.entities({ limit: 10 })) {
+  console.log(entity.label, entity.state.zone_id);
+}
 ```
 
-That yields types for every endpoint. The part generation cannot produce is the `subscribe` helper — SSE is not
-in OpenAPI — and `web/src/lib/stream.ts` is the hand-written version to copy, including the named-frame handling
-described above.
+```bash
+cd sdk/ts
+npx tsx examples/quickstart.mts     # against a running platform
+npm run generate                    # regenerate from the live API
+npm run typecheck
+```
+
+Real output:
+
+```
+29 entities: { drone: 2, truck: 13, person: 11, forklift: 3 }
+  e.g. Drone 0018 (drone) in no zone
+
+3 alerts, ranked:
+  55.1  Worker 11 entered Fuel store
+  54.9  Flame detected by cam-fuel with confidence 0.804
+
+approval attempt reached the service: unknown decision 'dec_does_not_exist'
+
+streaming three live messages (the part OpenAPI cannot generate):
+  Event: anomaly_detected
+  Alert: The tide gauge reported a water level above the co
+```
+
+That last line came from the **example plugin's** rule, which is a pleasing accident: an out-of-tree package's
+rule reaching a generated TypeScript client over SSE exercises most of Phase 6 at once.
+
+### Building this client found a real gap
+
+**44 of the API's 50 routes published no response type at all.** The gateway forwards, and a forwarded body has
+no declared schema, so `components["schemas"]["Alert"]` simply did not exist — any generated client, in any
+language, got `unknown` for almost every endpoint. `AlertsResponse` and `DecisionsResponse` now publish the two
+the SDKs expose, declared for documentation only: `response_model` would *filter* the forwarded body to the
+declared fields, silently dropping anything a service added, which is precisely the bug a schema exists to
+prevent.
+
+The remaining 42 are a known gap rather than a solved problem. They work, and they are `unknown` to a generated
+client.
+
+### `subscribe()` is hand-written, because SSE is not in OpenAPI
+
+`EventSource` is the obvious tool and it is wrong twice over: it **cannot send an `Authorization` header** (which
+is why the console authenticates its stream by cookie), and **`onmessage` fires only for frames with no `event:`
+name**, so a reader handling only `onmessage` receives nothing from a server that names its frames — the bug the
+console shipped, presenting as a live map that never updated.
+
+`sdk/ts/src/client.ts` handles both frame types, keeps the trailing partial line across chunk boundaries, skips
+malformed frames rather than throwing, and reconnects with backoff.
+
+### Not published to npm
+
+Publishing means owning a version number against an API that is still moving. It is consumed from the workspace,
+and `npm run generate` targets whatever version you are actually running — more honest than a version claiming
+compatibility.
 
 ## Go
 

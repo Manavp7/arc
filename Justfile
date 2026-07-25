@@ -250,6 +250,14 @@ grafana:
 #
 # `--no-deps` because sio-core and sio-schemas are already in this environment. The example deliberately has no
 # `[tool.uv.sources]` workspace refs: a plugin that only builds inside the repository it extends proves nothing
+# Regenerate the TypeScript SDK types from the running API, then typecheck
+sdk-ts:
+    cd sdk/ts && npm install --silent && npm run generate && npm run typecheck
+
+# Run the TypeScript SDK quickstart against a running platform
+sdk-ts-demo:
+    cd sdk/ts && npx tsx examples/quickstart.mts
+
 # Run the SDK quickstart against a running platform (docs/SDK.md)
 sdk-demo:
     @uv run python examples/sdk_quickstart.py

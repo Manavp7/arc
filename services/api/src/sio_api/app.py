@@ -20,12 +20,22 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel, Field
 
 from sio_core import MessageContext, SioService, describe_error, get_blob, get_pg_pool
 from sio_core.authn import ServiceIdentity
 from sio_core.telemetry import set_trace_id
 from sio_core.tenancy import current_tenant
-from sio_schemas import BusMessage, Entity, Event, HealthStatus, new_id, utc_now
+from sio_schemas import (
+    Alert,
+    BusMessage,
+    Decision,
+    Entity,
+    Event,
+    HealthStatus,
+    new_id,
+    utc_now,
+)
 
 from .queries import ReadModel
 from .stream import StreamHub
@@ -35,6 +45,28 @@ from .timeline import (
     TimelineReader,
     plan_replay,
 )
+
+
+class AlertsResponse(BaseModel):
+    """The shape of `GET /alerts`, published so a generated client can type it.
+
+    Declared for documentation only (see the route). Before this, 44 of the API's 50 routes returned `Any` in the
+    OpenAPI schema, because the gateway forwards and a forwarded body has no declared type — so ANY generated
+    client, in any language, got `unknown` for almost every endpoint. The TypeScript SDK is what surfaced it:
+    `components["schemas"]["Alert"]` did not exist, because nothing in the API ever mentioned an Alert.
+    """
+
+    alerts: list[Alert] = Field(default_factory=list)
+    groups: list[dict[str, Any]] | None = None
+    count: int = 0
+
+
+class DecisionsResponse(BaseModel):
+    """The shape of `GET /decisions`."""
+
+    decisions: list[Decision] = Field(default_factory=list)
+    count: int = 0
+
 
 _hub: StreamHub | None = None
 
@@ -421,7 +453,16 @@ class ApiService(SioService):
                     detail=f"the {service} service is not reachable: {describe_error(exc)}",
                 ) from exc
 
-        @api.get("/alerts", tags=["alerts"])
+        @api.get(
+            "/alerts",
+            tags=["alerts"],
+            responses={
+                200: {
+                    "description": "Alerts, ranked by priority, newest first",
+                    "model": AlertsResponse,
+                }
+            },
+        )
         async def alerts(
             request: Request,
             state: str | None = None,
@@ -480,7 +521,16 @@ class ApiService(SioService):
                 request=request,
             )
 
-        @api.get("/decisions", tags=["decisions"])
+        @api.get(
+            "/decisions",
+            tags=["decisions"],
+            responses={
+                200: {
+                    "description": "Recommendations, with their approval state",
+                    "model": DecisionsResponse,
+                }
+            },
+        )
         async def decisions(
             request: Request, approval: str | None = None, limit: int = Query(20, le=200)
         ) -> Any:

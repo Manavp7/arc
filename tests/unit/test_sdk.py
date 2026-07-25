@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import json
 from pathlib import Path
 
 import pytest
@@ -281,3 +282,85 @@ def test_the_sdk_imports_no_service_package() -> None:
 def test_the_headline_methods_are_documented(method: str) -> None:
     """An undocumented method is one nobody finds."""
     assert f"`{method}(" in DOC.read_text() or f"`{method}`" in DOC.read_text()
+
+
+# --- the TypeScript SDK ---------------------------------------------------------------------------
+TS = ROOT / "sdk" / "ts"
+
+
+def test_the_typescript_types_are_generated_not_written() -> None:
+    """A hand-written type describes what its author BELIEVED the API returns.
+
+    This platform shipped that: the API changed, the console read a field that no longer existed, and nothing
+    failed — `undefined` renders as nothing rather than as an error. A silently blank panel is the worst failure
+    mode available, because it looks like "no data" rather than "wrong code".
+    """
+    generated = TS / "src" / "generated" / "api.d.ts"
+    assert generated.exists(), "run `npm run generate` in sdk/ts"
+    text = generated.read_text()
+    assert "openapi-typescript" in text or "This file was auto-generated" in text
+    assert "/api/entities" in text, "the generated types do not cover the API"
+    assert len(text.splitlines()) > 500, "the schema looks truncated"
+
+
+def test_the_generator_is_a_script_in_the_repository() -> None:
+    """ "Run some npx command" is not a reproducible step."""
+    script = TS / "scripts" / "generate.mjs"
+    assert script.exists()
+    assert "openapi-typescript" in script.read_text()
+    manifest = json.loads((TS / "package.json").read_text())
+    assert "generate" in manifest["scripts"]
+
+
+def test_the_typescript_client_does_not_use_eventsource() -> None:
+    """`EventSource` is wrong here twice over.
+
+    It cannot send an Authorization header — which is why the console authenticates its stream by cookie, and why
+    a client holding a bearer token cannot use it at all. And `onmessage` fires only for frames with NO `event:`
+    name, so a reader using it receives nothing from a server that names its frames.
+    """
+    source = (TS / "src" / "client.ts").read_text()
+    assert "new EventSource" not in source
+    # Both frame types handled, which is the actual requirement.
+    assert 'startsWith("event:")' in source
+    assert 'startsWith("data:")' in source
+
+
+def test_the_typescript_stream_keeps_the_trailing_partial_line() -> None:
+    """A chunk boundary lands mid-line often enough that not doing this produces parse failures that look random."""
+    source = (TS / "src" / "client.ts").read_text()
+    assert "lines.pop()" in source, "the reader drops or corrupts frames split across chunks"
+
+
+def test_the_typescript_quickstart_is_esm() -> None:
+    """`.mts`, because top-level await needs ESM.
+
+    A `.ts` file gets transformed as CJS by default and fails with six confusing errors about await — which is
+    exactly what happened the first time this was run.
+    """
+    quickstart = TS / "examples" / "quickstart.mts"
+    assert quickstart.exists()
+    assert "await" in quickstart.read_text()
+
+
+def test_the_api_publishes_the_response_schemas_the_sdks_expose() -> None:
+    """Building the TypeScript client found 44 of 50 routes publishing no response type.
+
+    The gateway forwards, and a forwarded body has no declared schema, so `components["schemas"]["Alert"]` did not
+    exist and any generated client got `unknown` for almost every endpoint.
+    """
+    from sio_api.app import AlertsResponse, DecisionsResponse
+
+    assert "alerts" in AlertsResponse.model_fields
+    assert "decisions" in DecisionsResponse.model_fields
+
+
+def test_the_response_schemas_are_documentation_only() -> None:
+    """`response_model` would FILTER the forwarded body to the declared fields.
+
+    That silently drops anything a downstream service added — the very bug a published schema exists to prevent.
+    `responses={200: {"model": ...}}` documents without enforcing.
+    """
+    source = (ROOT / "services" / "api" / "src" / "sio_api" / "app.py").read_text()
+    assert '"model": AlertsResponse' in source
+    assert "response_model=AlertsResponse" not in source

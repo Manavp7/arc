@@ -38,3 +38,8 @@ web/.vite/
 .idea/
 .vscode/
 !.vscode/extensions.json
+
+# The TS SDK's dependencies (generated types ARE committed — a consumer should not need a running
+# platform to build, and a diff in api.d.ts is how an API change becomes visible in review).
+sdk/ts/node_modules/
+sdk/ts/dist/
