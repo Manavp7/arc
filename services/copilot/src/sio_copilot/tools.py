@@ -207,10 +207,20 @@ class ToolBelt:
         out = {
             key: value
             for key, value in arguments.items()
-            if not (isinstance(value, str) and value.strip().lower() in NULLISH)
+            # A real JSON `null` is dropped along with its string spellings. This is not the same rule
+            # restated: `_coerce` used to leave None in place, and the tool then did
+            # `int(arguments.get("limit", 50))` — where `.get` with a default returns None for a key that
+            # is PRESENT AND NULL, so the default never applied and `int(None)` raised. The copilot
+            # answered "I could not answer that: list_entities: TypeError: int() argument must be a
+            # string...", which is a stack trace shown to an operator.
+            #
+            # A value of None means "not provided", which is exactly what absent means. Treating them
+            # identically removes the trap for every tool at once, rather than each remembering to guard.
+            if value is not None
+            and not (isinstance(value, str) and value.strip().lower() in NULLISH)
         }
         for key, cast in casts.items():
-            if key in out and out[key] is not None:
+            if key in out:
                 try:
                     out[key] = cast(out[key])
                 except (TypeError, ValueError):
