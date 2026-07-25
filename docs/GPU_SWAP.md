@@ -14,8 +14,9 @@ importantly — **which of them this repository has actually verified**.
 | `bus_backend` | `redis` | `kafka` | ✗ stub |
 | `graph_backend` | `neo4j` | `memgraph` | ✓ **real** |
 | `vector_backend` | `pgvector` | `qdrant` | ✗ stub |
-| `detector` | `auto` → onnx | `deepstream` | ✗ stub |
-| `tracker` | `bytetrack` | `deepstream` | ✗ stub |
+| `ort_providers` | `CPUExecutionProvider` | `CUDAExecutionProvider,...` | ✓ **real** |
+| `detector` | `auto` → onnx | *unchanged* — see below | ✓ |
+| `tracker` | `bytetrack` | *unchanged* | ✓ |
 | `forecaster` | `statsforecast` | `timesfm` | ✗ stub |
 | `llm_provider` | `ollama` | `openai_compat` | ✓ **real, tested against a mock server** |
 | `openai_base_url` | — | `http://127.0.0.1:8001/v1` | ✓ |
@@ -144,7 +145,7 @@ competes with world-model writes.
 characteristics from a SQL `WHERE`. Shipping that untested means silently worse search results — the hardest kind
 of bug to notice.
 
-### `deepstream`
+### `deepstream` — opt-in, not part of the profile
 
 **Wants:** the ONNX path's ceiling is not the model, it is the per-frame copy back to host memory. DeepStream
 keeps decode, inference and tracking on the GPU — roughly an order of magnitude on multi-camera sites.
@@ -174,6 +175,25 @@ scenario, which is a different and more persuasive artefact.
 **Blocked on:** multiple datacentre GPUs.
 
 ---
+
+## Why the profile does not touch `detector`
+
+Two corrections, and the second is the interesting one.
+
+The profile first selected `deepstream`, which would have meant `SIO_PROFILE=gpu` boots and then refuses every
+frame. The perception service's own error message named the better answer I had walked straight past: **the same
+`.onnx` weights run on the GPU** through the CUDA execution provider. So the profile sets `ort_providers` and
+you get real GPU inference, no SDK required.
+
+Then it selected `onnx` explicitly — and a test caught that too. Forcing it breaks `auto`'s graceful fall back
+to the synthetic detector when no weights have been downloaded, so a GPU deployment that has not fetched weights
+yet would fail hard instead of running degraded and saying so. `auto` already resolves to ONNX when weights
+exist, so the profile's only real contribution is the provider.
+
+```bash
+SIO_PROFILE=gpu just services      # ONNX Runtime on CUDA, weights permitting
+SIO_DETECTOR=deepstream ...        # explicit, and refuses without the SDK
+```
 
 ## Flink / Bytewax CEP
 

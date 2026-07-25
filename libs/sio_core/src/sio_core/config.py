@@ -49,10 +49,31 @@ GPU_PROFILE: dict[str, str] = {
     # point at the write rates a GPU pipeline produces.
     "graph_backend": "memgraph",
     "vector_backend": "qdrant",
-    # DeepStream keeps decode, inference and tracking on the GPU — the copy back to host memory per frame is
-    # what caps the ONNX path, not the model.
-    "detector": "deepstream",
-    "tracker": "deepstream",
+    # ONNX Runtime on CUDA, NOT DeepStream — and this is a correction rather than a compromise.
+    #
+    # My first version put `deepstream` here, which would have made `SIO_PROFILE=gpu` select a detector this
+    # repository cannot run: the profile would boot and then refuse every frame. The perception service's own
+    # error message pointed at the better answer, which I had walked straight past: the SAME .onnx weights run
+    # on the GPU through the CUDA execution provider. So the GPU profile now delivers actual GPU inference
+    # rather than a stub, and DeepStream stays an explicit opt-in for a deployment that has the SDK.
+    #
+    # DeepStream is still worth roughly an order of magnitude on multi-camera sites, because it avoids the
+    # per-frame copy back to host memory. But "works on a GPU today" beats "would be faster if you had the SDK".
+    # ONLY the execution provider. `detector` is deliberately absent, and that is the second correction here.
+    #
+    # First I put `deepstream`, which would have made the profile select a detector this repository cannot run:
+    # boot, then refuse every frame. The perception service's own error message pointed at the better answer I
+    # had walked past — the SAME .onnx weights run on the GPU through the CUDA execution provider.
+    #
+    # Then I put `onnx`, and a test caught THAT: forcing it breaks `auto`'s graceful fall back to the synthetic
+    # detector when no weights have been downloaded. A GPU deployment that has not fetched weights yet would
+    # fail hard instead of running degraded and saying so. `auto` already resolves to ONNX when weights exist,
+    # so the profile's real contribution is the provider and nothing else.
+    #
+    # DeepStream remains an explicit opt-in. It is worth roughly an order of magnitude on multi-camera sites
+    # because it avoids the per-frame copy back to host memory — but "works on a GPU today" beats "would be
+    # faster if you had the SDK".
+    "ort_providers": "CUDAExecutionProvider,CPUExecutionProvider",
     "forecaster": "timesfm",
     # Anything OpenAI-compatible: vLLM, NIM, TGI. The adapter names none of them.
     "llm_provider": "openai_compat",
