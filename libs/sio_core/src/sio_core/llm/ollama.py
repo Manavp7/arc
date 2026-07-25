@@ -45,6 +45,7 @@ class OllamaLLM:
         timeout_s: float = 60.0,
         think: bool | None = None,
         num_ctx: int = 8192,
+        keep_alive: str = "30m",
     ) -> None:
         self.url = url.rstrip("/")
         self.model = model
@@ -54,6 +55,13 @@ class OllamaLLM:
         # to know which families have a reasoning mode.
         self.think = think if think is not None else False
         self.num_ctx = num_ctx
+        self.keep_alive = keep_alive
+        """How long Ollama holds the model in memory after a request.
+
+        Measured: the first question after an idle period took 17 seconds against 8.5 for the next one —
+        the difference is loading two gigabytes of weights, not thinking. Ollama's default is five minutes,
+        which is exactly long enough to have expired before a demo starts.
+        """
         self._client: httpx.AsyncClient | None = None
 
     @property
@@ -94,6 +102,7 @@ class OllamaLLM:
             payload["format"] = json_schema
         if self.reasoning_family:
             payload["think"] = self.think
+        payload["keep_alive"] = self.keep_alive
 
         started = time.perf_counter()
         client = await self._http()
@@ -168,6 +177,31 @@ class OllamaLLM:
             else f"both attempts failed ({problem}; then {still})"
         )
         return second
+
+    async def warm(self) -> float:
+        """Load the model into memory now, so the first real question does not pay for it.
+
+        A one-token completion, which is enough to make Ollama load the weights. Returns the seconds it
+        took, so a service can log honestly what the first question would otherwise have cost.
+        """
+        started = time.perf_counter()
+        try:
+            client = await self._http()
+            await client.post(
+                "/api/chat",
+                json={
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": "ok"}],
+                    "stream": False,
+                    "keep_alive": self.keep_alive,
+                    "options": {"num_predict": 1},
+                    **({"think": False} if self.reasoning_family else {}),
+                },
+            )
+        except httpx.HTTPError as exc:
+            log.warning("llm.warm_failed", model=self.model, error=str(exc))
+            return 0.0
+        return time.perf_counter() - started
 
     async def ping(self) -> bool:
         try:

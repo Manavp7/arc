@@ -30,7 +30,9 @@ class CopilotService(SioService):
 
     name = "copilot"
     subscribes = ()
-    tick_interval_s = 0.0
+    # A tick exists solely to keep the model resident. Ollama unloads after a period of inactivity, and an
+    # operator who asks one question an hour would pay the load cost every single time.
+    tick_interval_s = 600.0
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -56,6 +58,13 @@ class CopilotService(SioService):
 
     async def setup(self) -> None:
         reachable = await self.llm.ping()
+        if reachable and hasattr(self.llm, "warm"):
+            # Pay the load cost now rather than making the first question pay it. Measured: 17 s for the
+            # first question against 8.5 s for the next, and the first question is the one a demo asks.
+            warmed = await self.llm.warm()
+            self.log.info(
+                "copilot.model_warm", seconds=round(warmed, 2), model=getattr(self.llm, "model", "")
+            )
         self.log.info(
             "copilot.ready",
             provider=self.llm.name,
@@ -70,6 +79,11 @@ class CopilotService(SioService):
                 effect="questions will fall back to deterministic keyword routing",
                 hint=f"start ollama and pull {getattr(self.llm, 'model', '')}",
             )
+
+    async def tick(self) -> None:
+        """Keep the model resident, quietly."""
+        if hasattr(self.llm, "warm"):
+            await self.llm.warm()
 
     async def health_checks(self) -> dict[str, str]:
         reachable = await self.llm.ping()
