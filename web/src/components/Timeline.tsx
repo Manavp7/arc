@@ -273,6 +273,8 @@ export function Timeline() {
         )}
         <select
           className="tl-select"
+          id="timeline-speed"
+          name="speed"
           value={speed}
           onChange={(event) => setSpeed(Number(event.target.value))}
           title="Playback speed"
@@ -285,6 +287,8 @@ export function Timeline() {
         </select>
         <select
           className="tl-select"
+          id="timeline-window"
+          name="window"
           value={windowMin}
           onChange={(event) => setWindowMin(Number(event.target.value))}
           title="How much history the strip covers"

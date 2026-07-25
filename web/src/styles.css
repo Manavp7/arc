@@ -7,6 +7,8 @@
  */
 
 :root {
+  /* Shared so the drawer can sit below the top bar without duplicating its height. */
+  --topbar-h: 48px;
   --bg: #0b0f14;
   --bg-panel: #111720;
   --bg-elev: #17202b;
@@ -60,7 +62,8 @@ code {
 /* ------------------------------------------------------------------ layout */
 .app {
   display: grid;
-  grid-template-rows: 48px 1fr 64px;
+  /* The variable, not a literal, so the drawer's offset and the top bar's height cannot drift apart. */
+  grid-template-rows: var(--topbar-h) 1fr 64px;
   height: 100%;
 }
 
@@ -1579,7 +1582,10 @@ code {
   overflow-y: auto;
   position: fixed;
   right: 0;
-  top: 0;
+  /* Below the top bar, not over it. At `top: 0` the drawer hid the entity count, the open-alert count
+     and the connection badge — so opening an explanation cost the operator their view of whether the
+     system was still live, which is the one thing that should never be obscured. */
+  top: var(--topbar-h, 48px);
   width: 420px;
   z-index: 40;
 }
@@ -1886,4 +1892,19 @@ code {
   color: var(--warn);
   font-size: 9px;
   margin-top: 2px;
+}
+
+/* The suggestion row kept after the first question: horizontal and compact, so it signposts without
+   competing with the conversation above it. */
+.copilot-suggestions-compact {
+  border-top: 1px solid var(--border);
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 7px 0;
+}
+
+.copilot-suggestions-compact button {
+  font-size: 9px;
+  padding: 3px 6px;
 }

@@ -12,7 +12,7 @@ import { GeoJsonLayer, IconLayer, PathLayer, ScatterplotLayer, TextLayer } from 
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 import maplibregl from "maplibre-gl";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { basemapStyle, entityColour, SEVERITY_COLOURS } from "../lib/basemap";
+import { basemapStyle, ENTITY_COLOURS, entityColour, SEVERITY_COLOURS } from "../lib/basemap";
 import { positionedEntities, useSioStore } from "../store";
 import type { Entity, SioEvent, Zone } from "../types";
 
@@ -367,6 +367,21 @@ export function LiveMap() {
 
   // Which labels survive depends on where the camera puts them, so this has to be recomputed on
   // camera moves as well as on data changes. `cameraVersion` is the signal, not an input.
+  /**
+   * The legend, derived from the entities on the map and ordered by how many there are.
+   *
+   * Capped at six so a noisy classifier cannot push the legend across the map, with the commonest kept —
+   * a legend that explains the two colours you can see is more useful than one that explains twelve you
+   * cannot.
+   */
+  const legendEntries = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const entity of entities) {
+      counts.set(entity.type, (counts.get(entity.type) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
+  }, [entities]);
+
   const labelled = useMemo(() => {
     const map = mapRef.current;
     if (!map) return [];
@@ -398,19 +413,19 @@ export function LiveMap() {
   return (
     <div className="map-root">
       <div ref={containerRef} className="map-canvas" />
+      {/* Built from what is ON the map, not hand-written.
+          The hand-written version listed truck, forklift, person and drone — and a large number of dots
+          were GREY, the `unknown` colour, which appeared in no legend entry at all. An operator seeing a
+          colour the legend does not explain has to guess, and the honest answer ("we could not classify
+          this") is more useful than a gap. Deriving the list means a new entity type can never again be
+          invisible to the legend. */}
       <div className="map-legend">
-        <span className="legend-item">
-          <i style={{ background: "rgb(86,156,214)" }} /> truck
-        </span>
-        <span className="legend-item">
-          <i style={{ background: "rgb(255,196,87)" }} /> forklift
-        </span>
-        <span className="legend-item">
-          <i style={{ background: "rgb(122,212,137)" }} /> person
-        </span>
-        <span className="legend-item">
-          <i style={{ background: "rgb(199,146,234)" }} /> drone
-        </span>
+        {legendEntries.map(([type, count]) => (
+          <span key={type} className="legend-item" title={`${count} on the map`}>
+            <i style={{ background: `rgb(${ENTITY_COLOURS[type] ?? ENTITY_COLOURS.unknown})` }} />
+            {type === "unknown" ? "unclassified" : type}
+          </span>
+        ))}
         <span className="legend-count">{entities.length} entities</span>
       </div>
     </div>

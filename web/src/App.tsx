@@ -77,7 +77,11 @@ function EventFeed({ onExplain }: { onExplain: (subject: Explainable) => void })
         <li key={event.event_id} className={`feed-item sev-${event.severity}`}>
           <div className="feed-head">
             <span className="feed-type">{event.type.replace(/_/g, " ")}</span>
-            <time>{new Date(event.ts).toLocaleTimeString()}</time>
+            {/* 24-hour, matching the drawer and the timeline. The feed showed "8:01:42 AM" beside a
+                drawer showing "08:01:42" for the same event, which invites the reader to wonder whether
+                they are looking at the same thing. Operations software has no business being ambiguous
+                about time. */}
+            <time>{new Date(event.ts).toLocaleTimeString([], { hour12: false })}</time>
           </div>
           {event.explanation.summary && <p className="feed-summary">{event.explanation.summary}</p>}
           <div className="feed-meta">

@@ -652,3 +652,27 @@ def test_an_agent_can_state_what_a_task_requires() -> None:
     proposal = Proposal(agent="security", summary="s", rationale="r", task="overflight")
     assert proposal.task == "overflight"
     assert Proposal(agent="a", summary="s", rationale="r").task is None, "and it stays optional"
+
+
+def test_an_effect_sentence_names_the_place_not_a_ulid() -> None:
+    """The panel read: "Forklift 9 reaches evt_01KYC653H8BC51EHDEP69S5N0Q in about 21s".
+
+    A ULID in the middle of an English sentence is unreadable and unactionable, and the id is already in
+    the evidence list where it is genuinely useful. The docstring on `_effect_sentence` had promised
+    "reaches dock_3" all along.
+    """
+    from sio_decision.solvers import Incident
+
+    located = Incident(
+        incident_id="evt_01KYC653H8BC51EHDEP69S5N0Q",
+        kind="fire",
+        lat=1.0,
+        lon=2.0,
+        zone_id="fuel_store",
+    )
+    assert located.where == "fuel store"
+    assert "evt_" not in located.where
+
+    # No zone: coordinates, which are at least meaningful on a map. Inventing a name would be worse.
+    adrift = Incident(incident_id="evt_x", kind="fire", lat=51.50735, lon=-0.12776)
+    assert adrift.where == "51.50735, -0.12776"

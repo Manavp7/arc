@@ -215,6 +215,19 @@ export function CopilotPanel({ onExplain }: { onExplain: (subject: Explainable) 
         <div ref={endRef} />
       </div>
 
+      {/* Kept after the first question. They used to vanish on the first ask, with no way back short of
+          reloading the page — and they are the fastest way to demonstrate the copilot, so removing them
+          removed the feature's own signposting. */}
+      {turns.length > 0 && (
+        <div className="copilot-suggestions copilot-suggestions-compact">
+          {SUGGESTIONS.slice(0, 3).map((suggestion) => (
+            <button key={suggestion} type="button" disabled={asking} onClick={() => void ask(suggestion)}>
+              {suggestion}
+            </button>
+          ))}
+        </div>
+      )}
+
       <form
         className="copilot-form"
         onSubmit={(event) => {
@@ -224,6 +237,11 @@ export function CopilotPanel({ onExplain }: { onExplain: (subject: Explainable) 
       >
         <input
           type="text"
+          // Named, because an unnamed form control is a browser-reported issue and, more to the point,
+          // password managers and autofill behave strangely around them.
+          id="copilot-question"
+          name="question"
+          autoComplete="off"
           value={question}
           placeholder={asking ? "waiting for the model…" : "Ask about the site…"}
           onChange={(event) => setQuestion(event.target.value)}

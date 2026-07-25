@@ -19,6 +19,11 @@ export default defineConfig(({ mode }) => {
     server: {
       port: webPort,
       strictPort: true,
+      // Bind both stacks. Vite's default binds IPv6 loopback only on this image, so
+      // http://127.0.0.1:5173 is REFUSED while http://localhost:5173 works — and every document here,
+      // plus `just doctor` and the browser tests, uses the numeric form. A URL in the README that does
+      // not open is indistinguishable from a broken build.
+      host: true,
       proxy: {
         "/api": { target: apiTarget, changeOrigin: true },
         "/graphql": { target: apiTarget, changeOrigin: true },

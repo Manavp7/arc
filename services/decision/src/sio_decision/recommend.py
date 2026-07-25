@@ -301,7 +301,7 @@ def _effect_sentence(strategy: Strategy, result: SolverResult) -> str:
     """
     first = result.assignments[0]
     parts = [
-        f"{strategy.label}: {first.responder.name} reaches {first.incident.incident_id} in about "
+        f"{strategy.label}: {first.responder.name} reaches {first.incident.where} in about "
         f"{first.eta_s:.0f}s ({first.distance_m:.0f} m away, suitability {first.suitability:.0%})"
     ]
     if len(result.assignments) > 1:

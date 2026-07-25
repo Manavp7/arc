@@ -75,6 +75,19 @@ class Incident:
     """Responder kinds that can serve this. Empty means any."""
 
     @property
+    def where(self) -> str:
+        """A human name for the place, for sentences an operator reads.
+
+        The effect sentence used to print `incident_id` — "Forklift 9 reaches
+        evt_01KYC653H8BC51EHDEP69S5N0Q in about 21s" — which is a ULID in the middle of an English
+        sentence. Nobody can act on it, and the id is already carried in the evidence where it is
+        actually useful.
+        """
+        if self.zone_id:
+            return self.zone_id.replace("_", " ")
+        return f"{self.lat:.5f}, {self.lon:.5f}"
+
+    @property
     def weight(self) -> float:
         """How much worse it is to leave this one unattended.
 

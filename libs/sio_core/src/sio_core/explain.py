@@ -54,9 +54,16 @@ class ExplanationBuilder:
         score: float | None = None,
         note: str | None = None,
     ) -> ExplanationBuilder:
+        resolved = EvidenceKind(kind) if isinstance(kind, str) else kind
+        # Deduplicated on (kind, ref). The drawer showed the SAME observation three times in a row for a
+        # zone entry, because three different clauses in the rule each cited it. Repetition in an evidence
+        # list reads as three corroborating facts when there is one — which is a quiet overstatement of how
+        # well-supported a conclusion is, and this list exists to be counted.
+        if any(item.kind == resolved and item.ref == ref for item in self._evidence):
+            return self
         self._evidence.append(
             EvidenceRef(
-                kind=EvidenceKind(kind) if isinstance(kind, str) else kind,
+                kind=resolved,
                 ref=ref,
                 ts=ts,
                 source_id=source_id,
