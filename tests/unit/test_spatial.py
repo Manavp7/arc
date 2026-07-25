@@ -593,8 +593,9 @@ async def test_an_inferred_exit_names_the_entity_rather_than_its_id() -> None:
     store", which is technically complete and useless to the person reading it. Observed in the console
     during a replay.
     """
-    from sio_schemas import Entity, EntityType
     from sio_spatial.service import SpatialService
+
+    from sio_schemas import Entity, EntityType
 
     service = SpatialService()
     service.index.replace([a_zone("fuel_store", side_m=60)])
@@ -611,7 +612,7 @@ async def test_an_inferred_exit_names_the_entity_rather_than_its_id() -> None:
     )
     # Drive the real on_message path so the label cache is filled the way production fills it, rather
     # than by poking the attribute — the point of the test is that the caching happens.
-    from sio_schemas import BusMessage, EntityState, Geo, Topic
+    from sio_schemas import BusMessage, EntityState, Topic
 
     positioned = entity.model_copy(
         update={"state": EntityState(ts=start, geo=ORIGIN, confidence=0.9)}
