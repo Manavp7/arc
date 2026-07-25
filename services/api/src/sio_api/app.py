@@ -471,7 +471,7 @@ class ApiService(SioService):
                 f"/decisions/{decision_id}/approve",
                 method="POST",
                 body=body or {"approved_by": "operator"},
-                timeout=30.0,
+                http_timeout_s=30.0,
             )
 
         @api.post("/decisions/{decision_id}/reject", tags=["decisions"])
@@ -531,7 +531,7 @@ class ApiService(SioService):
                 "/copilot/ask",
                 method="POST",
                 body=body,
-                timeout=120.0,
+                http_timeout_s=120.0,
             )
 
         @api.get("/search/frames")

@@ -8,11 +8,17 @@ plain constructor call.
 from __future__ import annotations
 
 import functools
+import logging
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, Field, computed_field
+from pydantic import AliasChoices, Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# stdlib logging, not `sio_core.telemetry`: telemetry reads settings, so importing it here would be a
+# cycle. A config problem must be reportable before logging is configured — that is exactly when it
+# happens.
+log = logging.getLogger("sio.config")
 
 BusBackend = Literal["redis", "memory", "kafka"]
 GraphBackend = Literal["neo4j", "postgres", "memory"]
@@ -374,6 +380,35 @@ class Settings(BaseSettings):
         """Health/metrics port for ``service``, falling back to 0 (ephemeral) if unknown."""
         value = getattr(self, f"{service.replace('-', '_')}_port", None)
         return int(value) if isinstance(value, int) else 0
+
+    @field_validator("alert_webhook_url", "openai_base_url", mode="after")
+    @classmethod
+    def _must_look_like_a_url(cls, value: str) -> str:
+        """Treat a setting that is not a URL as unset, loudly.
+
+        This exists because of a specific, cheap, humiliating failure. `.env.example` had:
+
+            SIO_ALERT_WEBHOOK_URL=             # optional outbound webhook
+
+        python-dotenv reads a trailing comment after an EMPTY value as the value, so the webhook URL became
+        the literal string `# optional outbound webhook` — and the alerts service dutifully POSTed to it once
+        per alert, logging a warning each time. Thousands of them, burying anything real in the log.
+
+        Validating the shape here fixes the whole class rather than the two instances: a typo, a stray
+        comment, or a copied Slack URL missing its scheme can no longer become a permanent stream of failed
+        requests. Anything that is not empty and does not start with a scheme is discarded and named, because
+        silently ignoring a URL somebody thought they had configured is its own kind of bug.
+        """
+        stripped = value.strip()
+        if not stripped:
+            return ""
+        if stripped.startswith(("http://", "https://")):
+            return stripped
+        log.warning(
+            "config: ignoring %r because it does not begin with http:// or https:// — treated as unset",
+            stripped[:60],
+        )
+        return ""
 
     def ensure_dirs(self) -> None:
         for path in (self.data_dir, self.logs_dir, self.run_dir, self.model_dir, self.samples_dir):

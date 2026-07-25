@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import httpx
@@ -36,6 +37,14 @@ from .scoring import (
 #: system's usefulness.
 ALERTABLE = (Severity.MEDIUM, Severity.HIGH, Severity.CRITICAL)
 
+#: Consecutive webhook failures before the circuit opens, and how long it stays open.
+#:
+#: Measured the hard way: a misconfigured URL produced one warning per alert, and on a backlog of a few
+#: thousand alerts the log became unreadable. An endpoint that has refused five times in a row is down or
+#: wrong, and hammering it neither helps it nor informs us.
+WEBHOOK_FAILURES_BEFORE_PAUSE = 5
+WEBHOOK_PAUSE_S = 60.0
+
 
 class AckRequest(BaseModel):
     ack_by: str = "operator"
@@ -66,6 +75,8 @@ class AlertsService(SioService):
         self._resolved = 0
         self._webhooks_sent = 0
         self._webhooks_failed = 0
+        self._webhook_consecutive_failures = 0
+        self._webhook_open_until = 0.0
 
     async def setup(self) -> None:
         await self.pool.open()
@@ -82,7 +93,10 @@ class AlertsService(SioService):
     async def health_checks(self) -> dict[str, str]:
         checks = {"postgres": "ok" if await self.pool.ping() else "unreachable"}
         if self._webhooks_failed:
-            checks["webhook"] = f"degraded: {self._webhooks_failed} delivery failure(s)"
+            paused = time.monotonic() < self._webhook_open_until
+            checks["webhook"] = f"degraded: {self._webhooks_failed} delivery failure(s)" + (
+                f", paused for {self._webhook_open_until - time.monotonic():.0f}s" if paused else ""
+            )
         return checks
 
     async def health_info(self) -> dict[str, str]:
@@ -355,6 +369,11 @@ class AlertsService(SioService):
         url = self.settings.alert_webhook_url
         if not url:
             return
+        if time.monotonic() < self._webhook_open_until:
+            # Circuit open. A dead endpoint used to produce one warning per alert, and during a busy
+            # minute that buries everything else in the log — the noise costs more than the webhook is
+            # worth. Health still reports the failures, so this is quieter, not hidden.
+            return
         try:
             response = await self.client.post(
                 url,
@@ -372,9 +391,21 @@ class AlertsService(SioService):
             )
             response.raise_for_status()
             self._webhooks_sent += 1
+            self._webhook_consecutive_failures = 0
         except httpx.HTTPError as exc:
             self._webhooks_failed += 1
-            self.log.warning("alerts.webhook_failed", url=url, error=describe_error(exc))
+            self._webhook_consecutive_failures += 1
+            if self._webhook_consecutive_failures >= WEBHOOK_FAILURES_BEFORE_PAUSE:
+                self._webhook_open_until = time.monotonic() + WEBHOOK_PAUSE_S
+                self.log.warning(
+                    "alerts.webhook_paused",
+                    url=url,
+                    failures=self._webhook_consecutive_failures,
+                    resuming_in_s=WEBHOOK_PAUSE_S,
+                    error=describe_error(exc),
+                )
+            else:
+                self.log.warning("alerts.webhook_failed", url=url, error=describe_error(exc))
 
     # -------------------------------------------------------------------- routes
     def routes(self, app: FastAPI) -> None:

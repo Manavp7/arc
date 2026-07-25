@@ -205,3 +205,50 @@ def test_phase_7_backends_fail_with_a_useful_message() -> None:
     object.__setattr__(cfg, "bus_backend", "kafka")
     with pytest.raises(ConfigError, match="Phase 7"):
         registry.get_bus(cfg)
+
+
+# --- the `.env` inline-comment trap -----------------------------------------------------------------
+def test_no_env_example_line_hides_a_comment_in_an_empty_value() -> None:
+    """A lint for a real, cheap, humiliating bug.
+
+    `.env.example` contained:
+
+        SIO_ALERT_WEBHOOK_URL=             # optional outbound webhook
+
+    python-dotenv reads a trailing comment after an EMPTY value as the value itself, so the webhook URL
+    became the literal string `# optional outbound webhook` and the alerts service POSTed to it once per
+    alert, logging a warning each time. Two settings were affected and the other was `SIO_OPENAI_BASE_URL`,
+    which would have pointed the LLM client at nonsense.
+
+    Comments belong on their own line. This test is cheaper than finding it again.
+    """
+    import re
+
+    root = Path(__file__).resolve().parents[2]
+    offenders = []
+    for name in (".env.example", ".env.gpu.example"):
+        path = root / name
+        if not path.exists():
+            continue
+        for number, line in enumerate(path.read_text().splitlines(), start=1):
+            if re.match(r"^[A-Z_]+=[ \t]*#", line):
+                offenders.append(f"{name}:{number}: {line.strip()}")
+    assert not offenders, (
+        "these lines set a value to a comment, because dotenv does not strip it:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_a_setting_that_must_be_a_url_rejects_anything_else(pristine_env: None) -> None:
+    """The root-cause fix: validating the shape kills the whole class, not the two instances."""
+    assert Settings(alert_webhook_url="# optional outbound webhook").alert_webhook_url == ""
+    assert Settings(openai_base_url="localhost:8000/v1").openai_base_url == ""
+    assert Settings(alert_webhook_url="   ").alert_webhook_url == ""
+    assert (
+        Settings(alert_webhook_url="https://hooks.example.com/abc").alert_webhook_url
+        == "https://hooks.example.com/abc"
+    )
+    assert (
+        Settings(openai_base_url="http://127.0.0.1:8000/v1").openai_base_url
+        == "http://127.0.0.1:8000/v1"
+    )
