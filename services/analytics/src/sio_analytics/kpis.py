@@ -39,7 +39,12 @@ PERCENTILES = (50, 90, 95, 99)
 #: Chosen to match how a yard is actually discussed — under five minutes is a pass-through, over an hour is a
 #: problem — rather than by dividing the range into equal parts, which would put every bucket boundary
 #: somewhere nobody cares about.
-DWELL_BUCKETS_MIN = (0, 5, 15, 30, 60, 120, 240)
+#: These are UPPER bounds, not edges including zero.
+#:
+#: The leading 0 in the first version produced a "0 to 0: 0 visits (0%)" row in every single report — the
+#: bucket "value < 0", which is empty by construction. A degenerate row in a user-visible table is the kind of
+#: small wrongness that makes a reader distrust the numbers next to it.
+DWELL_BUCKETS_MIN = (5, 15, 30, 60, 120, 240)
 
 
 @dataclass

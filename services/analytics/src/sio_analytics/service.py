@@ -71,7 +71,7 @@ class AnalyticsService(SioService):
         """
         rows = await self.pool.fetch(
             """
-            SELECT src_id AS entity_id, dst_id AS zone_id,
+            SELECT from_id AS entity_id, to_id AS zone_id,
                    extract(epoch FROM (ts_valid_to - ts_valid_from)) / 60.0 AS minutes
               FROM relationships
              WHERE tenant_id = %s AND type = 'entered'
@@ -159,14 +159,14 @@ class AnalyticsService(SioService):
         window_s = hours * 3600
         rows = await self.pool.fetch(
             """
-            SELECT dst_id AS zone_id,
+            SELECT to_id AS zone_id,
                    sum(extract(epoch FROM (coalesce(ts_valid_to, now()) - greatest(
                        ts_valid_from, now() - make_interval(hours => %s))))) AS busy_s,
                    count(*) AS visits
               FROM relationships
              WHERE tenant_id = %s AND type = 'entered'
                AND coalesce(ts_valid_to, now()) >= now() - make_interval(hours => %s)
-             GROUP BY dst_id
+             GROUP BY to_id
              ORDER BY busy_s DESC
             """,
             (hours, self.settings.tenant_id, hours),
@@ -192,15 +192,26 @@ class AnalyticsService(SioService):
         }
 
     async def heatmap(self, hours: int, resolution: int) -> dict[str, Any]:
-        """Positions aggregated into H3 cells, with small cells suppressed."""
+        """Current entity positions aggregated into H3 cells.
+
+        Read from `entities`, which is **current occupancy** rather than historical density, and the response
+        says so. That is a real limitation with a real reason: `observations` carries geometry and a
+        `source_id` but no entity link, so a density heatmap built from it could not count distinct entities —
+        and distinct entities is precisely what the suppression threshold needs. Counting observations or
+        sensors instead would let one parked truck or one busy camera unlock a cell that discloses a single
+        person, which is the failure the threshold exists to prevent.
+
+        A historical density map is worth having and needs an entity reference on `observations`. Faking it
+        from the data available would produce a picture that looks like density and is not.
+        """
         rows = await self.pool.fetch(
             """
             SELECT st_y(geom::geometry) AS lat, st_x(geom::geometry) AS lon,
                    entity_id, type, zone_id
-              FROM observations
-             WHERE tenant_id = %s AND geom IS NOT NULL
-               AND ts >= now() - make_interval(hours => %s)
-             LIMIT 50000
+              FROM entities
+             WHERE tenant_id = %s AND geom IS NOT NULL AND NOT is_static
+               AND last_seen >= now() - make_interval(hours => %s)
+             LIMIT 20000
             """,
             (self.settings.tenant_id, hours),
         )
@@ -216,6 +227,11 @@ class AnalyticsService(SioService):
         ]
         result = aggregate(positions, resolution=resolution).describe()
         result["window_hours"] = hours
+        result["measures"] = (
+            "current position of each moving entity seen in the window, one point per entity. This is "
+            "occupancy, not density over time: observations carry no entity reference, so a density map "
+            "could not count distinct entities and the suppression threshold would be meaningless."
+        )
         return result
 
     async def risk(self) -> dict[str, Any]:
@@ -272,9 +288,9 @@ class AnalyticsService(SioService):
         occupied = (
             await self.pool.fetchrow(
                 """
-            SELECT count(DISTINCT r.dst_id) AS occupied
+            SELECT count(DISTINCT r.to_id) AS occupied
               FROM relationships r JOIN zones z
-                ON z.tenant_id = r.tenant_id AND z.zone_id = r.dst_id
+                ON z.tenant_id = r.tenant_id AND z.zone_id = r.to_id
              WHERE r.tenant_id = %s AND r.type = 'entered' AND r.ts_valid_to IS NULL
                AND z.restricted
             """,

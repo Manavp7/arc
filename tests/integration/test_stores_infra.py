@@ -991,3 +991,55 @@ async def test_zone_membership_is_reconstructed_from_the_visit_intervals(pool, c
         await pool.execute(
             "DELETE FROM relationships WHERE tenant_id = %s AND rel_id = %s", (TENANT, visit.id)
         )
+
+
+@pytest.mark.infra
+async def test_every_analytics_query_runs_against_postgres(pool, cfg) -> None:  # type: ignore[no-untyped-def]
+    """Execute the analytics service's reads for real.
+
+    **Fifth occurrence of the same class of bug**, and the reason this pattern now goes on every service that
+    talks to the database before the service is considered done. This one selected `src_id` and `dst_id` from
+    `relationships`, where the columns are `from_id` and `to_id`, and it selected `entity_id`, `type` and
+    `zone_id` from `observations`, which has none of them — so the risk index, the dwell distribution, the
+    utilisation table and the heatmap all returned 500 while `just check` was green.
+
+    Unit tests cannot catch this. The arithmetic was right and thoroughly tested; the column names were
+    wrong, and only a real database has an opinion about column names.
+
+    Runs each read individually so a failure names the query rather than the service.
+    """
+    from sio_analytics.service import AnalyticsService, render_report
+
+    from sio_core.bus.memory import MemoryBus
+
+    service = AnalyticsService(settings=cfg, bus=MemoryBus())
+    service.pool = pool
+
+    # Each of these is a separate SQL statement against a separate table shape.
+    dwell = await service.dwell_distribution(24)
+    assert "overall" in dwell and "by_zone" in dwell
+
+    throughput = await service.throughput(24, 15)
+    assert "series" in throughput
+
+    utilisation = await service.zone_utilisation(24)
+    assert "zones" in utilisation
+
+    heatmap = await service.heatmap(6, 11)
+    assert "cells" in heatmap and "suppressed" in heatmap
+
+    risk = await service.risk()
+    assert "score" in risk and "terms" in risk
+
+    # And the summary, which is the route a dashboard actually calls — it runs all of the above plus its own
+    # counts query, which was the one statement no individual test reached.
+    summary = await service.summary(24)
+    assert set(summary["counts"]) == {"entities", "events", "open_alerts", "pending_decisions"}
+
+    # The report renders from real shapes, not only from the hand-built fixtures in the unit tests. A
+    # KeyError here would mean the unit fixtures had drifted from what the queries actually return.
+    report = render_report(summary)
+    assert report.startswith("# Site report")
+    assert "Nothing is read from a counter" in report
+
+    await service.client.aclose()

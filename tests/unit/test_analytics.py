@@ -105,10 +105,24 @@ def test_bucket_edges_match_how_a_yard_is_discussed() -> None:
     Equal-width buckets over the observed range would put every boundary somewhere nobody cares about; "under
     five minutes" and "over an hour" are the phrases operators actually use.
     """
-    assert DWELL_BUCKETS_MIN[0] == 0
     assert 5 in DWELL_BUCKETS_MIN
     assert 60 in DWELL_BUCKETS_MIN
     assert list(DWELL_BUCKETS_MIN) == sorted(DWELL_BUCKETS_MIN)
+    # These are UPPER bounds, not edges including zero. A leading 0 makes the first bucket "value < 0", which
+    # is empty by construction — and it put a "0 to 0: 0 visits (0%)" row in every single generated report.
+    assert DWELL_BUCKETS_MIN[0] > 0
+
+
+def test_no_histogram_bucket_is_degenerate() -> None:
+    """A "0 to 0" row is wrong in a way that costs more than it looks.
+
+    It appeared in every report from the live stack, and a degenerate row in a user-visible table makes a
+    reader distrust the numbers beside it — which are correct.
+    """
+    for values in ([0.5], [1.0, 2.0, 3.0], [float(v) for v in range(1, 300, 7)], [1000.0]):
+        result = dwell(values)
+        for bucket in result.histogram:
+            assert bucket["from"] != bucket["to"], f"degenerate bucket {bucket} for {values[:3]}"
 
 
 def test_the_histogram_accounts_for_every_measurement() -> None:
