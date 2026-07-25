@@ -14,73 +14,24 @@ Registration works two ways:
 
 from __future__ import annotations
 
-import abc
-from collections.abc import AsyncIterator, Iterable
-from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from collections.abc import Iterable
 
 from sio_core import describe_error, get_logger
-from sio_schemas import Modality, Observation
+from sio_core.connector import Connector, ConnectorConfig
 
 log = get_logger("sio.ingest.connectors")
 
 
-@dataclass
-class ConnectorConfig:
-    """Everything a connector needs to run. Deliberately plain data, so it can come from YAML."""
-
-    source_id: str
-    kind: str
-    modality: Modality
-    enabled: bool = True
-    rate_hz: float = 1.0
-    options: dict[str, Any] = field(default_factory=dict)
-    label: str | None = None
-
-
-class Connector(abc.ABC):
-    """Base class for every signal source.
-
-    Subclasses implement :meth:`observations` as an async generator. The service handles
-    publishing, backpressure, error isolation and metrics — a connector author writes only the
-    part that is specific to their source.
-    """
-
-    kind: ClassVar[str] = "abstract"
-    modality: ClassVar[Modality] = Modality.MANUAL
-
-    def __init__(self, config: ConnectorConfig) -> None:
-        self.config = config
-        self.source_id = config.source_id
-        self.log = get_logger(f"sio.ingest.{config.kind}.{config.source_id}")
-
-    async def start(self) -> None:  # noqa: B027 - an optional hook, not an abstract method
-        """Acquire resources (open a stream, authenticate). Raise to abort.
-
-        Deliberately concrete and empty: most connectors need no setup, and forcing every one to
-        write ``async def start(self): pass`` would be noise.
-        """
-
-    async def stop(self) -> None:  # noqa: B027 - an optional hook, not an abstract method
-        """Release resources. Must not raise."""
-
-    @abc.abstractmethod
-    def observations(self) -> AsyncIterator[Observation]:
-        """Yield observations until cancelled."""
-
-    async def health(self) -> str:
-        return "ok"
-
-    def describe(self) -> dict[str, Any]:
-        return {
-            "source_id": self.source_id,
-            "kind": self.config.kind,
-            "modality": str(self.config.modality),
-            "enabled": self.config.enabled,
-            "rate_hz": self.config.rate_hz,
-            "label": self.config.label,
-        }
-
+# The contract itself now lives in `sio_core.connector`, and is re-exported here.
+#
+# It moved because an out-of-tree connector had to import it, and importing it from a SERVICE means a plugin is
+# coupled to that service's private module — which makes "a new connector can be added without core changes"
+# nearly true rather than true. "We did not change the core, only the module your plugin imported" is not a
+# distinction anybody accepts.
+#
+# Re-exported rather than relocated-and-updated, so every in-tree connector's import is unchanged. The REGISTRY
+# stays here: what a connector IS is a platform contract, while WHICH connectors are running is this service's
+# concern.
 
 _REGISTRY: dict[str, type[Connector]] = {}
 

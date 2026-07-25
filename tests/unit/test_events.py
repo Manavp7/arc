@@ -225,7 +225,7 @@ rules:
     explanation: A purple forklift is in {zone_id}, which should never happen.
 """
     )
-    ruleset = load_rules(tmp_path)
+    ruleset = load_rules(tmp_path, include_plugins=False)
     assert ruleset.errors == []
     engine = RuleEngine(ruleset)
 
@@ -293,7 +293,7 @@ def test_one_malformed_rule_does_not_stop_the_others(tmp_path: Path) -> None:
     )
     (tmp_path / "unparseable.yaml").write_text("rules: [ this is not: valid: yaml")
 
-    ruleset = load_rules(tmp_path)
+    ruleset = load_rules(tmp_path, include_plugins=False)
     assert [rule.id for rule in ruleset.rules] == ["fine"]
     assert len(ruleset.errors) == 2
     assert any("broken" in error or "nonsense" in error for error in ruleset.errors)
@@ -303,7 +303,7 @@ def test_duplicate_rule_ids_are_rejected_not_silently_resolved(tmp_path: Path) -
     """ "The last one wins" is a rule nobody can see when reading either file."""
     (tmp_path / "a.yaml").write_text("rules:\n  - id: dup\n    emits: speeding\n")
     (tmp_path / "b.yaml").write_text("rules:\n  - id: dup\n    emits: congestion\n")
-    ruleset = load_rules(tmp_path)
+    ruleset = load_rules(tmp_path, include_plugins=False)
     assert len(ruleset.rules) == 1
     assert any("duplicate" in error for error in ruleset.errors)
 

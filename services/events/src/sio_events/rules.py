@@ -274,8 +274,71 @@ class RuleSet:
         return next((rule for rule in self.rules if rule.id == rule_id), None)
 
 
-def load_rules(directory: Path) -> RuleSet:
-    """Load every rule in a directory.
+def load_plugin_rules(ruleset: RuleSet) -> int:
+    """Add rules advertised by installed packages through the `sio.rules` entry point.
+
+    A plugin exports either a `Rule`, a list of them, or a callable returning either — the three shapes a rule
+    author naturally reaches for. Insisting on one would make two thirds of authors write a wrapper that exists
+    only to satisfy this function.
+
+    Loaded AFTER the directory, and a plugin rule whose id collides with a file rule is REJECTED rather than
+    allowed to win. An installed package silently overriding the site's own fire rule is the single worst thing
+    a plugin system could do, and it would be invisible: the rule would still fire, on somebody else's terms.
+    """
+    from sio_core.plugins import discover
+
+    discovered = discover("sio.rules")
+    added = 0
+    for name, candidate in discovered.loaded.items():
+        try:
+            rules = _as_rules(candidate)
+        except Exception as exc:
+            ruleset.errors.append(f"plugin rule {name!r}: {type(exc).__name__}: {exc}")
+            continue
+        if not rules:
+            ruleset.errors.append(f"plugin rule {name!r}: provided no rules")
+            continue
+        for rule in rules:
+            existing = {item.id for item in ruleset.rules}
+            if rule.id in existing:
+                ruleset.errors.append(
+                    f"plugin rule {name!r} declares {rule.id!r}, which a file rule already defines; "
+                    f"the plugin rule is IGNORED — an installed package must not be able to silently "
+                    f"redefine this site's own rules"
+                )
+                continue
+            ruleset.rules.append(rule)
+            added += 1
+            log.info("rules.plugin_loaded", plugin=name, rule=rule.id)
+    for name, reason in discovered.failed.items():
+        ruleset.errors.append(f"plugin rule {name!r} could not be loaded: {reason}")
+    return added
+
+
+def _as_rules(candidate: Any) -> list[Rule]:
+    """Accept a Rule, a list of Rules, a dict, or a callable returning any of those."""
+    if callable(candidate) and not isinstance(candidate, Rule):
+        candidate = candidate()
+    if isinstance(candidate, Rule):
+        return [candidate]
+    if isinstance(candidate, dict):
+        return [Rule.model_validate(candidate)]
+    if isinstance(candidate, (list, tuple)):
+        rules: list[Rule] = []
+        for item in candidate:
+            rules.extend(_as_rules(item))
+        return rules
+    raise TypeError(f"expected a Rule, a list of Rules or a dict, got {type(candidate).__name__}")
+
+
+def load_rules(directory: Path, *, include_plugins: bool = True) -> RuleSet:
+    """Load every rule in a directory, plus any from installed plugins.
+
+    `include_plugins=False` loads files only. That seam exists because installing a plugin changed the result of
+    every existing rule test — two of them asserted an exact rule list and started seeing the demo plugin's
+    rule. The tests were right to be specific, and a test of FILE loading should be able to load only files.
+
+    It is also the honest option for a caller who needs a deterministic set regardless of what is installed.
 
     **One bad rule must not take down the others.** A YAML typo is a routine event, and a loader that
     raises on the first problem means a single malformed file silently disables the fire rule. Errors
@@ -284,6 +347,11 @@ def load_rules(directory: Path) -> RuleSet:
     ruleset = RuleSet()
     if not directory.exists():
         ruleset.errors.append(f"rules directory not found: {directory}")
+        # Plugin rules still load. A missing rules directory is a deployment that keeps its rules in packages,
+        # which is a legitimate arrangement — and returning early here would have made the plugin path work
+        # only in deployments that did not need it.
+        if include_plugins:
+            load_plugin_rules(ruleset)
         return ruleset
 
     seen: dict[str, str] = {}
@@ -313,6 +381,16 @@ def load_rules(directory: Path) -> RuleSet:
                 seen[rule.id] = path.name
                 ruleset.rules.append(rule)
         ruleset.loaded_from.append(path.name)
+
+    # Plugin rules AFTER the files, so a file rule wins a collision — see `load_plugin_rules`.
+    #
+    # Called from inside `load_rules` rather than left for the service to call, because a discovery function
+    # nobody calls is this codebase's most repeated bug: connector plugins were discovered into a registry and
+    # never instantiated, and governance had a policy engine nothing consulted. One entry point means the
+    # service cannot forget.
+    plugin_count = load_plugin_rules(ruleset) if include_plugins else 0
+    if plugin_count:
+        ruleset.loaded_from.append(f"{plugin_count} rule(s) from installed plugins")
 
     ruleset.fingerprint = fingerprint_of(directory)
     return ruleset

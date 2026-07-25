@@ -245,3 +245,20 @@ opa: policies
 # Start Grafana with the provisioned SIO datasources and dashboards (optional).
 grafana:
     bash scripts/grafana_bootstrap.sh
+
+# Install the example out-of-tree plugin, and prove it appears at runtime.
+#
+# `--no-deps` because sio-core and sio-schemas are already in this environment. The example deliberately has no
+# `[tool.uv.sources]` workspace refs: a plugin that only builds inside the repository it extends proves nothing
+# about extensibility, so it declares plain dependencies exactly as a third party's package would.
+plugin-demo:
+    uv pip install -e examples/plugin_demo --no-deps
+    @echo
+    @echo "installed. what the platform now sees:"
+    {{uv}} python -c "from sio_core.plugins import discover_all; [print(f'  {g}: {sorted(r.loaded)}') for g, r in discover_all().items() if r.loaded]"
+    @echo
+    @echo "run the tests that prove it: uv run pytest tests/unit/test_plugins.py -v"
+
+# Remove it again, to check the platform runs without it.
+plugin-demo-remove:
+    uv pip uninstall sio-plugin-demo

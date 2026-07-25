@@ -9,11 +9,13 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 
 from sio_core import MessageContext, SioService, describe_error, get_blob
+from sio_core.plugins import load_plugin_config
 from sio_schemas import BusMessage, Modality, Observation, Topic
 
 from .connectors.base import (
     Connector,
     ConnectorConfig,
+    build_connector,
     connector_kinds,
     discover_plugins,
 )
@@ -62,10 +64,17 @@ class IngestService(SioService):
 
     # ----------------------------------------------------------------- lifecycle
     def _build_connectors(self) -> list[Connector]:
+        # Plugin connectors that could not be built, kept so `/connectors` and `/health` can report them. A
+        # plugin that silently fails to load is indistinguishable from one that loaded and does nothing, and an
+        # operator debugging that difference through log archaeology is one who stops using plugins.
+        #
+        # Set here rather than as a class attribute: a mutable class-level dict would be shared by every
+        # service instance in a test process, so one test's failures would appear in another's health report.
+        self._plugin_errors: dict[str, str] = {}
         cfg = self.settings
         discovered = discover_plugins()
         if discovered:
-            self.log.info("ingest.plugins", loaded=discovered)
+            self.log.info("ingest.plugins", loaded=discovered, kinds=connector_kinds())
 
         simulator = SimulatorConnector(
             ConnectorConfig(
@@ -101,7 +110,65 @@ class IngestService(SioService):
                 },
             )
         )
-        return [simulator, weather]
+        # Connectors from installed plugins, instantiated from configuration.
+        #
+        # This is the line that was missing, and its absence is the whole reason the plugin system did not
+        # work: the service DISCOVERED plugin connectors into a registry and then returned a hard-coded list,
+        # so a plugin was registered and never constructed. Discovery without instantiation looks exactly like
+        # a working plugin system until somebody writes a plugin.
+        #
+        # Nothing runs merely by being installed. A plugin declares what it CAN do; `.sio/plugins.json` says
+        # what should actually run, with what options — because installing a package must not start reading
+        # somebody's camera.
+        return [simulator, weather, *self._build_plugin_connectors()]
+
+    def _build_plugin_connectors(self) -> list[Connector]:
+        """Instantiate the plugin connectors this deployment has configured.
+
+        Each failure is isolated: one connector whose options are wrong must not prevent the others from
+        starting, and the operator is told which one and why. A list comprehension over `build_connectors`
+        would fail the whole batch on the first bad entry.
+        """
+        configured = load_plugin_config()
+        if not configured:
+            return []
+
+        built: list[Connector] = []
+        for entry in configured:
+            if not entry.enabled:
+                self.log.info("ingest.plugin_connector_disabled", source_id=entry.source_id)
+                continue
+            try:
+                connector = build_connector(
+                    ConnectorConfig(
+                        source_id=entry.source_id,
+                        kind=entry.kind,
+                        modality=Modality(entry.modality),
+                        rate_hz=entry.rate_hz,
+                        label=entry.label or entry.source_id,
+                        options=entry.options,
+                    )
+                )
+            except (KeyError, ValueError) as exc:
+                # The most likely mistake by a long way: a `kind` that no installed plugin provides, usually a
+                # typo or a package that is configured but not installed. `build_connector` already lists the
+                # registered kinds in its message, which is what makes this recoverable.
+                self._plugin_errors[entry.source_id] = describe_error(exc)
+                self.log.error(
+                    "ingest.plugin_connector_failed",
+                    source_id=entry.source_id,
+                    kind=entry.kind,
+                    error=describe_error(exc),
+                )
+                continue
+            built.append(connector)
+            self.log.info(
+                "ingest.plugin_connector_built",
+                source_id=entry.source_id,
+                kind=entry.kind,
+                label=entry.label,
+            )
+        return built
 
     async def setup(self) -> None:
         if self.renderer.available:
