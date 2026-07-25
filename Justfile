@@ -224,3 +224,12 @@ config:
         print('postgres:', cfg.pg_host + ':' + str(cfg.pg_port) + '/' + cfg.pg_database); \
         print('redis:   ', cfg.redis_url); print('neo4j:   ', cfg.neo4j_uri); \
         print('minio:   ', cfg.minio_endpoint + '/' + cfg.minio_bucket)"
+
+# Regenerate the OPA policy from the POLICY table in sio_core.authz.
+#
+# Generated rather than hand-written, because two implementations of one authorisation policy drift — and
+# the drift is a permissions difference between environments. `test_authz.py` asserts the checked-in file
+# matches, so a rule added in Python and not regenerated fails CI rather than diverging quietly.
+policies:
+    @mkdir -p infra/opa/policies
+    {{uv}} python -c "from sio_core.authz import rego_from_policy; from pathlib import Path; Path('infra/opa/policies/sio.rego').write_text(rego_from_policy()); print('wrote infra/opa/policies/sio.rego')"

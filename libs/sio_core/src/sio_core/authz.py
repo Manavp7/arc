@@ -80,10 +80,25 @@ class Rule:
     description: str = ""
 
     def matches(self, action: str) -> bool:
+        """Whether this rule governs `action`.
+
+        The `*.suffix` case was missing from the first version, and the OPA conformance test is the only
+        thing that found it. `Rule("*.read")` fell through to the exact-string comparison and matched
+        nothing, so the catch-all was **dead code** — and every read action not named explicitly
+        (`forecasts.read`, `workflow.read`, `agents.read`, `audit.read`, `spatial.read`, `timeline.read`)
+        was denied to every principal except admins, who reached them via the bypass.
+
+        That would have presented as "the forecast panel is empty for operators and works for me", which is
+        the kind of bug that gets diagnosed as a caching problem for a week. The generated Rego implemented
+        `endswith` correctly, so the two engines disagreed on ten actions and only a decision-by-decision
+        comparison could show it.
+        """
         if self.action == "*":
             return True
         if self.action.endswith(".*"):
             return action.startswith(self.action[:-1])
+        if self.action.startswith("*."):
+            return action.endswith(self.action[1:])
         return self.action == action
 
 
@@ -244,18 +259,26 @@ class EmbeddedPolicyEngine:
                 "tenant-isolation",
             )
 
+        rule = next((candidate for candidate in self.rules if candidate.matches(action)), None)
+        if rule is None:
+            # Default deny, BEFORE the admin bypass — the third ordering bug in this function, and the same
+            # shape as the other two.
+            #
+            # With the bypass first, `check(admin, "something.nobody.wrote")` returned True. That sounds
+            # harmless until you remember that `unmapped.request` is the action assigned to any route the
+            # action map does not recognise: an admin would silently reach every ungoverned endpoint added in
+            # a later phase, which defeats the whole point of mapping routes to actions.
+            #
+            # An admin may do anything the policy DEFINES within their tenant. They may not perform an
+            # operation the platform cannot name, because nobody — including the admin — knows what it is.
+            return deny(f"no rule permits {action!r}; the default is deny")
+
         # Admin bypass, stated explicitly rather than emerging from the rule table. An implicit bypass is
         # one nobody can find when they ask "how did that request succeed?".
         if principal.is_admin and not any(
-            rule.requires_pii_scope for rule in self.rules if rule.matches(action)
+            candidate.requires_pii_scope for candidate in self.rules if candidate.matches(action)
         ):
             return allow("admin", rule="admin-bypass")
-
-        rule = next((candidate for candidate in self.rules if candidate.matches(action)), None)
-        if rule is None:
-            # Default deny. An action nobody wrote a rule for is not an action anybody may perform, and the
-            # message names the action so the fix is obvious.
-            return deny(f"no rule permits {action!r}; the default is deny")
 
         if rule.roles and not principal.has_any(*rule.roles):
             return deny(
@@ -485,10 +508,19 @@ def rego_from_policy(policy: Iterable[Rule] = POLICY) -> str:
         "\tauthenticated",
         '\t"admin" in input.principal.roles',
         "\tnot pii_rule_applies",
+        "\tknown_action",
         "\ttenant_matches",
         "}",
         "",
     ]
+
+    # `known_action` is the Rego counterpart of "a rule matched". Without it the admin bypass would grant
+    # actions no rule defines — including `unmapped.request`, the action given to any route the action map
+    # does not recognise, which would let an admin silently reach every ungoverned endpoint.
+    lines.append("# An action the policy defines. The admin bypass applies only to these.")
+    for rule in policy:
+        lines.append(f"known_action if {_rego_action_match(rule.action)}")
+    lines.append("")
 
     pii_actions = [rule.action for rule in policy if rule.requires_pii_scope]
     lines.append("pii_rule_applies if {")
@@ -498,11 +530,26 @@ def rego_from_policy(policy: Iterable[Rule] = POLICY) -> str:
         lines.append("\tfalse")
     lines.extend(["}", ""])
 
-    for index, rule in enumerate(policy):
+    ordered = tuple(policy)
+    for index, rule in enumerate(ordered):
         lines.append(f"# {rule.description or rule.action}")
         lines.append("allow if {")
         lines.append("\tauthenticated")
         lines.append(f"\t{_rego_action_match(rule.action)}")
+        # FIRST MATCH WINS, reproduced explicitly.
+        #
+        # This is the bug that made the two engines disagree on the one thing they must not. The Python
+        # engine applies the FIRST matching rule; Rego's `allow` is a union, so ANY matching rule allows.
+        # For `entities.read` both the zone-scoped `entities.read` rule and the unconstrained catch-all
+        # `*.read` matched — so a zoned operator asking about a zone outside their token was DENIED by the
+        # embedded engine and ALLOWED by OPA. A permission difference between environments, produced by the
+        # very generator written to prevent one.
+        #
+        # Each block therefore asserts that no earlier (more specific) rule matched the action.
+        for earlier in ordered[:index]:
+            guard = _rego_action_excluded(earlier.action)
+            if guard:
+                lines.append(f"\t{guard}")
         if rule.roles:
             lines.append(f"\tsome role in {json_list(list(rule.roles))}")
             lines.append("\trole in input.principal.roles")
@@ -515,7 +562,6 @@ def rego_from_policy(policy: Iterable[Rule] = POLICY) -> str:
         lines.append("\ttenant_matches")
         lines.append("}")
         lines.append("")
-        _ = index
 
     lines.extend(
         [
@@ -537,6 +583,22 @@ def json_list(values: list[str]) -> str:
     import json
 
     return json.dumps(values)
+
+
+def _rego_action_excluded(action: str) -> str:
+    """A Rego clause asserting the action does NOT match `action`'s pattern.
+
+    Used to reproduce first-match-wins: a rule only applies when no earlier rule matched.
+    """
+    if action == "*":
+        # An earlier catch-all would make every later rule unreachable, which is a policy-authoring error
+        # rather than something to encode. `test_authz.py` asserts no such rule exists.
+        return "false"
+    if action.endswith(".*"):
+        return f'not startswith(input.action, "{action[:-1]}")'
+    if action.startswith("*."):
+        return f'not endswith(input.action, "{action[1:]}")'
+    return f'input.action != "{action}"'
 
 
 def _rego_action_match(action: str) -> str:
