@@ -101,7 +101,7 @@ docs/              PRD, architecture, deployment, governance, GPU swap, models, 
 | 0 | Foundations: workspace, schemas, core ports, bootstrap, datastores, Justfile, CI | **done** (macOS sign-off pending) |
 | 1 | Skeleton that boots: ingest simulator → api → live map | **done** |
 | 2 | Perception → tracking → fusion → world model + semantic search | **done** |
-| 3 | Spatial engine, events + anomalies, forecasting, timeline replay | spatial + events **done** |
+| 3 | Spatial engine, events + anomalies, forecasting, timeline replay | spatial + events + forecasting **done** |
 | 4 | Copilot + MCP, workflows, decisions, agents, alerts → **demo ships here** | — |
 | 5 | Governance enforced: authn/authz, PII redaction, audit, multi-tenancy | — |
 | 6 | Simulation, mission control, analytics, developer platform (SDKs/webhooks/plugins) | — |
