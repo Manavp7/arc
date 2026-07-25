@@ -726,3 +726,35 @@ async def test_sensor_readings_are_persisted_as_measurements(pool, cfg) -> None:
     assert service._measurements_skipped == 1
 
     await pool.execute("DELETE FROM measurements WHERE tenant_id = %s", (TENANT,))
+
+
+async def test_every_prediction_query_runs_against_postgres(pool, cfg) -> None:  # type: ignore[no-untyped-def]
+    """Execute the prediction service's reads for real.
+
+    Third occurrence of the same class of bug this phase: this one selected ``entity_id`` from ``events``,
+    where the column is an ARRAY called ``entities``, and it failed every forecasting cycle with a 500.
+    The spatial and world-model paths already had tests like this; prediction did not, so the pattern is
+    now applied to every service that talks to the database.
+
+    Runs the whole cycle rather than the individual statements, because the bug was in a query only the
+    cycle reaches.
+    """
+    from sio_core.bus.memory import MemoryBus
+    from sio_prediction.service import PredictionService
+
+    # Constructed through __init__ with an in-memory bus, not via __new__ with hand-set attributes.
+    # Last phase, a test that built its subject with __new__ masked an attribute __init__ never
+    # initialised, and the live service raised on every message while the test stayed green. A test that
+    # constructs its subject differently from production is testing a different object.
+    service = PredictionService(settings=cfg, bus=MemoryBus())
+    service.pool = pool  # the real database; everything else is as production builds it
+    await service._load_zones()  # noqa: SLF001
+
+    made_at = utc_now()
+    # Each of these hits a different table: events (throughput), events (occupancy), measurements.
+    assert isinstance(await service._site_forecasts(made_at), list)  # noqa: SLF001
+    assert isinstance(await service._zone_forecasts(made_at), list)  # noqa: SLF001
+    assert isinstance(await service._sensor_forecasts(made_at), list)  # noqa: SLF001
+
+    # And the full cycle, which is what the timer calls and what the 500 came from.
+    await service.tick()

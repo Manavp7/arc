@@ -194,7 +194,10 @@ class PredictionService(SioService):
         forecasts: list[Forecast] = []
         rows = await self.pool.fetch(
             """
-            SELECT zone_id, ts, entity_id FROM events
+            -- `entities` is an ARRAY on this table, not a scalar column. A zone event always names
+            -- exactly one entity, so the first element is the entity; selecting `entity_id` (which does
+            -- not exist) failed every forecasting cycle with a 500.
+            SELECT zone_id, ts, entities[1] AS entity_id FROM events
              WHERE tenant_id = %s AND type IN ('zone_entered', 'zone_exited')
                AND ts >= now() - make_interval(secs => %s)
              ORDER BY ts
