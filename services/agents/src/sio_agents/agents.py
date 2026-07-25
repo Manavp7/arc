@@ -21,7 +21,7 @@ from typing import Any
 
 import httpx
 
-from sio_core import get_logger
+from sio_core import describe_error, get_logger
 
 from .loop import Observation, Proposal, Recollection
 
@@ -252,7 +252,7 @@ class LogisticsAgent:
             if response.status_code == 200:
                 schedule = response.json()
         except httpx.HTTPError as exc:
-            log.info("agents.schedule_unavailable", error=str(exc))
+            log.info("agents.schedule_unavailable", error=describe_error(exc))
 
         detail = ""
         if schedule and schedule.get("slots"):

@@ -28,6 +28,21 @@ from .memory import AgentMemory, MemoryEntry, Recollection
 
 log = get_logger("sio.agents.loop")
 
+APPROVAL_FRESHNESS_S = 900.0
+"""How recently a decision must have been approved for the approval to authorise action.
+
+**An approval is authorisation to act now, not a standing licence.** Measured, and this is exactly how the
+bug appeared: a decision approved by hand at 06:40 was executed at 06:52 — twelve minutes later — when the
+agents service started up and its consumer group replayed the `decisions` topic from the beginning. The gate
+was not violated; a human really had approved it. But nobody approved dispatching a drone *twelve minutes
+later because a service restarted*, and the same mechanism would fire an action at three in the morning
+because somebody approved something last week.
+
+Fifteen minutes: long enough that a slow restart or a brief queue backlog still carries out what was
+authorised, short enough that a stale approval cannot be resurrected. A refused stale approval is audited,
+because silently dropping an authorised action is its own failure.
+"""
+
 
 @dataclass
 class Observation:
@@ -262,6 +277,39 @@ class AgentRunner:
             log.info("agents.already_executed", decision=decision.decision_id)
             return None
 
+        age_s = self._approval_age_s(decision)
+        if age_s is None or age_s > APPROVAL_FRESHNESS_S:
+            # A stale approval is not authorisation. See the note on APPROVAL_FRESHNESS_S: this fired for
+            # real, on a twelve-minute-old approval replayed at service start.
+            self.refusals += 1
+            reason = (
+                f"the approval is {age_s / 60:.0f} min old (limit "
+                f"{APPROVAL_FRESHNESS_S / 60:.0f} min); an approval authorises acting now, not later"
+                if age_s is not None
+                else "the decision is approved but carries no approval timestamp"
+            )
+            await self.audit(
+                actor="agents",
+                action="execute",
+                resource=decision.decision_id,
+                allowed=False,
+                reason=reason,
+                details={
+                    "approved_by": decision.approved_by,
+                    "approved_ts": (
+                        decision.approved_ts.isoformat() if decision.approved_ts else None
+                    ),
+                    "age_s": round(age_s, 1) if age_s is not None else None,
+                },
+            )
+            log.warning(
+                "agents.stale_approval",
+                decision=decision.decision_id,
+                age_s=round(age_s, 1) if age_s is not None else None,
+                reason=reason,
+            )
+            return None
+
         chosen = next(
             (option for option in decision.options if option.option_id == decision.chosen), None
         )
@@ -333,6 +381,18 @@ class AgentRunner:
             "awaiting_verdict": len(self._entries),
             "memory": self.memory.describe(),
         }
+
+    @staticmethod
+    def _approval_age_s(decision: Decision) -> float | None:
+        """How long ago the approval was granted, or None if it carries no timestamp.
+
+        None is treated as stale rather than as fresh. An approved decision with no approval time is a record
+        this code does not understand, and the safe reading of something it does not understand is 'do not
+        act'.
+        """
+        if decision.approved_ts is None:
+            return None
+        return (utc_now() - decision.approved_ts).total_seconds()
 
 
 def _rejection_reason(decision: Decision) -> str | None:

@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Protocol
 
-from sio_core import get_logger
+from sio_core import describe_error, get_logger
 from sio_schemas import ForecastPoint
 
 from .series import Series
@@ -228,7 +228,7 @@ class StatsForecastForecaster:
         try:
             output = engine.forecast(df=frame, h=horizon, level=[percentage])
         except Exception as exc:
-            log.warning("prediction.autoets_failed", series=series.name, error=str(exc))
+            log.warning("prediction.autoets_failed", series=series.name, error=describe_error(exc))
             return ForecastResult(
                 points=[],
                 model_name=self.name,

@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
-from sio_core import MessageContext, SioService, get_blob
+from sio_core import MessageContext, SioService, describe_error, get_blob
 from sio_schemas import BusMessage, Modality, Observation, Topic
 
 from .connectors.base import (
@@ -117,7 +117,9 @@ class IngestService(SioService):
             try:
                 await connector.start()
             except Exception as exc:
-                self.log.error("connector.start_failed", source=connector.source_id, error=str(exc))
+                self.log.error(
+                    "connector.start_failed", source=connector.source_id, error=describe_error(exc)
+                )
                 continue
             self._tasks.append(
                 asyncio.create_task(self._pump(connector), name=f"connector-{connector.source_id}")
@@ -175,7 +177,10 @@ class IngestService(SioService):
             except Exception as exc:
                 self.metrics.errors.labels(service=self.name, kind="connector").inc()
                 self.log.error(
-                    "connector.failed", source=connector.source_id, error=str(exc), exc_info=True
+                    "connector.failed",
+                    source=connector.source_id,
+                    error=describe_error(exc),
+                    exc_info=True,
                 )
                 # Restart the source after a pause rather than losing it for the process lifetime.
                 await asyncio.sleep(5.0)
@@ -205,7 +210,9 @@ class IngestService(SioService):
             self._frames_written += 1
         except Exception as exc:
             self.metrics.errors.labels(service=self.name, kind="blob").inc()
-            self.log.warning("frame.store_failed", key=observation.raw_ref, error=str(exc))
+            self.log.warning(
+                "frame.store_failed", key=observation.raw_ref, error=describe_error(exc)
+            )
             observation.raw_ref = None
 
     def _topic_for(self, connector: Connector, observation: Observation) -> str:
@@ -248,7 +255,7 @@ class IngestService(SioService):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self.log.error("ingest.ground_truth_failed", error=str(exc))
+                self.log.error("ingest.ground_truth_failed", error=describe_error(exc))
             await asyncio.sleep(interval)
 
     # ------------------------------------------------------------------ reporting

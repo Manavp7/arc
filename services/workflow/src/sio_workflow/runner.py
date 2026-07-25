@@ -23,7 +23,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from sio_core import get_logger
+from sio_core import describe_error, get_logger
 from sio_schemas import RunStatus, WorkflowRun, WorkflowStep, new_id, utc_now
 
 from .activities import ACTIVITIES, ActivityContext
@@ -242,7 +242,7 @@ class InlineRunner:
                 log.error(
                     "workflow.compensation_failed",
                     step=spec.step_id,
-                    error=str(exc),
+                    error=describe_error(exc),
                     effect="the world is in a state nobody chose; this needs a human",
                 )
 
@@ -258,7 +258,7 @@ async def _notify(hook: ProgressHook | None, run: WorkflowRun, step: WorkflowSte
     try:
         await hook(run, step)
     except Exception as exc:
-        log.warning("workflow.progress_hook_failed", error=str(exc))
+        log.warning("workflow.progress_hook_failed", error=describe_error(exc))
 
 
 class RunLedger:

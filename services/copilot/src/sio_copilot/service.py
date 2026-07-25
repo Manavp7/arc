@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
-from sio_core import SioService, get_graph, get_llm
+from sio_core import SioService, describe_error, get_graph, get_llm
 from sio_core.llm import ScriptedLLM
 
 from .agent import CopilotAgent
@@ -101,7 +101,7 @@ class CopilotService(SioService):
                 max_tokens=1,
             )
         except Exception as exc:
-            self.log.warning("copilot.warm_failed", error=str(exc))
+            self.log.warning("copilot.warm_failed", error=describe_error(exc))
         return time.perf_counter() - started
 
     async def tick(self) -> None:

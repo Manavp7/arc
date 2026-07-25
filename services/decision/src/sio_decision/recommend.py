@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from sio_core import get_logger
+from sio_core import describe_error, get_logger
 from sio_core.explain import ExplanationBuilder
 from sio_schemas import (
     ActionType,
@@ -384,7 +384,7 @@ async def llm_rationale(
             [{"role": "user", "content": prompt}], temperature=0.2, max_tokens=200
         )
     except Exception as exc:
-        log.warning("decision.rationale_failed", error=str(exc))
+        log.warning("decision.rationale_failed", error=describe_error(exc))
         return template_rationale(
             options, incidents
         ), f"the model failed ({exc}); using the template"

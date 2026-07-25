@@ -33,7 +33,7 @@ from . import registry
 from .config import Settings, get_settings
 from .errors import SioError
 from .ports import Bus
-from .telemetry import Metrics, configure_logging, get_logger, trace_context
+from .telemetry import Metrics, configure_logging, describe_error, get_logger, trace_context
 
 
 class MessageContext:
@@ -281,7 +281,7 @@ class SioService:
             except Exception as exc:
                 self._counters["errors"] += 1
                 self.metrics.errors.labels(service=self.name, kind="consume").inc()
-                self.log.error("consumer.error", error=str(exc), exc_info=True)
+                self.log.error("consumer.error", error=describe_error(exc), exc_info=True)
                 await asyncio.sleep(1.0)
 
     async def _handle(self, message: BusMessage) -> None:
@@ -313,7 +313,7 @@ class SioService:
                 self.log.error(
                     "message.rejected",
                     topic=topic,
-                    error=str(exc),
+                    error=describe_error(exc),
                     dead_lettered_total=self._counters["dead_lettered"],
                 )
                 await self.bus.dead_letter(message, str(exc))
@@ -329,7 +329,7 @@ class SioService:
                     "message.failed",
                     topic=topic,
                     attempt=ctx.attempt,
-                    error=str(exc),
+                    error=describe_error(exc),
                     exc_info=True,
                 )
             finally:
@@ -351,7 +351,7 @@ class SioService:
             except Exception as exc:
                 self._counters["errors"] += 1
                 self.metrics.errors.labels(service=self.name, kind="tick").inc()
-                self.log.error("tick.failed", error=str(exc), exc_info=True)
+                self.log.error("tick.failed", error=describe_error(exc), exc_info=True)
 
     # -------------------------------------------------------------------- lifecycle
     async def serve(self) -> None:
@@ -398,7 +398,7 @@ class SioService:
         try:
             await self.teardown()
         except Exception as exc:
-            self.log.warning("teardown.failed", error=str(exc))
+            self.log.warning("teardown.failed", error=describe_error(exc))
         await registry.close_all()
         self.log.info("service.stopped", **self._counters)
 

@@ -14,7 +14,7 @@ from typing import Any
 from sio_schemas import BusMessage, SioModel
 
 from ..errors import BusError
-from ..telemetry import get_logger
+from ..telemetry import describe_error, get_logger
 from .codec import decode, encode, ts_to_stream_id
 
 log = get_logger("sio.bus.redis")
@@ -151,7 +151,9 @@ class RedisStreamBus:
         try:
             message = decode(fields, stream_id=stream_id)
         except Exception as exc:
-            log.error("bus.undecodable", topic=topic, stream_id=stream_id, error=str(exc))
+            log.error(
+                "bus.undecodable", topic=topic, stream_id=stream_id, error=describe_error(exc)
+            )
             await self._redis.xadd(
                 f"dlq.{topic}",
                 {"raw": str(fields), "reason": f"decode failed: {exc}"},
@@ -246,7 +248,10 @@ class RedisStreamBus:
                         yield decode(fields, stream_id=stream_id)
                     except Exception as exc:
                         log.warning(
-                            "bus.tail_skip", topic=topic, stream_id=stream_id, error=str(exc)
+                            "bus.tail_skip",
+                            topic=topic,
+                            stream_id=stream_id,
+                            error=describe_error(exc),
                         )
 
     async def read_range(
@@ -265,7 +270,9 @@ class RedisStreamBus:
             try:
                 out.append(decode(fields, stream_id=stream_id))
             except Exception as exc:
-                log.warning("bus.replay_skip", topic=topic, stream_id=stream_id, error=str(exc))
+                log.warning(
+                    "bus.replay_skip", topic=topic, stream_id=stream_id, error=describe_error(exc)
+                )
         return out
 
     async def lag(self, topic: str, group: str) -> int:

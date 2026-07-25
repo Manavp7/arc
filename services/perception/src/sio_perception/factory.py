@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sio_core import ConfigError, Settings, get_logger
+from sio_core import ConfigError, Settings, describe_error, get_logger
 from sio_core.ports import Detector
 
 from .detectors.fire import FireHeuristicDetector
@@ -103,5 +103,5 @@ def build_reid(settings: Settings) -> OnnxReidEmbedder | None:
     try:
         return OnnxReidEmbedder(path, threads=settings.ort_threads, providers=_providers(settings))
     except Exception as exc:
-        log.error("reid.load_failed", error=str(exc))
+        log.error("reid.load_failed", error=describe_error(exc))
         return None

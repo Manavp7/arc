@@ -22,7 +22,7 @@ from typing import Any
 
 import httpx
 
-from ..telemetry import get_logger
+from ..telemetry import describe_error, get_logger
 from .base import LLM, LlmReply, ToolSpec, parse_tool_calls
 
 log = get_logger("sio.llm.ollama")
@@ -112,7 +112,7 @@ class OllamaLLM:
             body = response.json()
         except httpx.HTTPError as exc:
             elapsed = (time.perf_counter() - started) * 1000
-            log.warning("llm.ollama_failed", model=self.model, error=str(exc))
+            log.warning("llm.ollama_failed", model=self.model, error=describe_error(exc))
             return LlmReply(
                 model=self.model,
                 latency_ms=elapsed,
@@ -199,7 +199,7 @@ class OllamaLLM:
                 },
             )
         except httpx.HTTPError as exc:
-            log.warning("llm.warm_failed", model=self.model, error=str(exc))
+            log.warning("llm.warm_failed", model=self.model, error=describe_error(exc))
             return 0.0
         return time.perf_counter() - started
 

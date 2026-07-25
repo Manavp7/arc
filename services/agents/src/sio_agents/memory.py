@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from sio_core import get_logger
+from sio_core import describe_error, get_logger
 from sio_schemas import new_id, utc_now
 
 log = get_logger("sio.agents.memory")
@@ -203,7 +203,7 @@ class AgentMemory:
             )
             self.written += 1
         except Exception as exc:
-            log.warning("agents.memory_write_failed", error=str(exc))
+            log.warning("agents.memory_write_failed", error=describe_error(exc))
         return entry
 
     async def record_outcome(
@@ -230,7 +230,7 @@ class AgentMemory:
                 ts=entry.ts,
             )
         except Exception as exc:
-            log.warning("agents.memory_update_failed", error=str(exc))
+            log.warning("agents.memory_update_failed", error=describe_error(exc))
 
     async def recall(
         self, situation: str, *, agent: str | None = None, limit: int = 3
@@ -245,7 +245,7 @@ class AgentMemory:
                 COLLECTION, vector, tenant_id=self.tenant_id, limit=limit * 3
             )
         except Exception as exc:
-            log.warning("agents.memory_search_failed", error=str(exc))
+            log.warning("agents.memory_search_failed", error=describe_error(exc))
             return recollection
 
         self.searched += 1

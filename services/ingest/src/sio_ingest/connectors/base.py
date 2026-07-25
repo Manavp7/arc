@@ -19,7 +19,7 @@ from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
-from sio_core import get_logger
+from sio_core import describe_error, get_logger
 from sio_schemas import Modality, Observation
 
 log = get_logger("sio.ingest.connectors")
@@ -133,5 +133,5 @@ def discover_plugins(group: str = "sio.connectors") -> int:
                     "connector.plugin_invalid", name=entry.name, reason="not a Connector subclass"
                 )
         except Exception as exc:
-            log.error("connector.plugin_failed", name=entry.name, error=str(exc))
+            log.error("connector.plugin_failed", name=entry.name, error=describe_error(exc))
     return loaded

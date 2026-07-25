@@ -27,7 +27,7 @@ from typing import Any
 
 import httpx
 
-from sio_core import get_logger
+from sio_core import describe_error, get_logger
 from sio_core.llm import ToolSpec
 
 log = get_logger("sio.copilot.tools")
@@ -195,7 +195,7 @@ class ToolBelt:
             result = await coroutine
         except Exception as exc:
             self.failures += 1
-            log.warning("copilot.tool_failed", tool=name, error=str(exc))
+            log.warning("copilot.tool_failed", tool=name, error=describe_error(exc))
             result = ToolResult(name=name, ok=False, error=f"{type(exc).__name__}: {exc}")
         result.latency_ms = (time.perf_counter() - started) * 1000
         if not result.ok:

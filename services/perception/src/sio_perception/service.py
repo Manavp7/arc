@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 from fastapi import FastAPI
 
-from sio_core import MessageContext, SioService, get_blob
+from sio_core import MessageContext, SioService, describe_error, get_blob
 from sio_core.ports import VisionResult
 from sio_schemas import BusMessage, Detection, Observation, Topic, utc_now
 
@@ -265,7 +265,7 @@ class PerceptionService(SioService):
         try:
             data = await self.blob.get(observation.raw_ref)
         except Exception as exc:
-            self.log.debug("frame.missing", key=observation.raw_ref, error=str(exc))
+            self.log.debug("frame.missing", key=observation.raw_ref, error=describe_error(exc))
             return None
 
         import cv2

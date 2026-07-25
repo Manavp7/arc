@@ -14,7 +14,7 @@ from typing import Any
 from .config import Settings, get_settings
 from .errors import ConfigError
 from .ports import BlobStore, Bus, GraphStore, VectorStore
-from .telemetry import get_logger
+from .telemetry import describe_error, get_logger
 
 log = get_logger("sio.registry")
 
@@ -161,7 +161,7 @@ def get_embedder(settings: Settings | None = None) -> Any:
             try:
                 return OnnxClipEmbedder(vision, text, tokenizer, threads=cfg.ort_threads)
             except Exception as exc:
-                log.error("registry.embedder_failed", error=str(exc), using="hash")
+                log.error("registry.embedder_failed", error=describe_error(exc), using="hash")
                 return HashEmbedder()
         raise ConfigError(f"unknown SIO_EMBEDDER={backend!r}")
 
@@ -241,7 +241,7 @@ async def close_all() -> None:
         try:
             await close()
         except Exception as exc:
-            log.warning("registry.close_failed", adapter=key, error=str(exc))
+            log.warning("registry.close_failed", adapter=key, error=describe_error(exc))
     _instances.clear()
 
 

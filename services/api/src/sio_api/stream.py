@@ -17,7 +17,7 @@ import contextlib
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
-from sio_core import get_logger
+from sio_core import describe_error, get_logger
 from sio_core.ports import Bus
 from sio_schemas import BusMessage, Topic
 
@@ -98,7 +98,7 @@ class StreamHub:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                log.error("stream.tail_failed", error=str(exc))
+                log.error("stream.tail_failed", error=describe_error(exc))
                 await asyncio.sleep(1.0)
 
     @contextlib.contextmanager

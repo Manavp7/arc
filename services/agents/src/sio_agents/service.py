@@ -134,7 +134,10 @@ class AgentsService(SioService):
                         proposal.urgency, "high"
                     ),
                 },
-                timeout=20.0,
+                # Generous, because the decision service solves three times AND may ask a model to write the
+                # rationale. Twenty seconds was not enough and the proposal was silently lost — measured, and
+                # the log line said nothing because a timeout's str() is empty.
+                timeout=60.0,
             )
             if response.status_code != 200:
                 self.log.warning(
@@ -143,7 +146,13 @@ class AgentsService(SioService):
                 return None
             decision = response.json()
         except httpx.HTTPError as exc:
-            self.log.warning("agents.propose_unreachable", error=str(exc))
+            # The TYPE, not just the message. httpx timeouts stringify to an empty string, so `error=describe_error(exc)`
+            # logged `error=` and told me nothing at all about why proposals were vanishing.
+            self.log.warning(
+                "agents.propose_unreachable",
+                error=f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__,
+                url=f"{self.decision_url}/decisions/recommend",
+            )
             return None
 
         decision_id = str(decision.get("decision_id", ""))

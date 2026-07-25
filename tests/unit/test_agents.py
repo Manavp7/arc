@@ -499,3 +499,58 @@ def test_the_runner_reports_the_gate_it_enforces() -> None:
     assert described["executions"] == 0
     assert "refused_executions" in described
     assert described["memory"]["similarity_floor"] == SIMILARITY_FLOOR
+
+
+# ------------------------------------------------ approval freshness (regression)
+async def test_a_stale_approval_does_not_authorise_action() -> None:
+    """An approval is authorisation to act NOW, not a standing licence.
+
+    Measured, and this is exactly how the bug appeared: a decision approved by hand at 06:40 was executed at
+    06:52 — twelve minutes later — when the agents service started up and its consumer group replayed the
+    decisions topic from the beginning. The gate was not violated; a human really had approved it. But nobody
+    approved dispatching a drone twelve minutes later because a service restarted, and the same mechanism
+    would fire an action at three in the morning because somebody approved something last week.
+    """
+    from datetime import timedelta
+
+    from sio_agents.loop import APPROVAL_FRESHNESS_S
+
+    runner, log = a_runner([StubAgent()])
+    stale = a_decision(approval=ApprovalState.APPROVED)
+    stale.approved_ts = utc_now() - timedelta(seconds=APPROVAL_FRESHNESS_S + 60)
+
+    outcome = await runner.on_decision(stale)
+
+    assert outcome is None
+    assert log["executed"] == [], "a stale approval must not execute"
+    assert runner.refusals == 1
+    refusal = next(item for item in log["audit"] if item["allowed"] is False)
+    assert "min old" in refusal["reason"]
+    assert "authorises acting now" in refusal["reason"]
+
+
+async def test_a_fresh_approval_still_executes() -> None:
+    """The freshness check must be a guard, not a blockade."""
+    from datetime import timedelta
+
+    runner, log = a_runner([StubAgent()])
+    fresh = a_decision(approval=ApprovalState.APPROVED)
+    fresh.approved_ts = utc_now() - timedelta(seconds=30)
+
+    outcome = await runner.on_decision(fresh)
+    assert outcome is not None and outcome["executed"] is True
+    assert len(log["executed"]) == 1
+
+
+async def test_an_approval_with_no_timestamp_is_treated_as_stale() -> None:
+    """An approved decision with no approval time is a record this code does not understand, and the safe
+    reading of something it does not understand is 'do not act'."""
+    runner, log = a_runner([StubAgent()])
+    odd = a_decision(approval=ApprovalState.APPROVED)
+    odd.approved_ts = None
+
+    await runner.on_decision(odd)
+    assert log["executed"] == []
+    assert runner.refusals == 1
+    refusal = next(item for item in log["audit"] if item["allowed"] is False)
+    assert "no approval timestamp" in refusal["reason"]

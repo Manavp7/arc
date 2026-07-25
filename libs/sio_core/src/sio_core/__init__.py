@@ -33,6 +33,7 @@ from .stores.pg import PgPool
 from .telemetry import (
     Metrics,
     configure_logging,
+    describe_error,
     get_logger,
     get_trace_id,
     set_trace_id,
@@ -67,6 +68,7 @@ __all__ = [
     "close_all",
     "configure_logging",
     "current_tenant",
+    "describe_error",
     "get_blob",
     "get_bus",
     "get_embedder",

@@ -21,7 +21,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 
-from sio_core import MessageContext, SioService, get_blob, get_pg_pool
+from sio_core import MessageContext, SioService, describe_error, get_blob, get_pg_pool
 from sio_core.telemetry import set_trace_id
 from sio_core.tenancy import current_tenant
 from sio_schemas import BusMessage, Entity, Event, HealthStatus, new_id, utc_now
@@ -425,7 +425,7 @@ class ApiService(SioService):
             except WebSocketDisconnect:
                 return
             except Exception as exc:
-                self.log.debug("ws.closed", error=str(exc))
+                self.log.debug("ws.closed", error=describe_error(exc))
                 with contextlib.suppress(Exception):
                     await socket.close()
 

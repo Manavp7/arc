@@ -129,6 +129,20 @@ def configure_logging(
     _configured = True
 
 
+def describe_error(exc: BaseException) -> str:
+    """Render an exception for a log line, never as an empty string.
+
+    `str(exc)` is the obvious choice and it silently loses the most important cases. httpx timeouts, several
+    asyncio errors and a bare `raise SomeError` all stringify to `""`, so `error=describe_error(exc)` logs `error=` —
+    and it does so precisely when something is timing out, which is when the log is all you have.
+
+    Measured: agent proposals were vanishing and the only clue was `agents.propose_unreachable error=`. The
+    type alone would have named it immediately.
+    """
+    message = str(exc).strip()
+    return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
+
+
 def get_logger(name: str | None = None) -> Any:
     if not _configured:
         configure_logging()
