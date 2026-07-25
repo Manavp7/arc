@@ -258,7 +258,18 @@ POLICY: tuple[Rule, ...] = (
     Rule(
         "integration.write",
         roles=("integrator", "admin"),
-        description="Registering connectors and webhooks",
+        description=(
+            "Registering connectors and webhooks. Narrow on purpose: creating a webhook points this "
+            "platform's data at an external URL, which is a data-egress decision rather than an operational one"
+        ),
+    ),
+    Rule(
+        "integration.read",
+        roles=("integrator", "admin", "commander"),
+        description=(
+            "Reading webhook subscriptions and their delivery log. A commander may look, because "
+            "'did the notification go out?' is an operational question during an incident"
+        ),
     ),
     Rule(
         "model.write",

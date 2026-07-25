@@ -125,6 +125,7 @@ class Settings(BaseSettings):
     alerts_port: int = 8115
     missions_port: int = 8116
     analytics_port: int = 8117
+    webhooks_port: int = 8119
     governance_port: int = 8118
 
     # --- web / api ----------------------------------------------------------

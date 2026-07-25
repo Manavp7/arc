@@ -27,6 +27,7 @@ members = [
     "sio-simulation",
     "sio-spatial",
     "sio-tracking",
+    "sio-webhooks",
     "sio-workflow",
     "sio-worldmodel",
 ]
@@ -3370,6 +3371,7 @@ dependencies = [
     { name = "sio-simulation" },
     { name = "sio-spatial" },
     { name = "sio-tracking" },
+    { name = "sio-webhooks" },
     { name = "sio-workflow" },
     { name = "sio-worldmodel", extra = ["embeddings"] },
 ]
@@ -3404,6 +3406,7 @@ requires-dist = [
     { name = "sio-simulation", editable = "services/simulation" },
     { name = "sio-spatial", editable = "services/spatial" },
     { name = "sio-tracking", editable = "services/tracking" },
+    { name = "sio-webhooks", editable = "services/webhooks" },
     { name = "sio-workflow", editable = "services/workflow" },
     { name = "sio-worldmodel", extras = ["embeddings"], editable = "services/worldmodel" },
 ]
@@ -3832,6 +3835,23 @@ requires-dist = [
     { name = "sio-schemas", editable = "libs/sio_schemas" },
 ]
 provides-extras = ["boxmot"]
+
+[[package]]
+name = "sio-webhooks"
+version = "0.1.0"
+source = { editable = "services/webhooks" }
+dependencies = [
+    { name = "httpx" },
+    { name = "sio-core" },
+    { name = "sio-schemas" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "sio-core", editable = "libs/sio_core" },
+    { name = "sio-schemas", editable = "libs/sio_schemas" },
+]
 
 [[package]]
 name = "sio-workflow"

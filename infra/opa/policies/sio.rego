@@ -4,7 +4,7 @@
 #
 # Hand-editing this file would recreate the exact problem it exists to prevent: two
 # implementations of one policy, drifting, until dev allows what production denies.
-# Generated 2026-07-25 from 28 rules.
+# Generated 2026-07-25 from 29 rules.
 
 package sio.authz
 
@@ -56,6 +56,7 @@ known_action if input.action == "alerts.read"
 known_action if input.action == "copilot.ask"
 known_action if startswith(input.action, "graphql.")
 known_action if input.action == "integration.write"
+known_action if input.action == "integration.read"
 known_action if input.action == "model.write"
 known_action if endswith(input.action, ".read")
 
@@ -587,7 +588,7 @@ allow if {
 	tenant_matches
 }
 
-# Registering connectors and webhooks
+# Registering connectors and webhooks. Narrow on purpose: creating a webhook points this platform's data at an external URL, which is a data-egress decision rather than an operational one
 allow if {
 	authenticated
 	input.action == "integration.write"
@@ -617,6 +618,41 @@ allow if {
 	input.action != "copilot.ask"
 	not startswith(input.action, "graphql.")
 	some role in ["integrator", "admin"]
+	role in input.principal.roles
+	tenant_matches
+}
+
+# Reading webhook subscriptions and their delivery log. A commander may look, because 'did the notification go out?' is an operational question during an incident
+allow if {
+	authenticated
+	input.action == "integration.read"
+	not startswith(input.action, "admin.")
+	input.action != "policy.write"
+	input.action != "tenant.create"
+	input.action != "decision.approve"
+	input.action != "decision.reject"
+	input.action != "workflow.execute"
+	input.action != "simulation.inject"
+	input.action != "simulation.write"
+	input.action != "pii.view"
+	input.action != "media.raw"
+	input.action != "media.read"
+	input.action != "alerts.write"
+	input.action != "decisions.write"
+	input.action != "agents.write"
+	input.action != "workflow.write"
+	input.action != "timeline.write"
+	input.action != "forecasts.write"
+	input.action != "events.write"
+	input.action != "analytics.read"
+	input.action != "model.read"
+	input.action != "entities.read"
+	input.action != "events.read"
+	input.action != "alerts.read"
+	input.action != "copilot.ask"
+	not startswith(input.action, "graphql.")
+	input.action != "integration.write"
+	some role in ["integrator", "admin", "commander"]
 	role in input.principal.roles
 	tenant_matches
 }
@@ -651,6 +687,7 @@ allow if {
 	input.action != "copilot.ask"
 	not startswith(input.action, "graphql.")
 	input.action != "integration.write"
+	input.action != "integration.read"
 	some role in ["ml_engineer", "admin"]
 	role in input.principal.roles
 	tenant_matches
@@ -686,6 +723,7 @@ allow if {
 	input.action != "copilot.ask"
 	not startswith(input.action, "graphql.")
 	input.action != "integration.write"
+	input.action != "integration.read"
 	input.action != "model.write"
 	tenant_matches
 }
