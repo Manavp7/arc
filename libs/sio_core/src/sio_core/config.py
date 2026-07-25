@@ -241,6 +241,12 @@ class Settings(BaseSettings):
     # --- prediction ---------------------------------------------------------
     forecast_horizon_s: float = 1800.0
     forecast_interval_s: float = 60.0
+    forecast_interval_level: float = 0.9
+    """Nominal coverage of the prediction intervals.
+
+    Reported alongside every forecast and *checked* by the backtest endpoint, because an interval level
+    nobody verifies is decoration. A 90% interval that contains the truth half the time is not
+    conservative, it is wrong."""
 
     # --- alerts -------------------------------------------------------------
     alert_dedup_window_s: float = 120.0

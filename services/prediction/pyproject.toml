@@ -1,0 +1,28 @@
+[project]
+name = "sio-prediction"
+version = "0.1.0"
+description = "SIO forecasting: intervals that have been checked, and trajectory cones (PRD M10)"
+requires-python = ">=3.12,<3.14"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "sio-core",
+    "sio-schemas",
+    "sio-spatial",
+    "numpy>=2.0",
+    # The PRD's forecaster. CPU-only, and imported lazily because the numba and pandas warm-up costs
+    # about three seconds — too much to pay at service start, or in every unit test run, for a model
+    # that may not be selected.
+    "statsforecast>=2.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sio_prediction"]
+
+[tool.uv.sources]
+sio-core = { workspace = true }
+sio-schemas = { workspace = true }
+sio-spatial = { workspace = true }

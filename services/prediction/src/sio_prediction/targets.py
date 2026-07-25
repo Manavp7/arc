@@ -1,0 +1,295 @@
+"""The forecasts an operator actually asks for (PRD M10).
+
+Everything here is built from `series` + `forecasters`, so each target is a choice of *what to measure*
+and *how to read the result* rather than a new modelling effort. That is the point of the split: adding
+"how busy will the fuel store be" should be a query and a bucket size, not a new model.
+
+Each target declares its own gap policy and bucket size, because those are properties of the quantity
+and getting them wrong is worse than choosing the wrong model. An empty bucket in a throughput series
+is a real zero; an empty bucket in a temperature series is unknown. Filling the second like the first
+predicts a freezing warehouse, confidently.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
+
+from sio_core import get_logger
+from sio_core.explain import ExplanationBuilder
+from sio_schemas import Forecast, ForecastPoint
+
+from .forecasters import Backtest, ForecastResult, backtest, forecast_series
+from .series import GapPolicy, Series
+
+log = get_logger("sio.prediction.targets")
+
+
+@dataclass(frozen=True)
+class TargetSpec:
+    """How to build and read one kind of forecast."""
+
+    target: str
+    bucket_s: float
+    horizon_buckets: int
+    policy: GapPolicy
+    aggregate: str
+    lookback_s: float
+    season_buckets: int | None = None
+    unit: str | None = None
+    non_negative: bool = False
+    """Whether values below zero are physically impossible.
+
+    Counts and occupancies cannot be negative, and an interval whose lower bound is -3 vehicles is the
+    clearest possible sign that a model has been extrapolated past its usefulness. Clamping is honest
+    here in a way it would not be for a temperature, where a negative value is simply cold.
+    """
+    description: str = ""
+
+
+# The catalogue. Adding a target is a row here plus a query, which is the intended cost.
+SPECS: dict[str, TargetSpec] = {
+    "throughput": TargetSpec(
+        target="throughput",
+        bucket_s=60.0,
+        horizon_buckets=15,
+        policy=GapPolicy.ZERO,
+        aggregate="sum",
+        lookback_s=3600.0,
+        unit="entries_per_min",
+        non_negative=True,
+        description="Gate entries per minute across the site",
+    ),
+    "occupancy": TargetSpec(
+        target="occupancy",
+        bucket_s=60.0,
+        horizon_buckets=15,
+        policy=GapPolicy.HOLD,
+        aggregate="max",
+        lookback_s=3600.0,
+        unit="entities",
+        non_negative=True,
+        description="Distinct entities present in a zone",
+    ),
+    "temperature": TargetSpec(
+        target="temperature",
+        bucket_s=60.0,
+        horizon_buckets=20,
+        policy=GapPolicy.HOLD,
+        aggregate="mean",
+        lookback_s=7200.0,
+        unit="celsius",
+        description="Zone temperature, for early warning of a thermal event",
+    ),
+    "battery": TargetSpec(
+        target="battery",
+        bucket_s=30.0,
+        horizon_buckets=40,
+        policy=GapPolicy.HOLD,
+        aggregate="min",
+        lookback_s=1800.0,
+        unit="percent",
+        non_negative=True,
+        description="Drone battery level, and when it will need to return",
+    ),
+    "vibration": TargetSpec(
+        target="machine_failure_risk",
+        bucket_s=60.0,
+        horizon_buckets=15,
+        policy=GapPolicy.HOLD,
+        aggregate="max",
+        lookback_s=7200.0,
+        unit="mm_s",
+        non_negative=True,
+        description="Machine vibration trend, as a proxy for developing failure",
+    ),
+}
+
+
+@dataclass
+class TargetForecast:
+    """A forecast plus the evidence for how much to trust it."""
+
+    spec: TargetSpec
+    series: Series
+    result: ForecastResult
+    backtest_result: Backtest | None
+    zone_id: str | None = None
+    entity_id: str | None = None
+
+    @property
+    def points(self) -> list[ForecastPoint]:
+        return self.result.points
+
+    def confidence(self) -> float:
+        """Confidence grounded in measured interval coverage, not in a feeling.
+
+        Starts from how well this method's intervals actually held up on held-out data for this series,
+        and is reduced when the series was largely filled in by the gap policy. A forecast built mostly
+        from invented buckets should not be presented with the same confidence as one built from
+        observations, and nothing else in the output would reveal the difference.
+        """
+        base = 0.4
+        if self.backtest_result is not None:
+            # A calibrated interval is the strongest evidence available that the forecast is usable.
+            base = 0.8 if self.backtest_result.calibrated else 0.35
+        base *= 0.5 + 0.5 * self.series.coverage
+        if self.series.is_flat:
+            base *= 0.7  # a flat series may be a stuck sensor rather than a stable quantity
+        return round(max(0.05, min(0.95, base)), 3)
+
+    def to_forecast(self, tenant_id: str, *, made_at: datetime) -> Forecast:
+        spec = self.spec
+        points = self.points
+        if spec.non_negative:
+            points = [
+                ForecastPoint(
+                    ts=point.ts,
+                    value=max(0.0, point.value),
+                    lo=max(0.0, point.lo) if point.lo is not None else None,
+                    hi=max(0.0, point.hi) if point.hi is not None else None,
+                )
+                for point in points
+            ]
+
+        explanation = ExplanationBuilder(summary=self._summary())
+        explanation.add_model(self.result.model_name, note=spec.description or None)
+        for note in self.result.notes:
+            explanation.add_note(note)
+        explanation.add_note(
+            f"built from {len(self.series)} buckets of {spec.bucket_s:.0f}s "
+            f"({self.series.coverage:.0%} observed, {self.series.gaps} filled by "
+            f"the '{spec.policy}' gap policy)"
+        )
+        if self.backtest_result is not None:
+            coverage = self.backtest_result.coverage
+            explanation.add_note(
+                f"on held-out data the {self.backtest_result.level:.0%} interval contained the truth "
+                f"{coverage:.0%} of the time over {self.backtest_result.folds} folds "
+                f"(MAE {self.backtest_result.mae:.3g})"
+                + (
+                    ""
+                    if self.backtest_result.calibrated
+                    else " — NOT calibrated, treat with caution"
+                )
+            )
+        else:
+            explanation.add_note(
+                "not enough history to backtest the intervals, so their width is unverified"
+            )
+        if spec.non_negative:
+            explanation.add_note(
+                f"clamped at zero: a negative {spec.unit or 'value'} is impossible"
+            )
+
+        return Forecast(
+            tenant_id=tenant_id,
+            target=spec.target,
+            zone_id=self.zone_id,
+            entity_id=self.entity_id,
+            ts=made_at,
+            horizon_s=spec.bucket_s * spec.horizon_buckets,
+            points=points,
+            model_name=self.result.model_name,
+            confidence=self.confidence(),
+            interval_level=self.result.interval_level,
+            explanation=explanation.build(),
+        )
+
+    def _summary(self) -> str:
+        if not self.points:
+            return f"No {self.spec.target} forecast: insufficient history"
+        last = self.series.values[-1]
+        end = self.points[-1]
+        minutes = self.spec.bucket_s * self.spec.horizon_buckets / 60
+        direction = "steady"
+        if end.value > last * 1.15 + 0.01:
+            direction = "rising"
+        elif end.value < last * 0.85 - 0.01:
+            direction = "falling"
+        where = f" in {self.zone_id}" if self.zone_id else ""
+        return (
+            f"{self.spec.target}{where} {direction}: {last:.3g} now, "
+            f"{end.value:.3g} predicted in {minutes:.0f} min "
+            f"({end.lo:.3g} to {end.hi:.3g} at {self.result.interval_level:.0%})"
+            if end.lo is not None and end.hi is not None
+            else f"{self.spec.target}{where} {direction}: {end.value:.3g} predicted in {minutes:.0f} min"
+        )
+
+
+def build(
+    spec: TargetSpec,
+    series: Series,
+    *,
+    level: float = 0.9,
+    zone_id: str | None = None,
+    entity_id: str | None = None,
+    run_backtest: bool = True,
+) -> TargetForecast:
+    """Forecast one series against one spec, and measure the intervals while we are here."""
+    season = spec.season_buckets
+    result = forecast_series(
+        series, horizon=spec.horizon_buckets, level=level, season_length=season
+    )
+    measured = (
+        backtest(series, horizon=min(5, spec.horizon_buckets), level=level, season_length=season)
+        if run_backtest
+        else None
+    )
+    return TargetForecast(
+        spec=spec,
+        series=series,
+        result=result,
+        backtest_result=measured,
+        zone_id=zone_id,
+        entity_id=entity_id,
+    )
+
+
+def time_to_threshold(
+    points: list[ForecastPoint], *, threshold: float, falling: bool = True
+) -> float | None:
+    """Seconds until the forecast crosses a threshold, using the *interval*, not the centre.
+
+    Deliberately pessimistic for a falling quantity: a drone should turn back when its battery *might*
+    hit the reserve, not when its central estimate does. Taking the point forecast here is how a fleet
+    ends up with an aircraft down in a yard, having been technically correct on average.
+    """
+    for point in points:
+        bound = (point.lo if falling else point.hi) or point.value
+        crossed = bound <= threshold if falling else bound >= threshold
+        if crossed:
+            return max(0.0, (point.ts - points[0].ts).total_seconds())
+    return None
+
+
+def congestion_from_occupancy(
+    forecast: TargetForecast, *, capacity: int | None
+) -> dict[str, Any] | None:
+    """Turn an occupancy forecast into a congestion statement.
+
+    Congestion is not a separate measurement; it is occupancy read against capacity. Modelling it
+    independently would produce two numbers that could disagree about the same zone, and an operator
+    with two contradictory answers has none.
+    """
+    if not capacity or not forecast.points:
+        return None
+    breach = next(
+        (
+            point
+            for point in forecast.points
+            if (point.hi if point.hi is not None else point.value) >= capacity
+        ),
+        None,
+    )
+    peak = max((point.hi if point.hi is not None else point.value) for point in forecast.points)
+    return {
+        "zone_id": forecast.zone_id,
+        "capacity": capacity,
+        "predicted_peak": round(peak, 2),
+        "will_exceed": breach is not None,
+        # The upper bound, not the centre: the useful question is whether it *might* overflow.
+        "eta_s": round((breach.ts - forecast.points[0].ts).total_seconds(), 1) if breach else None,
+        "headroom": round(capacity - peak, 2),
+    }
