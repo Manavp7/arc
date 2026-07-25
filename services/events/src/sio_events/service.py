@@ -70,9 +70,18 @@ class EventsService(SioService):
         self._facts_seen = 0
         self._anomalies = 0
         self._recent: list[Event] = []
+        self._source_zones: dict[str, str] = {}
+        """Which zone each sensor watches.
+
+        Without this a fire event says nothing about WHERE. A detection fact carries a camera id, not a
+        zone — so the fire response playbook dispatched a drone "to unknown" and fell back to the default
+        gate, which is a response nobody can act on. The camera's zone is in the `sources` table; the event
+        just has to carry it.
+        """
 
     async def setup(self) -> None:
         await self.pool.open()
+        await self._load_source_zones()
         ruleset = self.engine.ruleset
         self.log.info(
             "events.ready",
@@ -89,6 +98,21 @@ class EventsService(SioService):
             # Loud, but not fatal. A malformed rule file must not take the engine down, or one typo
             # disables the fire rule.
             self.log.warning("events.rule_errors", count=len(ruleset.errors), errors=ruleset.errors)
+
+    async def _load_source_zones(self) -> None:
+        """Map sensor to zone once, so every event derived from a detection can say where it happened."""
+        rows = await self.pool.fetch(
+            "SELECT source_id, zone_id FROM sources WHERE tenant_id = %s AND zone_id IS NOT NULL",
+            (self.settings.tenant_id,),
+        )
+        self._source_zones = {str(row["source_id"]): str(row["zone_id"]) for row in rows}
+        self.log.info("events.source_zones", mapped=len(self._source_zones))
+        if not self._source_zones:
+            self.log.warning(
+                "events.no_source_zones",
+                effect="events from detections will not carry a zone",
+                hint="run: just seed",
+            )
 
     async def health_checks(self) -> dict[str, str]:
         checks = {"postgres": "ok" if await self.pool.ping() else "unreachable"}
@@ -156,6 +180,19 @@ class EventsService(SioService):
                 f"{rule.window.seconds:.0f}s window"
             )
 
+        # A detection knows its camera, not its zone. Resolve it, so the event says where — and record
+        # that it was inferred from the camera rather than observed directly.
+        zone_id = match.fact.zone_id
+        inferred_zone = False
+        if not zone_id and match.fact.source_id:
+            zone_id = self._source_zones.get(match.fact.source_id)
+            inferred_zone = zone_id is not None
+        if inferred_zone:
+            explanation.add_note(
+                f"zone {zone_id} inferred from the sensor {match.fact.source_id} that reported it, "
+                "not observed directly"
+            )
+
         latitude, longitude = match.fact.get("lat"), match.fact.get("lon")
         event = Event(
             tenant_id=match.fact.tenant_id or self.settings.tenant_id,
@@ -163,7 +200,7 @@ class EventsService(SioService):
             severity=self._severity(rule.severity),
             entities=match.entity_ids,
             geo=Geo(lat=float(latitude), lon=float(longitude)) if latitude and longitude else None,
-            zone_id=match.fact.zone_id,
+            zone_id=zone_id,
             ts=match.fact.ts,
             detected_ts=utc_now(),
             confidence=rule.confidence,
@@ -174,6 +211,7 @@ class EventsService(SioService):
                 **rule.attributes,
                 "rule_shape": rule.shape,
                 "subject": match.subject,
+                **({"zone_inferred_from_sensor": True} if inferred_zone else {}),
                 **(
                     {"aggregate": match.aggregate_value}
                     if match.aggregate_value is not None

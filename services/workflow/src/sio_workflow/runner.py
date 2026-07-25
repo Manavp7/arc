@@ -292,10 +292,13 @@ class RunLedger:
     def get(self, run_id: str) -> WorkflowRun | None:
         return next((run for run in self.runs if run.run_id == run_id), None)
 
-    def describe(self) -> dict[str, Any]:
+    def describe(self, limit: int = 10) -> dict[str, Any]:
+        """Recent runs. The limit is a parameter because a fixed ten hid the only fire response among
+        fifteen dwell escalations, and the run someone is looking for is rarely the most recent."""
         return {
             "runs": len(self.runs),
             "suppressed_by_cooldown": self.suppressed,
+            "by_playbook": _counted(run.playbook for run in self.runs),
             "recent": [
                 {
                     "run_id": run.run_id,
@@ -308,9 +311,16 @@ class RunLedger:
                         for step in run.steps
                     ],
                 }
-                for run in reversed(self.runs[-10:])
+                for run in reversed(self.runs[-limit:])
             ],
         }
+
+
+def _counted(values: Any) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        counts[str(value)] = counts.get(str(value), 0) + 1
+    return dict(sorted(counts.items(), key=lambda item: -item[1]))
 
 
 __all__ = ["InlineRunner", "ProgressHook", "RunLedger", "RunOutcome", "Runner"]

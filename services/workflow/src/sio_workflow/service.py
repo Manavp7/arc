@@ -322,9 +322,9 @@ class WorkflowService(SioService):
             return {"playbooks": [playbook.describe() for playbook in PLAYBOOKS.values()]}
 
         @app.get("/workflow/runs", tags=["workflow"])
-        async def runs() -> dict[str, Any]:
+        async def runs(limit: int = 20) -> dict[str, Any]:
             """Recent runs with per-step status — what the UI renders as live progress."""
-            return self.ledger.describe()
+            return self.ledger.describe(limit=limit)
 
         @app.get("/workflow/runs/{run_id}", tags=["workflow"])
         async def run_detail(run_id: str) -> dict[str, Any]:

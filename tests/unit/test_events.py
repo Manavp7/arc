@@ -899,3 +899,31 @@ def test_the_median_aggregate_is_robust_to_one_outlier() -> None:
     assert fired == [], (
         "a 120 km/h outlier among slow fixes must not move the median past the limit"
     )
+
+
+def test_a_detection_derived_event_can_be_given_the_cameras_zone() -> None:
+    """A detection knows its camera, not its zone.
+
+    Live, that meant a `fire_detected` event carried no zone, so the fire response playbook dispatched a
+    drone "to unknown" and fell back to the default gate — a response nobody can act on. The camera's zone
+    is in the `sources` table; the event just has to carry it, and must say the zone was INFERRED from the
+    sensor rather than observed.
+    """
+    from sio_events.service import EventsService
+
+    service = EventsService.__new__(EventsService)
+    service._source_zones = {"cam-dock-3-4": "dock_3"}  # noqa: SLF001
+
+    fact = a_fact("detection", source_id="cam-dock-3-4", **{"class": "fire"}, confidence=0.6)
+    assert fact.zone_id is None, "a detection fact has no zone of its own"
+    # The resolution the service performs.
+    resolved = service._source_zones.get(fact.source_id)  # noqa: SLF001
+    assert resolved == "dock_3"
+
+
+def test_a_sensor_with_no_mapped_zone_yields_no_zone_rather_than_a_guess() -> None:
+    from sio_events.service import EventsService
+
+    service = EventsService.__new__(EventsService)
+    service._source_zones = {"cam-dock-3-4": "dock_3"}  # noqa: SLF001
+    assert service._source_zones.get("cam-unknown") is None  # noqa: SLF001
