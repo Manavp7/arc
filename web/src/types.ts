@@ -254,3 +254,36 @@ export interface HealthStatus {
   lag: Record<string, number>;
   adapters: Record<string, string>;
 }
+
+
+/** A planned replay, as the server describes what it will actually deliver. */
+export interface ReplayPlan {
+  replay_id: string;
+  from: string;
+  to: string;
+  window_s: number;
+  speed: number;
+  /** Seconds of history each frame stands for. This — not speed — is what the frame cap degrades. */
+  resolution_s: number;
+  step_s: number;
+  frames: number;
+  frame_interval_s: number;
+  wall_duration_s: number;
+  capped: boolean;
+  stream: string;
+}
+
+/** One reconstructed frame from a replay stream. */
+export interface ReplayFrame {
+  replay_id: string;
+  frame: number;
+  frames: number;
+  ts: string;
+  progress: number;
+  resolution_s: number;
+  /** How far behind schedule this frame is. The only honest measure of delivered speed. */
+  lag_s: number;
+  entities: Entity[];
+  events: SioEvent[];
+  counts: { total: number; movers: number; static: number; in_zones: number };
+}

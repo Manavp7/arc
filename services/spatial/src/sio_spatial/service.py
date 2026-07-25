@@ -65,6 +65,13 @@ class SpatialService(SioService):
         self._edges_closed = 0
         self._entities_seen = 0
         self._expired = 0
+        self._labels: dict[str, str] = {}
+        """Last known label per entity, so an inferred exit can name what left.
+
+        An expiry has no Entity to hand — nothing reported it, which is the whole point — so without a
+        cache the event reads "ent_01KYBNWZZR1DWFBMPR3ZSW30CW is no longer tracked in Fuel store". That
+        is technically complete and useless to the person reading the feed.
+        """
 
     async def setup(self) -> None:
         await self.pool.open()
@@ -124,6 +131,8 @@ class SpatialService(SioService):
             # would emit an entry event for every camera on the site each time one is republished.
             return
         self._entities_seen += 1
+        if entity.label:
+            self._labels[entity.entity_id] = entity.label
         changes = self.tracker.observe(entity.entity_id, entity.state.geo, entity.state.ts)
         for change in changes:
             await self._publish_change(change, entity, ctx)
@@ -246,8 +255,9 @@ class SpatialService(SioService):
         the departure at the last moment anything was actually known.
         """
         zone = self.index.get(change.zone_id)
+        name = self._labels.get(change.entity_id, change.entity_id)
         explanation = ExplanationBuilder(
-            summary=f"{change.entity_id} is no longer tracked in {change.zone_name}"
+            summary=f"{name} is no longer tracked in {change.zone_name}"
         )
         explanation.add_rule("spatial.membership_expired", note="exit inferred from silence")
         explanation.add_note(
@@ -284,6 +294,11 @@ class SpatialService(SioService):
         await self._emit(Topic.EVENTS, event, None)
         self._events_published += 1
         self._expired += 1
+
+        if not self.tracker.zones_of(change.entity_id):
+            # No memberships left: drop the label. Entity ids are minted per run, so an unbounded cache
+            # keyed by them is a slow leak.
+            self._labels.pop(change.entity_id, None)
 
         relationship = self._open_edges.pop((change.entity_id, change.zone_id), None)
         if relationship is None:

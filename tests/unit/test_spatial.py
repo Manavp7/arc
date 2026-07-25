@@ -584,3 +584,60 @@ async def test_an_expired_membership_publishes_an_inferred_exit() -> None:
     assert any("indistinguishable" in note for note in event.explanation.notes), (
         "it may have left or its tracker may have failed, and the record should say so"
     )
+
+
+async def test_an_inferred_exit_names_the_entity_rather_than_its_id() -> None:
+    """An expiry has no Entity to hand — nothing reported it, which is the whole point.
+
+    Without a label cache the feed reads "ent_01KYBNWZZR1DWFBMPR3ZSW30CW is no longer tracked in Fuel
+    store", which is technically complete and useless to the person reading it. Observed in the console
+    during a replay.
+    """
+    from sio_schemas import Entity, EntityType
+    from sio_spatial.service import SpatialService
+
+    service = SpatialService()
+    service.index.replace([a_zone("fuel_store", side_m=60)])
+    service.tracker = MembershipTracker(service.index, enter_confirm_s=1.0)
+    ctx = RecordingContext()
+    service.publish = ctx.publish  # type: ignore[assignment,method-assign]
+    start = utc_now()
+
+    entity = Entity(
+        entity_id="ent_long_id_nobody_can_read",
+        tenant_id="default",
+        type=EntityType.TRUCK,
+        label="Truck ABC-123",
+    )
+    # Drive the real on_message path so the label cache is filled the way production fills it, rather
+    # than by poking the attribute — the point of the test is that the caching happens.
+    from sio_schemas import BusMessage, EntityState, Geo, Topic
+
+    positioned = entity.model_copy(
+        update={"state": EntityState(ts=start, geo=ORIGIN, confidence=0.9)}
+    )
+    await service.on_message(BusMessage.of(Topic.ENTITIES, positioned), ctx)  # type: ignore[arg-type]
+    assert service._labels[entity.entity_id] == "Truck ABC-123"
+
+    later = positioned.model_copy(
+        update={
+            "state": EntityState(ts=start + timedelta(seconds=2), geo=ORIGIN, confidence=0.9),
+        }
+    )
+    await service.on_message(BusMessage.of(Topic.ENTITIES, later), ctx)  # type: ignore[arg-type]
+
+    for change in service.tracker.expire_stale(start + timedelta(seconds=600), max_silence_s=60.0):
+        await service._publish_expiry(change)
+
+    exits = [
+        payload
+        for topic, payload in ctx.published
+        if topic == "events" and payload.attributes.get("inferred")
+    ]
+    assert exits, "the expiry must publish an event"
+    assert "Truck ABC-123" in (exits[0].explanation.summary or "")
+    assert entity.entity_id not in (exits[0].explanation.summary or ""), (
+        "the raw id is not what a human reads"
+    )
+    # And the cache must not grow forever: entity ids are minted per run.
+    assert entity.entity_id not in service._labels

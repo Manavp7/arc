@@ -414,6 +414,144 @@ code {
   color: var(--text-dim);
 }
 
+/* ------------------------------------------------------- timeline scrubber */
+.timeline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.timeline-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.tl-btn {
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 9px;
+  color: var(--text);
+  background: var(--bg-raised, #1a2130);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.tl-btn:hover:not(:disabled) {
+  border-color: var(--accent, #4f9cf9);
+}
+
+.tl-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* The live button reads as the current state when it is disabled, which is when it IS the state. */
+.tl-live:disabled {
+  color: #55d97a;
+  border-color: #2c6b3f;
+  opacity: 1;
+}
+
+.tl-select {
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 4px;
+  color: var(--text);
+  background: var(--bg-raised, #1a2130);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.timeline-track {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 120px;
+  height: 34px;
+  cursor: ew-resize;
+  /* Stops a drag across the strip from selecting the page text, which otherwise highlights the whole
+     footer blue the first time anyone scrubs. */
+  user-select: none;
+  touch-action: none;
+}
+
+.timeline-density {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+}
+
+.tl-bar {
+  flex: 1 1 auto;
+  min-width: 1px;
+  background: #2f4661;
+  border-radius: 1px 1px 0 0;
+}
+
+.tl-bar-severe {
+  background: #b4562f;
+}
+
+.timeline-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: #f2f6ff;
+  box-shadow: 0 0 6px rgba(242, 246, 255, 0.6);
+  pointer-events: none;
+}
+
+.timeline-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: #4f9cf9;
+  pointer-events: none;
+}
+
+.timeline-readout {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-dim);
+  /* Truncate rather than push the track out of the footer: a long status line must not be able to
+     squeeze the control it describes. */
+  max-width: 46%;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.tl-clock {
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--text);
+}
+
+.tl-clock-live {
+  color: #55d97a;
+}
+
+.tl-ago,
+.tl-status,
+.tl-window {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tl-lag {
+  color: #e0a13c;
+}
+
 /* --------------------------------------------------------------- badges */
 .badge {
   display: inline-flex;

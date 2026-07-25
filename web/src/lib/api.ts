@@ -7,6 +7,7 @@ import type {
   Forecast,
   HealthStatus,
   Mission,
+  ReplayPlan,
   SioEvent,
   Zone,
 } from "../types";
@@ -78,7 +79,40 @@ export const api = {
   timeline: (params: { from?: string; to?: string; limit?: number } = {}) =>
     request<SioEvent[]>(`/timeline${query(params)}`),
 
-  worldAt: (ts: string) => request<{ entities: Entity[]; ts: string }>(`/world/at${query({ ts })}`),
+  worldAt: (ts: string, presenceWindowS?: number) =>
+    request<{
+      entities: Entity[];
+      ts: string;
+      count: number;
+      counts: { total: number; movers: number; static: number; in_zones: number };
+      presence_window_s: number;
+    }>(`/world/at${query({ ts, presence_window_s: presenceWindowS })}`),
+
+  timelineBounds: () =>
+    request<{
+      start: string | null;
+      end: string | null;
+      span_s: number;
+      first_event: string | null;
+      last_event: string | null;
+    }>("/timeline/bounds"),
+
+  timelineDensity: (params: { from?: string; to?: string; buckets?: number } = {}) =>
+    request<{
+      from: string;
+      to: string;
+      bucket_s: number;
+      buckets: number;
+      counts: number[];
+      severe: number[];
+      total: number;
+    }>(`/timeline/density${query(params)}`),
+
+  planReplay: (params: { from?: string; to?: string; speed?: number; step_s?: number } = {}) =>
+    request<ReplayPlan>(`/replay${query(params)}`, { method: "POST" }),
+
+  cancelReplay: (replayId: string) =>
+    request<{ cancelled: boolean }>(`/replay/${encodeURIComponent(replayId)}`, { method: "DELETE" }),
 
   nearby: (params: { lat: number; lon: number; radius_m: number; type?: string }) =>
     request<Entity[]>(`/spatial/nearby${query(params)}`),

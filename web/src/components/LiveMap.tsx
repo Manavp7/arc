@@ -301,7 +301,15 @@ export function LiveMap() {
   // Subscribe to the stored Map, then derive. Subscribing to a *filtered array* would hand React a
   // new snapshot on every read and loop forever (see the note in store.ts).
   const entityMap = useSioStore((state) => state.entities);
-  const entities = useMemo(() => positionedEntities(entityMap), [entityMap]);
+  const historyMap = useSioStore((state) => state.historyEntities);
+  const replayAt = useSioStore((state) => state.replayAt);
+  // One source of truth for what the map draws: the reconstruction while scrubbing, the live world
+  // otherwise. Two maps rendered together would put the past and the present on screen at once, which
+  // is worse than either.
+  const entities = useMemo(
+    () => positionedEntities(replayAt ? historyMap : entityMap),
+    [replayAt, historyMap, entityMap],
+  );
   const events = useSioStore((state) => state.events);
   const zones = useSioStore((state) => state.zones);
   const selectedId = useSioStore((state) => state.selectedEntityId);

@@ -29,6 +29,21 @@ interface SioState {
   selectedEntityId: string | null;
   /** When set, the UI shows the world as it was at this instant instead of live (UC5). */
   replayAt: string | null;
+  /** Reconstructed entities for `replayAt`.
+   *
+   * Kept apart from the live `entities` map rather than overwriting it. Overwriting would mean the
+   * live world had to be re-fetched on every return to LIVE, and — worse — a stray live message
+   * arriving mid-scrub would silently mix present and past in one view.
+   */
+  historyEntities: Map<string, Entity>;
+  /** Events from the replayed instant.
+   *
+   * Without this the map replays while the feed keeps showing live events, so the console describes two
+   * different moments at once — which is worse than not replaying at all, because it looks correct.
+   */
+  historyEvents: SioEvent[];
+  replayMode: "live" | "scrubbing" | "playing";
+  replayProgress: number;
   lastMessageAt: string | null;
 
   setConnection: (status: ConnectionStatus) => void;
@@ -45,6 +60,13 @@ interface SioState {
   setZones: (zones: Zone[]) => void;
   selectEntity: (entityId: string | null) => void;
   setReplayAt: (ts: string | null) => void;
+  setHistory: (
+    ts: string,
+    entities: Entity[],
+    mode: "scrubbing" | "playing",
+    options?: { progress?: number; events?: SioEvent[] },
+  ) => void;
+  returnToLive: () => void;
   reset: () => void;
 }
 
@@ -77,6 +99,10 @@ export const useSioStore = create<SioState>((set) => ({
   zones: [],
   selectedEntityId: null,
   replayAt: null,
+  historyEntities: new Map(),
+  historyEvents: [],
+  replayMode: "live" as const,
+  replayProgress: 0,
   lastMessageAt: null,
 
   setConnection: (status) => set({ connection: status }),
@@ -131,7 +157,37 @@ export const useSioStore = create<SioState>((set) => ({
   setMissions: (missions) => set({ missions }),
   setZones: (zones) => set({ zones }),
   selectEntity: (entityId) => set({ selectedEntityId: entityId }),
-  setReplayAt: (ts) => set({ replayAt: ts }),
+  setReplayAt: (ts) =>
+    set(ts === null ? { replayAt: null, replayMode: "live", replayProgress: 0 } : { replayAt: ts }),
+
+  setHistory: (ts, entities, mode, options = {}) => {
+    // A fresh Map each time rather than mutating: Zustand compares by reference, and mutating in place
+    // would leave subscribers looking at a Map they think has not changed.
+    const next = new Map<string, Entity>();
+    for (const entity of entities) next.set(entity.entity_id, entity);
+    set((state) => ({
+      replayAt: ts,
+      historyEntities: next,
+      replayMode: mode,
+      replayProgress: options.progress ?? 0,
+      // A replay frame carries the events inside its own step, which are usually none. Keep the last
+      // non-empty set so the feed does not flicker empty between interesting moments, and cap it.
+      historyEvents: options.events?.length
+        ? [...options.events, ...state.historyEvents].slice(0, 60)
+        : state.historyEvents,
+    }));
+  },
+
+  returnToLive: () =>
+    set({
+      replayAt: null,
+      replayMode: "live",
+      replayProgress: 0,
+      // Drop the reconstruction. Holding it would keep a whole historical world alive for a view
+      // nothing is showing.
+      historyEntities: new Map(),
+      historyEvents: [],
+    }),
 
   reset: () =>
     set({
@@ -143,6 +199,10 @@ export const useSioStore = create<SioState>((set) => ({
       missions: [],
       selectedEntityId: null,
       replayAt: null,
+  historyEntities: new Map(),
+  historyEvents: [],
+  replayMode: "live" as const,
+  replayProgress: 0,
     }),
 }));
 

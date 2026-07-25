@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { LiveMap } from "./components/LiveMap";
+import { Timeline } from "./components/Timeline";
 import { api } from "./lib/api";
 import { connectStream } from "./lib/stream";
 import { openAlerts, useSioStore } from "./store";
@@ -42,7 +43,12 @@ function ConnectionBadge() {
 }
 
 function EventFeed() {
-  const events = useSioStore((state) => state.events);
+  const liveEvents = useSioStore((state) => state.events);
+  const historyEvents = useSioStore((state) => state.historyEvents);
+  const replayAt = useSioStore((state) => state.replayAt);
+  // The feed follows the scrubber. A map showing 03:44 beside a feed showing 03:56 describes two
+  // different moments at once, which is worse than not replaying at all because it looks correct.
+  const events = replayAt ? historyEvents : liveEvents;
   const selectEntity = useSioStore((state) => state.selectEntity);
 
   if (events.length === 0) {
@@ -171,7 +177,10 @@ export default function App() {
   const setZones = useSioStore((state) => state.setZones);
   const alerts = useSioStore((state) => state.alerts);
   const unresolvedAlerts = useMemo(() => openAlerts(alerts), [alerts]);
-  const entityCount = useSioStore((state) => state.entities.size);
+  const liveCount = useSioStore((state) => state.entities.size);
+  const historyCount = useSioStore((state) => state.historyEntities.size);
+  const scrubbing = useSioStore((state) => state.replayAt !== null);
+  const entityCount = scrubbing ? historyCount : liveCount;
 
   // Initial snapshot, then live updates. Loading the snapshot first means the map is populated
   // immediately rather than filling in as messages happen to arrive.
@@ -267,7 +276,9 @@ export default function App() {
 
       <footer className="timeline-strip">
         <span className="timeline-label">timeline</span>
-        <p className="empty">The scrubber arrives in Phase 3.</p>
+        <ErrorBoundary label="the timeline">
+          <Timeline />
+        </ErrorBoundary>
       </footer>
     </div>
   );
