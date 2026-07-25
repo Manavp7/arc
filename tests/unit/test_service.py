@@ -175,16 +175,63 @@ def test_health_and_metrics_endpoints_are_served(settings, memory_bus) -> None:
         assert "sio_up" in metrics.text
 
 
-def test_services_can_add_their_own_routes(settings, memory_bus) -> None:
+def test_services_can_add_their_own_routes(settings, memory_bus, bearer) -> None:
+    """A service's own routes are governed by the shared runtime, without the service arranging it.
+
+    This test used to call `/custom` with no token and expect a payload. It now demonstrates all three
+    states, because that is the property Phase 5 added and the reason the test changed:
+
+    1. no token → 401, never a default principal;
+    2. a token, but a path no policy rule covers → 403 naming the action;
+    3. a mapped path → served.
+
+    The second is the interesting one. A new route is deliberately DENIED rather than allowed: an unmapped
+    path gets the action `unmapped.request`, which nothing permits. The alternative — allow-by-default for
+    anything the action map does not recognise — would mean every endpoint added in a later phase was
+    silently unprotected while looking governed.
+    """
+
     class WithRoutes(RecordingService):
         def routes(self, app: FastAPI) -> None:
             @app.get("/custom")
             async def custom() -> dict[str, bool]:
                 return {"ok": True}
 
+            @app.get("/alerts/custom")
+            async def mapped() -> dict[str, bool]:
+                return {"ok": True}
+
     service = WithRoutes(settings, memory_bus)
     with TestClient(service.app) as client:
-        assert client.get("/custom").json() == {"ok": True}
+        anonymous = client.get("/custom")
+        assert anonymous.status_code == 401, "an unauthenticated request must not be served"
+        assert "bearer token" in anonymous.json()["detail"]
+
+        headers = {"Authorization": f"Bearer {bearer(roles=('operator',), clearance=1)}"}
+        unmapped = client.get("/custom", headers=headers)
+        assert unmapped.status_code == 403, (
+            "an unmapped path must be denied, not allowed by default"
+        )
+        assert unmapped.json()["action"] == "unmapped.request"
+
+        served = client.get("/alerts/custom", headers=headers)
+        assert served.status_code == 200
+        assert served.json() == {"ok": True}
+        # The response says which tenant answered, so a cross-tenant bug is visible in a curl.
+        assert served.headers["x-sio-tenant"] == settings.tenant_id
+
+
+def test_health_and_metrics_need_no_token(settings, memory_bus) -> None:
+    """A supervisor cannot hold a token before the service issuing tokens is up.
+
+    These two are the only unauthenticated paths for that reason, and the exclusion is worth a test of its
+    own: someone tightening the middleware later will otherwise break process supervision and the symptom
+    will be a service that never reports healthy.
+    """
+    service = RecordingService(settings, memory_bus)
+    with TestClient(service.app) as client:
+        assert client.get("/health").status_code == 200
+        assert client.get("/metrics").status_code == 200
 
 
 async def test_tick_runs_on_its_interval(settings, memory_bus) -> None:

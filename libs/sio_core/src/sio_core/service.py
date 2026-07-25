@@ -181,7 +181,65 @@ class SioService:
             return Response(content=self.metrics.render(), media_type="text/plain; version=0.0.4")
 
         self.routes(app)
+
+        # Governance last, so it wraps every route including the subclass's.
+        #
+        # Installed HERE, in the shared runtime, rather than per service. That is the whole fix for what the
+        # plan called the Phase 5 gap: "nothing calls it". The platform already had a PolicyDenied
+        # exception, a tenant_id on every table and a current_tenant() helper — and no middleware
+        # populating any of it, so every request ran as the configured default tenant with no principal.
+        #
+        # A service cannot opt out and cannot forget, because it never opts in.
+        from .guard import install_governance
+
+        install_governance(
+            app, service=self.name, settings=self.settings, audit=self._audit_decision
+        )
         return app
+
+    async def _audit_decision(self, decision: Any, request: Any) -> None:
+        """Publish an authorisation decision to the audit topic.
+
+        Allows as well as denials. A trail of denials answers "who was stopped"; a trail of allows answers
+        "who did this", and the second is the question actually asked after an incident.
+
+        Failures here are swallowed by design — see the note in `authz.authorise`. An audit sink that can
+        fail a request would make the outcome depend on the recorder, and one that can pass a request it
+        failed to record is worse. Logging and continuing is the least bad of the three.
+        """
+        if not self.settings.audit_enabled:
+            return
+        try:
+            from sio_schemas import AuditRecord, Topic
+
+            entry = AuditRecord(
+                tenant_id=decision.tenant or self.settings.tenant_id,
+                actor=decision.principal or "anonymous",
+                action=decision.action,
+                resource=decision.resource,
+                allowed=decision.allowed,
+                reason=decision.reason,
+                policy_engine=self.settings.policy_engine,
+                ip=getattr(getattr(request, "client", None), "host", None),
+                user_agent=(
+                    request.headers.get("user-agent") if hasattr(request, "headers") else None
+                ),
+                # Service, method and path go in `details` rather than becoming new top-level columns.
+                # The table revokes UPDATE and DELETE, so its shape is the most expensive thing in the
+                # schema to change — and none of these three is something anyone queries by.
+                details={
+                    "service": self.name,
+                    "method": getattr(request, "method", ""),
+                    "path": str(getattr(getattr(request, "url", None), "path", "")),
+                    "rule": decision.rule,
+                },
+            )
+            await self.publish(Topic.AUDIT, entry)
+            self._counters["audited"] = self._counters.get("audited", 0) + 1
+        except Exception as exc:
+            from .telemetry import describe_error
+
+            self.log.warning("service.audit_failed", error=describe_error(exc))
 
     async def health(self) -> HealthStatus:
         checks: dict[str, str] = {}

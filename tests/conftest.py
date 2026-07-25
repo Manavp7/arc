@@ -87,3 +87,49 @@ def sample_geo() -> object:
     from sio_schemas import Geo
 
     return Geo(lat=37.7749, lon=-122.4194)
+
+
+# --- governance ---------------------------------------------------------------------------------
+#
+# Phase 5 made a principal mandatory on every endpoint, which immediately broke twenty tests that were
+# calling routes with no token. That was the enforcement working, not a regression — but it means every
+# test touching HTTP now needs a token, and twenty copies of the token-minting code would be twenty places
+# to keep in step.
+#
+# So: two fixtures. `bearer` mints a token with whichever roles a test needs, and `client_for` builds an
+# authenticated TestClient. A test that wants to prove a DENIAL asks for no token and gets one, which is
+# the point — the negative tests must be as easy to write as the positive ones, or they will not be written.
+
+
+@pytest.fixture
+def bearer():
+    """Mint a dev bearer token with chosen roles, clearance, zones and PII scope."""
+    from sio_core.authn import DevJwtAuth
+
+    issuer = DevJwtAuth()
+
+    def mint(
+        *,
+        subject: str = "tester",
+        tenant_id: str | None = None,
+        roles: tuple[str, ...] = ("admin",),
+        clearance: int = 3,
+        zones: tuple[str, ...] = (),
+        pii_scope: bool = False,
+    ) -> str:
+        return issuer.issue(
+            subject=subject,
+            tenant_id=tenant_id,
+            roles=roles,
+            clearance=clearance,
+            zones=zones,
+            pii_scope=pii_scope,
+        )
+
+    return mint
+
+
+@pytest.fixture
+def auth_headers(bearer):
+    """Headers for an admin principal — the usual case for a test that is not about authorisation."""
+    return {"Authorization": f"Bearer {bearer()}"}

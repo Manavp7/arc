@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .authn import ANONYMOUS, DevJwtAuth, Principal, build_authenticator
+from .authz import Decision, authorise, policy_engine, require
 from .config import Settings, get_settings, reset_settings
 from .errors import (
     AdapterUnavailable,
@@ -16,6 +18,7 @@ from .errors import (
     ValidationFailed,
 )
 from .explain import ExplanationBuilder, merge_explanations
+from .guard import action_for, install_governance, principal_of
 from .ports import BlobStore, Bus, GraphStore, VectorStore
 from .registry import (
     close_all,
@@ -44,12 +47,15 @@ from .tenancy import current_tenant, tenant_scope
 __version__ = "0.1.0"
 
 __all__ = [
+    "ANONYMOUS",
     "AdapterUnavailable",
     "BlobStore",
     "Bus",
     "BusError",
     "ConfigError",
+    "Decision",
     "DependencyMissing",
+    "DevJwtAuth",
     "ExplanationBuilder",
     "GraphStore",
     "MessageContext",
@@ -58,6 +64,7 @@ __all__ = [
     "NotFound",
     "PgPool",
     "PolicyDenied",
+    "Principal",
     "Settings",
     "SioError",
     "SioService",
@@ -65,6 +72,9 @@ __all__ = [
     "ValidationFailed",
     "VectorStore",
     "__version__",
+    "action_for",
+    "authorise",
+    "build_authenticator",
     "close_all",
     "configure_logging",
     "current_tenant",
@@ -79,8 +89,12 @@ __all__ = [
     "get_settings",
     "get_trace_id",
     "get_vectors",
+    "install_governance",
     "merge_explanations",
     "override",
+    "policy_engine",
+    "principal_of",
+    "require",
     "reset_settings",
     "set_trace_id",
     "tenant_scope",

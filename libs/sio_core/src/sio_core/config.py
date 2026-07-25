@@ -317,6 +317,18 @@ class Settings(BaseSettings):
     agent_require_approval: bool = True
 
     # --- auth ---------------------------------------------------------------
+    auth_required: bool = True
+    """Whether a principal is required. True by default, and that default matters.
+
+    A governance layer that is off by default is one that ships off. The dev issuer at `/auth/dev/token`
+    makes "on" cheap — a token is one POST away — so there is no reason to default to the insecure setting.
+
+    `false` is honoured, for a developer who wants to curl an endpoint without ceremony, and the middleware
+    logs a loud warning at startup when it is set so the choice does not outlive its reason.
+    """
+    oidc_discovery_url: str = "http://127.0.0.1:8080/realms/sio/.well-known/openid-configuration"
+    oidc_audience: str = "sio-api"
+    opa_url: str = "http://127.0.0.1:8181"
     jwt_secret: str = "dev-only-change-me"
     jwt_issuer: str = "sio-dev"
     jwt_ttl_s: int = 86_400

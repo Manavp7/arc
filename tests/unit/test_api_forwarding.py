@@ -93,7 +93,7 @@ def app_and_stub(monkeypatch: pytest.MonkeyPatch):
     ids=[f"{m} {p.split('?')[0]}" for m, p, _ in FORWARDED],
 )
 def test_every_forwarded_route_reaches_its_service(
-    app_and_stub, method: str, path: str, payload: Any
+    app_and_stub, auth_headers: dict[str, str], method: str, path: str, payload: Any
 ) -> None:
     """A 500 here means the route cannot even call its own forwarding helper.
 
@@ -103,7 +103,9 @@ def test_every_forwarded_route_reaches_its_service(
     app, stub = app_and_stub
     stub.payload = payload
     with TestClient(app) as client:
-        response = client.request(method, path, json={} if method == "POST" else None)
+        response = client.request(
+            method, path, json={} if method == "POST" else None, headers=auth_headers
+        )
     assert response.status_code == 200, (
         f"{method} {path} returned {response.status_code}: {response.text[:300]}"
     )
@@ -112,7 +114,7 @@ def test_every_forwarded_route_reaches_its_service(
 
 
 def test_a_downstream_404_is_not_reported_as_the_service_being_down(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, auth_headers: dict[str, str]
 ) -> None:
     """Turning a 404 into a 503 would tell an operator the service is down when the id was wrong.
 
@@ -130,7 +132,7 @@ def test_a_downstream_404_is_not_reported_as_the_service_being_down(
 
     monkeypatch.setattr(httpx.AsyncClient, "__init__", patched)
     with TestClient(ApiService().app) as client:
-        response = client.get("/api/alerts/alt_nope")
+        response = client.get("/api/alerts/alt_nope", headers=auth_headers)
     assert response.status_code == 404
     # And the downstream's own message survives: "unknown alert 'alt_nope'" is actionable where
     # "the alerts service returned 404" is not, though both are technically true.
@@ -138,7 +140,7 @@ def test_a_downstream_404_is_not_reported_as_the_service_being_down(
 
 
 def test_an_unreachable_service_is_named_rather_than_returning_an_empty_list(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, auth_headers: dict[str, str]
 ) -> None:
     """An empty list is indistinguishable from "nothing is happening".
 
@@ -159,7 +161,7 @@ def test_an_unreachable_service_is_named_rather_than_returning_an_empty_list(
 
     monkeypatch.setattr(httpx.AsyncClient, "__init__", patched)
     with TestClient(ApiService().app) as client:
-        response = client.get("/api/alerts")
+        response = client.get("/api/alerts", headers=auth_headers)
     assert response.status_code == 503
     detail = response.json()["detail"]
     assert "alerts" in detail, "the failing service must be named"
