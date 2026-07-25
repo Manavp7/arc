@@ -33,9 +33,19 @@ just doctor     # verify every dependency, port and datastore — read this if a
 just services   # postgres, redis, neo4j, minio (+ temporal, grafana, ollama)
 just models     # ~45 MB of ONNX weights (detection, segmentation, ReID, CLIP), checksummed
 just dev        # all services + web, in an mprocs TUI
-just demo       # seed the yard and run the scripted incident
+just demo       # seeds the yard if needed, runs a scripted incident, narrates what to look at
 
 open http://localhost:5173
+```
+
+`just demo` prints a timestamped walkthrough naming which panel to open and when — see
+[docs/DEMO.md](docs/DEMO.md) for the five-minute script, including what to say if it is slow.
+Run it once before showing anyone: the first question to the copilot loads two gigabytes of model
+weights, so a cold answer takes ~17 s and a warm one ~7 s.
+
+```bash
+just demo-reset   # clear the working state (keeps all history) so the demo can be re-run
+just e2e          # the end-to-end rings against the running platform
 ```
 
 Low-RAM machine? `just dev-lite` runs every consumer in a single process.

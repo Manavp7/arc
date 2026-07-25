@@ -28,9 +28,15 @@ import sys
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import httpx
+
+#: Resolved once at import. Path.resolve() hits the filesystem, which ASYNC240 rightly objects to inside a
+#: coroutine — and neither of these ever changes, so computing them per-call was pointless as well as wrong.
+REPO = Path(__file__).resolve().parents[1]
+SEED_SCRIPT = Path(__file__).resolve().with_name("seed.py")
 
 API = "http://127.0.0.1:8000"
 INGEST = "http://127.0.0.1:8101"
@@ -169,8 +175,35 @@ async def ensure_site(client: httpx.AsyncClient, narration: Narration) -> bool:
     except httpx.HTTPError as exc:
         narration.fail(f"could not read the site: {type(exc).__name__}")
         return False
+
     if not zones:
-        narration.fail("no zones. Run: just seed")
+        # Seed it, rather than telling the reader to. The README's quickstart does not list `just seed`
+        # between `just dev` and `just demo`, so a reader following it exactly hit "no zones. Run: just
+        # seed" — a quickstart that does not work as written is worse than none, because the reader
+        # reasonably concludes the build is broken rather than the documentation.
+        #
+        # Seeding is idempotent and takes a couple of seconds, so doing it unprompted costs nothing on the
+        # runs where it was already done.
+        narration.say("no zones yet — seeding the site (this is idempotent)")
+        seed = await asyncio.create_subprocess_exec(
+            sys.executable,
+            str(SEED_SCRIPT),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=str(REPO),
+        )
+        output, _ = await seed.communicate()
+        if seed.returncode != 0:
+            narration.fail(
+                f"seeding failed (exit {seed.returncode}). Run `just seed` to see why:\n"
+                + output.decode(errors="replace")[-600:]
+            )
+            return False
+        narration.ok("site seeded")
+        zones = (await client.get(f"{API}/api/spatial/zones", timeout=10.0)).json()
+
+    if not zones:
+        narration.fail("the site is still empty after seeding. Try: just seed --clear")
         return False
     names = [zone.get("zone_id") for zone in zones]
     narration.ok(f"{len(zones)} zones: {', '.join(str(name) for name in names[:7])}")

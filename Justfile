@@ -148,6 +148,14 @@ demo-reset:
 check: lint typecheck test web-check
     @echo "✓ check passed"
 
+# The end-to-end rings. Needs a running platform — `just services && just dev` first.
+#
+# Separate from `just check` on purpose: `check` must pass on a laptop with nothing running, which is what
+# makes it usable as a pre-commit gate. These need fifteen processes and two minutes.
+e2e:
+    @echo "running the end-to-end rings against the live platform..."
+    SIO_TEST_INFRA=1 {{uv}} pytest tests/e2e tests/integration -v
+
 lint:
     {{uv}} ruff check .
     {{uv}} ruff format --check .
