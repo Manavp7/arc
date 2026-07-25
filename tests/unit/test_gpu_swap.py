@@ -429,3 +429,90 @@ def test_the_registry_still_selects_ollama_by_default(pristine_env: None) -> Non
     from sio_core import get_llm
 
     assert type(get_llm(Settings(_env_file=None))).__name__ == "OllamaLLM"
+
+
+# --- the stubs ----------------------------------------------------------------------------------------
+@pytest.mark.parametrize("name", sorted(__import__("sio_core.stubs", fromlist=["STUBS"]).STUBS))
+def test_every_stub_refuses_rather_than_silently_doing_nothing(name: str) -> None:
+    """The property that makes a stub safe.
+
+    An adapter that accepts work and discards it is the worst possible component in a pipeline: a bus that
+    acknowledges publishes into nothing produces a system where every counter is healthy and no data exists. So
+    every operation raises, and the message names what to install, what changes and what to use instead.
+
+    Parametrised over the registry rather than listing the five, so a stub added later is covered without
+    anybody remembering to add it here.
+    """
+    from sio_core.errors import ConfigError
+    from sio_core.stubs import STUBS
+
+    stub = STUBS[name]()
+    for operation in ("publish", "search", "detect", "forecast", "anything_at_all"):
+        with pytest.raises(ConfigError) as caught:
+            getattr(stub, operation)()
+        message = str(caught.value)
+        assert operation in message
+        assert "docs/GPU_SWAP.md" in message
+        # The three things somebody needs: what it wants, what it changes, what to do now.
+        assert "needs:" in message
+        assert "changes:" in message
+        assert "instead:" in message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", sorted(__import__("sio_core.stubs", fromlist=["STUBS"]).STUBS))
+async def test_a_stub_ping_returns_false_rather_than_raising(name: str) -> None:
+    """`ping` is the one exception to refusing.
+
+    Health checks call it on a loop, and an exception there takes down the endpoint whose job is to report the
+    problem. False is the honest answer: not reachable.
+    """
+    from sio_core.stubs import STUBS
+
+    stub = STUBS[name]()
+    assert await stub.ping() is False
+    await stub.close()  # closing something never opened must not be an error path
+
+
+def test_a_stub_describes_itself_for_doctor() -> None:
+    from sio_core.stubs import KafkaBusStub
+
+    described = KafkaBusStub().describe()
+    assert described["status"] == "wired, not implemented here"
+    assert "redis" in described["fallback"]
+
+
+def test_the_whole_gpu_profile_constructs(pristine_env: None) -> None:
+    """The plan's acceptance: `SIO_PROFILE=gpu` BOOTS.
+
+    Every seam resolves to something — real where it could be verified here, an honest stub where it could not.
+    A profile that raised on construction could not be inspected by `just doctor` before the hardware arrives,
+    which is exactly when somebody wants to look at it.
+    """
+    from sio_core import get_bus, get_graph, get_vectors
+
+    settings = Settings(_env_file=None, profile="gpu")
+    assert type(get_bus(settings)).__name__ == "KafkaBusStub"
+    assert type(get_vectors(settings)).__name__ == "QdrantVectorStoreStub"
+    # Memgraph is REAL: it speaks Bolt and Cypher, so the Neo4j adapter reaches it unchanged. The only seam in
+    # the profile that was free.
+    assert type(get_graph(settings)).__name__ == "Neo4jGraphStore"
+
+
+def test_memgraph_is_a_legal_graph_backend() -> None:
+    """Because the profile selects it, and a Literal that does not include it would fail at load."""
+    assert Settings(_env_file=None, graph_backend="memgraph").graph_backend == "memgraph"
+
+
+def test_every_stub_documents_what_using_it_would_change() -> None:
+    """An adapter listed as "coming later" with no statement of consequence is a name, not a plan.
+
+    The `changes` field is what tells somebody whether they need it, and it is asserted non-trivial so a future
+    stub cannot be added with an empty one.
+    """
+    from sio_core.stubs import STUBS
+
+    for name, stub_class in STUBS.items():
+        assert len(stub_class.changes) > 40, f"{name} does not say what it would change"
+        assert stub_class.requires, f"{name} does not say what it needs"
+        assert stub_class.fallback, f"{name} does not say what to use instead"

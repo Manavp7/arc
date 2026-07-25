@@ -67,10 +67,22 @@ def get_bus(settings: Settings | None = None) -> Bus:
                 claim_idle_ms=cfg.bus_claim_idle_ms,
                 max_retries=cfg.bus_max_retries,
             )
-        if backend == "kafka":  # pragma: no cover - Phase 7
-            raise ConfigError(
-                "the Kafka bus adapter lands in Phase 7; use SIO_BUS_BACKEND=redis for now"
+        if backend == "kafka":
+            from .stubs import KafkaBusStub
+
+            # A stub that CONSTRUCTS, so `SIO_PROFILE=gpu` boots and `just doctor` can report what it selected
+            # before the hardware exists — and that REFUSES every operation, because a bus which acknowledges
+            # publishes into nothing is the worst possible component in a pipeline. See docs/GPU_SWAP.md.
+            log.warning(
+                "registry.bus",
+                backend="kafka",
+                status="wired, not implemented here",
+                fallback="SIO_BUS_BACKEND=redis",
             )
+            # No `type: ignore` needed: `__getattr__` makes the stub structurally satisfy the Bus
+            # Protocol, which is a pleasing accident of the design — mypy agrees it is a Bus, and it
+            # is, right up until you ask it to do anything.
+            return KafkaBusStub(url=cfg.redis_url)
         raise ConfigError(f"unknown SIO_BUS_BACKEND={backend!r}")
 
     return _cached(f"bus:{backend}", factory)
@@ -91,10 +103,17 @@ def get_graph(settings: Settings | None = None) -> GraphStore:
 
             log.info("registry.graph", backend="postgres")
             return PostgresGraphStore(get_pg_pool(cfg))
-        if backend == "neo4j":
+        if backend in ("neo4j", "memgraph"):
             from .stores.graph_neo4j import Neo4jGraphStore
 
-            log.info("registry.graph", backend="neo4j", uri=cfg.neo4j_uri)
+            # Memgraph is REAL rather than a stub, and it costs one line: it speaks Bolt and Cypher, so the
+            # existing Neo4j adapter reaches it unchanged. Worth calling out because it is the only GPU-profile
+            # seam that was free — the rest need hardware or infrastructure that is not available here, and
+            # writing them blind would produce code that looks finished and has never run.
+            #
+            # What differs is operational, not protocol: Memgraph is in-memory, which is the point at the write
+            # rates a GPU pipeline produces, and its durability story is snapshots rather than a WAL.
+            log.info("registry.graph", backend=backend, uri=cfg.neo4j_uri)
             return Neo4jGraphStore(
                 cfg.neo4j_uri, cfg.neo4j_user, cfg.neo4j_password, cfg.neo4j_database
             )
@@ -118,10 +137,16 @@ def get_vectors(settings: Settings | None = None) -> VectorStore:
 
             log.info("registry.vectors", backend="pgvector")
             return PgVectorStore(get_pg_pool(cfg))
-        if backend == "qdrant":  # pragma: no cover - Phase 7
-            raise ConfigError(
-                "the Qdrant adapter lands in Phase 7; use SIO_VECTOR_BACKEND=pgvector for now"
+        if backend == "qdrant":
+            from .stubs import QdrantVectorStoreStub
+
+            log.warning(
+                "registry.vectors",
+                backend="qdrant",
+                status="wired, not implemented here",
+                fallback="SIO_VECTOR_BACKEND=pgvector",
             )
+            return QdrantVectorStoreStub()
         raise ConfigError(f"unknown SIO_VECTOR_BACKEND={backend!r}")
 
     return _cached(f"vectors:{backend}", factory)

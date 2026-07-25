@@ -190,11 +190,28 @@ def test_unknown_backend_is_a_config_error() -> None:
         registry.get_bus(cfg)
 
 
-def test_phase_7_backends_fail_with_a_useful_message() -> None:
+def test_the_gpu_backends_construct_and_then_refuse() -> None:
+    """Phase 7 arrived, and the contract changed deliberately.
+
+    This test used to assert `get_bus` RAISED for `kafka` ("lands in Phase 7"). It now asserts the opposite at
+    construction and the same thing at use, which is the shape P7.3 needs:
+
+    * construction SUCCEEDS, so `SIO_PROFILE=gpu` boots and `just doctor` can report the configuration before
+      the hardware exists — which is exactly when somebody wants to look at it;
+    * every operation REFUSES, because an adapter that accepts work and discards it is the worst possible
+      component in a pipeline: a bus acknowledging publishes into nothing leaves every counter healthy and no
+      data anywhere.
+    """
     cfg = Settings(_env_file=None)  # type: ignore[call-arg]
     object.__setattr__(cfg, "bus_backend", "kafka")
-    with pytest.raises(ConfigError, match="Phase 7"):
-        registry.get_bus(cfg)
+
+    bus = registry.get_bus(cfg)
+    assert type(bus).__name__ == "KafkaBusStub"
+
+    with pytest.raises(ConfigError, match="not implemented"):
+        import asyncio
+
+        asyncio.run(bus.publish("events", {}))  # type: ignore[arg-type]
 
 
 # --- the `.env` inline-comment trap -----------------------------------------------------------------
