@@ -197,7 +197,7 @@ class PredictionService(SioService):
             -- `entities` is an ARRAY on this table, not a scalar column. A zone event always names
             -- exactly one entity, so the first element is the entity; selecting `entity_id` (which does
             -- not exist) failed every forecasting cycle with a 500.
-            SELECT zone_id, ts, entities[1] AS entity_id FROM events
+            SELECT zone_id, ts, type, entities[1] AS entity_id FROM events
              WHERE tenant_id = %s AND type IN ('zone_entered', 'zone_exited')
                AND ts >= now() - make_interval(secs => %s)
              ORDER BY ts
@@ -212,9 +212,15 @@ class PredictionService(SioService):
                 continue
             occupants = running.setdefault(zone, set())
             entity = str(row["entity_id"] or "")
-            # Reconstruct occupancy by replaying entries and exits. The alternative — sampling
-            # `entities.zone_id` — only ever shows the present, and a forecast needs the past.
-            occupants.add(entity)
+            # Replay entries AND EXITS. The first version added on every event regardless of type, so the
+            # series was a cumulative count of distinct visitors rather than occupancy — live it claimed
+            # 46 entities on a dock apron that holds a handful, and the forecast dutifully extrapolated
+            # it upward. Sampling `entities.zone_id` instead would only ever show the present, and a
+            # forecast needs the past.
+            if str(row["type"]) == "zone_entered":
+                occupants.add(entity)
+            else:
+                occupants.discard(entity)
             by_zone.setdefault(zone, []).append((row["ts"], float(len(occupants))))
 
         for zone_id, samples in by_zone.items():
@@ -295,12 +301,15 @@ class PredictionService(SioService):
                 if series is None or len(series) < 5:
                     self._skipped_short_history += 1
                     continue
+                is_device_metric = metric == "battery_pct"
                 target = build(
                     spec,
                     series,
                     level=self.settings.forecast_interval_level,
-                    zone_id=zones.get(source_id),
-                    entity_id=source_id if metric == "battery_pct" else None,
+                    # A battery belongs to the device, not to whatever zone it is flying over: keying it
+                    # by zone produced "battery:lane_north", which reads as a property of the lane.
+                    zone_id=None if is_device_metric else zones.get(source_id),
+                    entity_id=source_id if is_device_metric else None,
                 )
                 if not target.points:
                     continue

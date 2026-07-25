@@ -45,6 +45,14 @@ class TargetSpec:
     clearest possible sign that a model has been extrapolated past its usefulness. Clamping is honest
     here in a way it would not be for a temperature, where a negative value is simply cold.
     """
+    max_value: float | None = None
+    """Physical upper bound, where one exists.
+
+    A battery is a percentage. Live, a 20-minute forecast of a steady 86 % produced an interval of 24 to
+    148 per cent — and 148 per cent is not a cautious estimate, it is a nonsense that discredits every
+    other number beside it. Clamping to the real range keeps the statement true: "somewhere between 24
+    and 100" is wide, and wide is allowed; impossible is not.
+    """
     description: str = ""
 
 
@@ -91,6 +99,7 @@ SPECS: dict[str, TargetSpec] = {
         lookback_s=1800.0,
         unit="percent",
         non_negative=True,
+        max_value=100.0,
         description="Drone battery level, and when it will need to return",
     ),
     "vibration": TargetSpec(
@@ -142,13 +151,13 @@ class TargetForecast:
     def to_forecast(self, tenant_id: str, *, made_at: datetime) -> Forecast:
         spec = self.spec
         points = self.points
-        if spec.non_negative:
+        if spec.non_negative or spec.max_value is not None:
             points = [
                 ForecastPoint(
                     ts=point.ts,
-                    value=max(0.0, point.value),
-                    lo=max(0.0, point.lo) if point.lo is not None else None,
-                    hi=max(0.0, point.hi) if point.hi is not None else None,
+                    value=_clamp(point.value, spec),
+                    lo=_clamp(point.lo, spec),
+                    hi=_clamp(point.hi, spec),
                 )
                 for point in points
             ]
@@ -178,9 +187,12 @@ class TargetForecast:
             explanation.add_note(
                 "not enough history to backtest the intervals, so their width is unverified"
             )
-        if spec.non_negative:
+        if spec.non_negative or spec.max_value is not None:
+            low = "0" if spec.non_negative else "-inf"
+            high = f"{spec.max_value:g}" if spec.max_value is not None else "inf"
             explanation.add_note(
-                f"clamped at zero: a negative {spec.unit or 'value'} is impossible"
+                f"clamped to the physical range [{low}, {high}]: a bound outside it is impossible, "
+                "and one impossible number discredits every other number beside it"
             )
 
         return Forecast(
@@ -245,6 +257,17 @@ def build(
         zone_id=zone_id,
         entity_id=entity_id,
     )
+
+
+def _clamp(value: float | None, spec: TargetSpec) -> float | None:
+    """Hold a value inside the quantity's physical range."""
+    if value is None:
+        return None
+    if spec.non_negative:
+        value = max(0.0, value)
+    if spec.max_value is not None:
+        value = min(spec.max_value, value)
+    return value
 
 
 def time_to_threshold(

@@ -508,7 +508,7 @@ def test_counts_are_clamped_at_zero() -> None:
     forecast = target.to_forecast("acme", made_at=START)
     assert all(point.value >= 0 for point in forecast.points)
     assert all(point.lo is None or point.lo >= 0 for point in forecast.points)
-    assert any("negative" in note for note in forecast.explanation.notes)
+    assert any("physical range" in note for note in forecast.explanation.notes)
 
 
 def test_time_to_threshold_uses_the_pessimistic_bound() -> None:
@@ -571,3 +571,34 @@ def test_every_spec_declares_a_deliberate_gap_policy() -> None:
             assert spec.policy is GapPolicy.ZERO, f"{key}: a missing count is a zero"
         if spec.target in ("temperature", "battery"):
             assert spec.policy is GapPolicy.HOLD, f"{key}: a missing measurement is not zero"
+
+
+# ------------------------------------------- regressions from the live forecast output
+def test_a_percentage_forecast_cannot_exceed_one_hundred() -> None:
+    """Live, a 20-minute forecast of a steady 86% battery produced an interval of 24 to 148 per cent.
+
+    148 per cent is not a cautious estimate, it is a nonsense that discredits every other number beside
+    it. Wide is allowed; impossible is not.
+    """
+    import random
+
+    rng = random.Random(31)
+    values = [86.0 + rng.gauss(0, 0.4) for _ in range(60)]
+    target = build(
+        SPECS["battery"], series_of(values, name="battery_pct:gps-drone-1", bucket_s=30.0)
+    )
+    forecast = target.to_forecast("acme", made_at=START)
+    assert forecast.points
+    for point in forecast.points:
+        assert 0.0 <= point.value <= 100.0
+        assert point.lo is None or 0.0 <= point.lo <= 100.0
+        assert point.hi is None or 0.0 <= point.hi <= 100.0
+    assert any("physical range" in note for note in forecast.explanation.notes)
+
+
+def test_the_battery_spec_declares_its_range() -> None:
+    assert SPECS["battery"].max_value == 100.0
+    assert SPECS["battery"].non_negative
+    # A temperature has no such bound: a negative value is simply cold, and clamping would be a lie.
+    assert SPECS["temperature"].max_value is None
+    assert not SPECS["temperature"].non_negative
