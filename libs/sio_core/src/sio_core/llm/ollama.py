@@ -72,6 +72,7 @@ class OllamaLLM:
         tools: list[ToolSpec] | None = None,
         json_schema: dict[str, Any] | None = None,
         temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> LlmReply:
         payload: dict[str, Any] = {
             "model": self.model,
@@ -80,6 +81,9 @@ class OllamaLLM:
             "options": {
                 "temperature": self.temperature if temperature is None else temperature,
                 "num_ctx": self.num_ctx,
+                # A generation cap, because an uncapped small model rambles: asked for a two-sentence
+                # answer it will enumerate every row it was shown, and every token costs wall clock on CPU.
+                **({"num_predict": max_tokens} if max_tokens else {}),
             },
         }
         if tools:

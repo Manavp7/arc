@@ -60,16 +60,26 @@ class ToolResult:
     source: str = ""
     """Which endpoint or store answered, so a claim can be traced to its origin."""
     truncated: bool = False
+    brief: dict[str, Any] | None = None
+    """A compact view for the model. The full `data` still goes to the UI and the explanation.
+
+    Measured, not guessed: `list_entities` returned 25 entities as ~2,500 characters of JSON, and the
+    synthesis turn took 9.3 seconds of a 13-second answer — the model was spending its time READING, and
+    then dutifully enumerating truck names nobody asked for. A 3 B model on CPU processes a prompt at a few
+    hundred tokens a second, so prompt size is latency.
+
+    Two audiences, two payloads. The model needs the shape of the answer; the console needs the rows.
+    """
 
     def for_model(self) -> str:
-        """The string handed back to the model.
+        """The string handed back to the model — the brief view when a tool provided one.
 
         JSON rather than prose: a small model re-narrating a table loses numbers, and the synthesis step
         reads better when it is quoting values it can see.
         """
         if not self.ok:
             return json.dumps({"error": self.error or "tool failed"})
-        rendered = json.dumps(self.data, default=str)
+        rendered = json.dumps(self.brief if self.brief is not None else self.data, default=str)
         if len(rendered) > MAX_RESULT_CHARS:
             self.truncated = True
             return rendered[:MAX_RESULT_CHARS] + f'... (truncated; {len(rendered)} chars total)"}}'
@@ -433,6 +443,11 @@ class ToolBelt:
             ok=True,
             source=f"{self.api_url}/api/entities",
             evidence=[row.get("entity_id", "") for row in rows[:10]],
+            brief={
+                "count": len(rows),
+                "by_type": _counted(row.get("type") for row in rows),
+                "examples": [row.get("label") or row.get("entity_id") for row in rows[:5]],
+            },
             data={
                 "count": len(rows),
                 "by_type": _counted(row.get("type") for row in rows),
@@ -521,6 +536,7 @@ class ToolBelt:
             name="spatial_query",
             ok=True,
             source=f"{self.spatial_url}/spatial/{source}",
+            brief=_brief_spatial(question, data),
             data=data,
         )
 
@@ -556,6 +572,14 @@ class ToolBelt:
             ok=True,
             source="graph store (parameterised traversal, not a query string)",
             evidence=[entity_id, *[edge["to"] for edge in edges[:8] if edge["to"]]],
+            brief={
+                "entity_id": entity_id,
+                "edge_count": len(edges),
+                "most_recent": (edges[-1] if edges else None),
+                "cameras": sorted(
+                    {edge["to"] for edge in edges if edge["relationship"] == "seen_by"}
+                )[:5],
+            },
             data={
                 "entity_id": entity_id,
                 "edge_count": len(edges),
@@ -682,6 +706,15 @@ class ToolBelt:
             ok=True,
             source=f"{self.api_url}/api/world/at",
             evidence=[event.get("event_id", "") for event in (events or [])[:8]],
+            brief={
+                "at": at.isoformat(),
+                "minutes_ago": minutes_ago,
+                "counts": (world or {}).get("counts"),
+                "events": [
+                    {"type": event.get("type"), "severity": event.get("severity")}
+                    for event in (events or [])[:6]
+                ],
+            },
             data={
                 "at": at.isoformat(),
                 "minutes_ago": minutes_ago,
@@ -831,6 +864,38 @@ class ToolBelt:
             source=f"{self.ingest_url}/simulation/inject/{scenario}",
             data={"injected": body, "note": "This affects the SIMULATED site only."},
         )
+
+
+def _brief_spatial(question: str, data: Any) -> dict[str, Any]:
+    """Compact spatial results. Each question shape has a different essential answer."""
+    if not isinstance(data, dict):
+        return {"question": question, "result": str(data)[:200]}
+    if question == "blind_spots":
+        return {
+            "question": question,
+            "coverage_fraction": data.get("coverage_fraction"),
+            "covered_m2": data.get("covered_m2"),
+            "uncovered_m2": data.get("uncovered_m2"),
+            "site_m2": data.get("site_m2"),
+        }
+    if question == "cameras_covering":
+        return {
+            "question": question,
+            "zone_id": data.get("zone_id"),
+            "cameras": [camera.get("source_id") for camera in data.get("cameras", [])],
+        }
+    if question == "within_radius":
+        return {
+            "question": question,
+            "count": data.get("count"),
+            "radius_m": data.get("radius_m"),
+            "nearest": [row.get("label") for row in (data.get("results") or [])[:5]],
+        }
+    return {
+        "question": question,
+        "zone_id": data.get("zone_id"),
+        "occupants": len(data.get("confirmed") or data.get("postgis") or []),
+    }
 
 
 def _counted(values: Any) -> dict[str, int]:

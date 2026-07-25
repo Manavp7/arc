@@ -106,6 +106,7 @@ class LLM(Protocol):
         tools: list[ToolSpec] | None = None,
         json_schema: dict[str, Any] | None = None,
         temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> LlmReply: ...
 
     async def ping(self) -> bool: ...

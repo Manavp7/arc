@@ -509,7 +509,9 @@ class CopilotAgent:
             )
 
         messages = [*messages, {"role": "user", "content": SYNTHESIS_PROMPT}]
-        reply = await self.llm.chat(messages)
+        # Two or three sentences is about 120 tokens. Capping it is worth several seconds on CPU and costs
+        # nothing an operator wanted: the answer was already asked to be short.
+        reply = await self.llm.chat(messages, max_tokens=160)
         trace.llm_ms += reply.latency_ms
         trace.add(
             Step(

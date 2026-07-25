@@ -75,6 +75,7 @@ class ScriptedLLM:
         tools: list[ToolSpec] | None = None,
         json_schema: dict[str, Any] | None = None,
         temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> LlmReply:
         started = time.perf_counter()
         self.calls.append({"messages": messages, "tools": [tool.name for tool in tools or []]})
