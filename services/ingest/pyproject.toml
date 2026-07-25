@@ -9,12 +9,31 @@ dependencies = [
     "sio-schemas",
 ]
 
+# Phase 7 connectors, each behind an extra.
+#
+# Optional because a default install pulling in OpenCV (60MB), a MAVLink dialect generator, a database driver
+# and an MQTT client would take minutes and serve almost nobody — a deployment uses one or two of these, not
+# all of them. Each connector looks its dependency up inside `start()` and raises a message naming the extra,
+# so a misconfiguration says what to install rather than `ModuleNotFoundError`.
+#
+# The first four names were reserved in an earlier phase; I kept them rather than renaming, and kept `aiomqtt`
+# rather than substituting paho — which turned out to be the better client anyway, since it is async-native and
+# removes a thread bridge entirely.
 [project.optional-dependencies]
 # Real camera ingest (Phase 7). GStreamer itself is a system package, installed by bootstrap.
 rtsp = ["opencv-python-headless>=4.10"]
 mavlink = ["pymavlink>=2.4"]
 mqtt = ["aiomqtt>=2.3"]
 stac = ["pystac-client>=0.8"]
+enterprise = ["sqlalchemy>=2.0"]
+# Everything, for a deployment that genuinely wants the lot.
+connectors = [
+    "opencv-python-headless>=4.10",
+    "pymavlink>=2.4",
+    "aiomqtt>=2.3",
+    "pystac-client>=0.8",
+    "sqlalchemy>=2.0",
+]
 
 [build-system]
 requires = ["hatchling"]

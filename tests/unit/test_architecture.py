@@ -155,16 +155,56 @@ def test_every_service_declares_a_pyproject_and_readme() -> None:
         assert (service / "README.md").exists(), f"{service.name} has no README.md"
 
 
+#: The marker that makes an `os.environ` line deliberate rather than an oversight.
+#:
+#: The rule below is a blanket string search, and it should stay one — the moment it starts parsing intent it
+#: stops catching the thing it exists to catch. But a blanket rule needs an escape hatch that is *visible*, and
+#: a magic comment is greppable in a way an allowlist buried in a test file is not.
+ENV_ESCAPE = "SIO-ENV-OK"
+
+
 def test_no_service_reads_os_environ_directly() -> None:
-    """Configuration flows through sio_core.config so `just doctor` can report it."""
+    """Configuration flows through sio_core.config so `just doctor` can report it.
+
+    Blanket, per line, with one escape: a line tagged `# SIO-ENV-OK: <reason>` is allowed. That exists because
+    the RTSP connector has to *write* `OPENCV_FFMPEG_CAPTURE_OPTIONS` — an environment variable is FFmpeg's only
+    channel for the RTSP transport, and the value itself comes from `options.transport`, which is configuration
+    arriving the proper way. Setting a third-party library's knob is a different act from reading our own config,
+    which is what this rule is really about.
+
+    Checked per LINE rather than per file, which is stricter than the first version: a file containing one
+    justified write no longer gets a pass for an unjustified read three hundred lines later.
+    """
     offenders: list[str] = []
     for path in python_files(SERVICES_DIR):
-        text = path.read_text()
-        if "os.environ" in text or "os.getenv" in text:
-            offenders.append(str(path.relative_to(REPO_ROOT)))
+        for number, line in enumerate(path.read_text().splitlines(), start=1):
+            if "os.environ" not in line and "os.getenv" not in line:
+                continue
+            if ENV_ESCAPE in line:
+                continue
+            offenders.append(f"{path.relative_to(REPO_ROOT)}:{number}: {line.strip()}")
     assert not offenders, (
-        "read configuration from sio_core.config.Settings, not os.environ:\n  "
-        + "\n  ".join(offenders)
+        "read configuration from sio_core.config.Settings, not os.environ. If a line genuinely must "
+        f"touch the environment, tag it `# {ENV_ESCAPE}: <reason>`:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_the_environment_escape_hatch_is_barely_used() -> None:
+    """An escape hatch nobody counts becomes the normal path.
+
+    Two is the current number and there is no good reason for it to grow: every additional one is a piece of
+    configuration that `just doctor` cannot report on. If this fails, the question is whether the new case
+    belongs in `Settings` rather than whether to raise the number.
+    """
+    tagged = [
+        f"{path.relative_to(REPO_ROOT)}:{number}"
+        for path in python_files(SERVICES_DIR)
+        for number, line in enumerate(path.read_text().splitlines(), start=1)
+        if ENV_ESCAPE in line
+    ]
+    assert len(tagged) <= 2, (
+        "the environment escape hatch is spreading; each of these is configuration `just doctor` "
+        "cannot see:\n  " + "\n  ".join(tagged)
     )
 
 
