@@ -130,6 +130,7 @@ export interface Alert {
   ack_by?: string | null;
   assignee?: string | null;
   urgency_reason?: string | null;
+  decision_ids?: string[];
   explanation: Explanation;
 }
 
@@ -158,6 +159,7 @@ export interface Decision {
   confidence: number;
   explanation: Explanation;
   proposed_by: string;
+  solver?: string | null;
   approval: ApprovalState;
   approved_by?: string | null;
 }

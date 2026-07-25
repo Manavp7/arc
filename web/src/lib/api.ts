@@ -122,37 +122,104 @@ export const api = {
   alerts: (params: { state?: string; limit?: number } = {}) =>
     request<Alert[]>(`/alerts${query(params)}`),
 
+  alertInbox: (params: { state?: string; grouped?: boolean; limit?: number } = {}) =>
+    request<{
+      alerts: Alert[];
+      groups?: Array<{ kind: string; count: number; max_score: number; alerts: Alert[] }>;
+      open?: number;
+      escalated?: number;
+    }>(`/alerts${query({ grouped: true, ...params })}`),
+
   acknowledgeAlert: (alertId: string, note?: string) =>
     request<Alert>(`/alerts/${encodeURIComponent(alertId)}/ack`, {
       method: "POST",
-      body: JSON.stringify({ note }),
+      body: JSON.stringify({ ack_by: "operator", note }),
+    }),
+
+  resolveAlert: (alertId: string, note?: string) =>
+    request<Alert>(`/alerts/${encodeURIComponent(alertId)}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ resolved_by: "operator", note }),
+    }),
+
+  escalateAlert: (alertId: string, reason = "escalated by hand") =>
+    request<Alert>(`/alerts/${encodeURIComponent(alertId)}/escalate${query({ reason })}`, {
+      method: "POST",
     }),
 
   decisions: (params: { approval?: string; limit?: number } = {}) =>
-    request<Decision[]>(`/decisions${query(params)}`),
+    request<{ decisions: Decision[] }>(`/decisions${query(params)}`),
 
-  approveDecision: (decisionId: string, optionId?: string) =>
-    request<Decision>(`/decisions/${encodeURIComponent(decisionId)}/approve`, {
-      method: "POST",
-      body: JSON.stringify({ option_id: optionId }),
-    }),
+  approveDecision: (decisionId: string, optionId?: string, note?: string) =>
+    request<{ decision_id: string; approval: string; chosen?: string | null }>(
+      `/decisions/${encodeURIComponent(decisionId)}/approve`,
+      {
+        method: "POST",
+        body: JSON.stringify({ option_id: optionId, approved_by: "operator", note }),
+      },
+    ),
 
   rejectDecision: (decisionId: string, reason?: string) =>
-    request<Decision>(`/decisions/${encodeURIComponent(decisionId)}/reject`, {
-      method: "POST",
-      body: JSON.stringify({ reason }),
-    }),
+    request<{ decision_id: string; approval: string }>(
+      `/decisions/${encodeURIComponent(decisionId)}/reject`,
+      { method: "POST", body: JSON.stringify({ rejected_by: "operator", reason }) },
+    ),
 
-  forecasts: (params: { target?: string; entity_id?: string; limit?: number } = {}) =>
-    request<Forecast[]>(`/forecasts${query(params)}`),
+  forecasts: (params: { target?: string; limit?: number } = {}) =>
+    request<{ forecasts: Forecast[] }>(`/forecasts${query(params)}`),
+
+  latestForecasts: () =>
+    request<{
+      forecasts: Record<
+        string,
+        {
+          target: string;
+          zone_id?: string | null;
+          entity_id?: string | null;
+          model: string;
+          confidence: number;
+          interval_level: number;
+          horizon_s: number;
+          summary?: string | null;
+          why: string[];
+          points: Array<{ ts: string; value: number; lo?: number | null; hi?: number | null }>;
+        }
+      >;
+    }>("/forecasts/latest"),
+
+  workflowRuns: (limit = 20) =>
+    request<{
+      runs: number;
+      by_playbook?: Record<string, number>;
+      suppressed_by_cooldown: number;
+      recent: Array<{
+        run_id: string;
+        playbook: string;
+        status: string;
+        progress: number;
+        started: string;
+        steps: Array<{ name: string; status: string; attempts: number }>;
+      }>;
+    }>(`/workflow/runs${query({ limit })}`),
 
   missions: () => request<Mission[]>("/missions"),
 
   ask: (question: string) =>
-    request<{ answer: string; explanation: import("../types").Explanation }>("/copilot/ask", {
-      method: "POST",
-      body: JSON.stringify({ question }),
-    }),
+    request<{
+      question: string;
+      answer: string;
+      confidence: number;
+      explanation: import("../types").Explanation;
+      trace: {
+        model: string;
+        total_ms: number;
+        tools_used: string[];
+        used_fallback: boolean;
+        degraded: string[];
+        steps: Array<{ index: number; kind: string; tool?: string | null; detail: string; latency_ms: number; ok: boolean }>;
+      };
+      elapsed_ms: number;
+    }>("/copilot/ask", { method: "POST", body: JSON.stringify({ question }) }),
 };
 
 export const mediaUrl = (key: string) => `/media/${key}`;

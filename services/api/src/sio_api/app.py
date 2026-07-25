@@ -345,6 +345,195 @@ class ApiService(SioService):
             """PRD M6: 'cameras covering Gate B'."""
             return await read.cameras_covering(tenant_id=current_tenant(), zone_id=zone_id)
 
+        # --- one front door ----------------------------------------------------------------
+        #
+        # The console talks to the API and nothing else. Alerts, decisions, forecasts, playbook runs and
+        # agents each live in their own service, and a UI that knew all six ports would be coupled to the
+        # deployment topology — every port change becoming a frontend change, and CORS on five origins.
+        #
+        # So the API forwards. It is a proxy and says so: it does not reinterpret payloads, it does not add
+        # fields, and when a service is down it returns 503 NAMING the service rather than an empty list.
+        # An empty list is indistinguishable from "nothing is happening", which is the one thing an operator
+        # must not be told when a service has actually fallen over.
+        async def _forward(
+            service: str,
+            port: int,
+            path: str,
+            *,
+            params: dict[str, Any] | None = None,
+            method: str = "GET",
+            body: Any = None,
+            # Named for what it is: the downstream HTTP timeout, not a cancellation deadline for this
+            # coroutine. ASYNC109 flags `timeout=` on an async def because callers reasonably expect the
+            # latter.
+            http_timeout_s: float = 15.0,
+        ) -> Any:
+            import httpx
+
+            url = f"http://127.0.0.1:{port}{path}"
+            try:
+                async with httpx.AsyncClient(timeout=http_timeout_s) as client:
+                    response = await client.request(
+                        method,
+                        url,
+                        params={k: v for k, v in (params or {}).items() if v is not None},
+                        json=body,
+                    )
+                    if response.status_code >= 400:
+                        # Pass the downstream status through. Turning a 404 into a 503 would tell an
+                        # operator the service is down when the id was simply wrong.
+                        raise HTTPException(
+                            status_code=response.status_code,
+                            detail=_detail_of(response)
+                            or f"{service} returned {response.status_code}",
+                        )
+                    return response.json()
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"the {service} service is not reachable: {describe_error(exc)}",
+                ) from exc
+
+        @api.get("/alerts", tags=["alerts"])
+        async def alerts(
+            state: str | None = None, grouped: bool = True, limit: int = Query(50, le=500)
+        ) -> Any:
+            """The alerts inbox, forwarded from the alerts service."""
+            return await _forward(
+                "alerts",
+                self.settings.alerts_port,
+                "/alerts",
+                params={"state": state, "grouped": grouped, "limit": limit},
+            )
+
+        @api.get("/alerts/{alert_id}", tags=["alerts"])
+        async def alert_detail(alert_id: str) -> Any:
+            return await _forward("alerts", self.settings.alerts_port, f"/alerts/{alert_id}")
+
+        @api.post("/alerts/{alert_id}/ack", tags=["alerts"])
+        async def acknowledge_alert(alert_id: str, body: dict[str, Any] | None = None) -> Any:
+            return await _forward(
+                "alerts",
+                self.settings.alerts_port,
+                f"/alerts/{alert_id}/ack",
+                method="POST",
+                body=body or {"ack_by": "operator"},
+            )
+
+        @api.post("/alerts/{alert_id}/resolve", tags=["alerts"])
+        async def resolve_alert(alert_id: str, body: dict[str, Any] | None = None) -> Any:
+            return await _forward(
+                "alerts",
+                self.settings.alerts_port,
+                f"/alerts/{alert_id}/resolve",
+                method="POST",
+                body=body or {"resolved_by": "operator"},
+            )
+
+        @api.post("/alerts/{alert_id}/escalate", tags=["alerts"])
+        async def escalate_alert(alert_id: str, reason: str = "escalated by hand") -> Any:
+            return await _forward(
+                "alerts",
+                self.settings.alerts_port,
+                f"/alerts/{alert_id}/escalate",
+                method="POST",
+                params={"reason": reason},
+            )
+
+        @api.get("/decisions", tags=["decisions"])
+        async def decisions(approval: str | None = None, limit: int = Query(20, le=200)) -> Any:
+            return await _forward(
+                "decision",
+                self.settings.decision_port,
+                "/decisions",
+                params={"approval": approval, "limit": limit},
+            )
+
+        @api.get("/decisions/{decision_id}", tags=["decisions"])
+        async def decision_detail(decision_id: str) -> Any:
+            return await _forward(
+                "decision", self.settings.decision_port, f"/decisions/{decision_id}"
+            )
+
+        @api.post("/decisions/{decision_id}/approve", tags=["decisions"])
+        async def approve_decision(decision_id: str, body: dict[str, Any] | None = None) -> Any:
+            """Approve a recommendation. Forwarded, never decided here.
+
+            Worth being explicit: the API does not implement approval. It forwards to the service that owns
+            decisions, which is the only thing that can change an approval state — so there is no second
+            path to authorising an action.
+            """
+            return await _forward(
+                "decision",
+                self.settings.decision_port,
+                f"/decisions/{decision_id}/approve",
+                method="POST",
+                body=body or {"approved_by": "operator"},
+                timeout=30.0,
+            )
+
+        @api.post("/decisions/{decision_id}/reject", tags=["decisions"])
+        async def reject_decision(decision_id: str, body: dict[str, Any] | None = None) -> Any:
+            return await _forward(
+                "decision",
+                self.settings.decision_port,
+                f"/decisions/{decision_id}/reject",
+                method="POST",
+                body=body or {"rejected_by": "operator"},
+            )
+
+        @api.get("/forecasts", tags=["prediction"])
+        async def forecasts(target: str | None = None, limit: int = Query(20, le=200)) -> Any:
+            return await _forward(
+                "prediction",
+                self.settings.prediction_port,
+                "/forecasts",
+                params={"target": target, "limit": limit},
+            )
+
+        @api.get("/forecasts/latest", tags=["prediction"])
+        async def latest_forecasts() -> Any:
+            return await _forward("prediction", self.settings.prediction_port, "/forecasts/latest")
+
+        @api.get("/workflow/runs", tags=["workflow"])
+        async def workflow_runs(limit: int = Query(20, le=200)) -> Any:
+            return await _forward(
+                "workflow", self.settings.workflow_port, "/workflow/runs", params={"limit": limit}
+            )
+
+        @api.get("/workflow/playbooks", tags=["workflow"])
+        async def workflow_playbooks() -> Any:
+            return await _forward("workflow", self.settings.workflow_port, "/workflow/playbooks")
+
+        @api.get("/agents", tags=["agents"])
+        async def agents() -> Any:
+            return await _forward("agents", self.settings.agents_port, "/agents")
+
+        @api.get("/agents/cycles", tags=["agents"])
+        async def agent_cycles() -> Any:
+            return await _forward("agents", self.settings.agents_port, "/agents/cycles")
+
+        @api.get("/audit", tags=["governance"])
+        async def audit(limit: int = Query(50, le=500)) -> Any:
+            """The audit trail. Forwarded from the agents service, which owns the writes."""
+            return await _forward(
+                "agents", self.settings.agents_port, "/agents/audit", params={"limit": limit}
+            )
+
+        @api.post("/copilot/ask", tags=["copilot"])
+        async def copilot_ask(body: dict[str, Any]) -> Any:
+            """Ask the copilot. Generous timeout: a local model takes seconds, not milliseconds."""
+            return await _forward(
+                "copilot",
+                self.settings.copilot_port,
+                "/copilot/ask",
+                method="POST",
+                body=body,
+                timeout=120.0,
+            )
+
         @api.get("/search/frames")
         async def search_frames(
             q: str,
@@ -466,3 +655,20 @@ class ApiService(SioService):
         from .graphql_api import schema
 
         app.include_router(GraphQLRouter(schema, path=""), prefix="/graphql", tags=["graphql"])
+
+
+def _detail_of(response: object) -> str | None:
+    """Pull a FastAPI error detail out of a downstream response, if it has one.
+
+    Forwarding the downstream *message* matters: "unknown alert alt_123" is actionable and "the alerts
+    service returned 404" is not, even though both are technically true.
+    """
+    try:
+        body = response.json()  # type: ignore[attr-defined]
+    except Exception:
+        return None
+    if isinstance(body, dict):
+        detail = body.get("detail")
+        if isinstance(detail, str):
+            return detail
+    return None

@@ -3,21 +3,34 @@
  *
  * Layout mirrors how an operator actually works (PRD §12): the live picture dominates, the
  * timeline runs along the bottom because every question is "what happened when", and the side
- * rail holds the panels you dip into — copilot, alerts, decisions, missions.
+ * rail holds the panels you dip into — alerts, decisions, copilot, missions, forecasts.
  *
- * Phase 1 wires the map, the event feed and the connection state. Later phases fill the rail.
+ * The rail is one column and not a dashboard of six tiles, deliberately. An operator is doing one
+ * thing at a time — triaging the inbox, or approving a recommendation, or asking a question — and
+ * six live tiles compete for the attention that the map needs. The map is the application; the rail
+ * is where you go to act on it.
+ *
+ * Everything that can explain itself opens the same drawer (`ExplanationDrawer`). Every service in
+ * the platform produces a full `Explanation` and one shared renderer means none of them is the poor
+ * relation — an alert, an event and a recommendation are all inspected the same way.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { AlertsPanel } from "./components/AlertsPanel";
+import { CopilotPanel } from "./components/CopilotPanel";
+import { DecisionsPanel } from "./components/DecisionsPanel";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { ExplanationDrawer, fromEvent, type Explainable } from "./components/ExplanationDrawer";
+import { ForecastPanel } from "./components/ForecastPanel";
 import { LiveMap } from "./components/LiveMap";
+import { MissionsPanel } from "./components/MissionsPanel";
 import { Timeline } from "./components/Timeline";
 import { api } from "./lib/api";
 import { connectStream } from "./lib/stream";
 import { openAlerts, useSioStore } from "./store";
-import type { Entity, SioEvent } from "./types";
+import type { Alert, Entity, SioEvent } from "./types";
 
-type RailTab = "events" | "copilot" | "alerts" | "decisions" | "missions";
+type RailTab = "events" | "alerts" | "decisions" | "copilot" | "missions" | "forecast";
 
 /**
  * How recently an entity must have been observed to appear in the live view.
@@ -42,7 +55,7 @@ function ConnectionBadge() {
   );
 }
 
-function EventFeed() {
+function EventFeed({ onExplain }: { onExplain: (subject: Explainable) => void }) {
   const liveEvents = useSioStore((state) => state.events);
   const historyEvents = useSioStore((state) => state.historyEvents);
   const replayAt = useSioStore((state) => state.replayAt);
@@ -79,6 +92,11 @@ function EventFeed() {
                 {source}
               </span>
             ))}
+            {/* Every event already carries a full explanation — which clause matched, with what value,
+                against which evidence. Until the drawer existed it was reachable only by curl. */}
+            <button className="link-btn" onClick={() => onExplain(fromEvent(event))}>
+              why?
+            </button>
           </div>
         </li>
       ))}
@@ -159,20 +177,16 @@ function EntityDetail() {
   );
 }
 
-function Placeholder({ label, phase }: { label: string; phase: string }) {
-  return (
-    <p className="empty">
-      {label} arrives in {phase}.
-    </p>
-  );
-}
-
 export default function App() {
   const [tab, setTab] = useState<RailTab>("events");
+  const [explaining, setExplaining] = useState<Explainable | null>(null);
+  const onExplain = useCallback((subject: Explainable) => setExplaining(subject), []);
+  const closeDrawer = useCallback(() => setExplaining(null), []);
   const setConnection = useSioStore((state) => state.setConnection);
   const upsertEntity = useSioStore((state) => state.upsertEntity);
   const upsertEntities = useSioStore((state) => state.upsertEntities);
   const addEvent = useSioStore((state) => state.addEvent);
+  const upsertAlert = useSioStore((state) => state.upsertAlert);
   const setEvents = useSioStore((state) => state.setEvents);
   const setZones = useSioStore((state) => state.setZones);
   const alerts = useSioStore((state) => state.alerts);
@@ -217,13 +231,18 @@ export default function App() {
           case "Event":
             addEvent(message.payload as SioEvent);
             break;
+          case "Alert":
+            // The header count is driven by the stream so it moves the moment an alert is raised, rather
+            // than on the inbox panel's poll — which the operator may not have open.
+            upsertAlert(message.payload as Alert);
+            break;
           default:
             break;
         }
       },
     });
     return close;
-  }, [setConnection, upsertEntity, addEvent]);
+  }, [setConnection, upsertEntity, addEvent, upsertAlert]);
 
   return (
     <div className="app">
@@ -252,27 +271,43 @@ export default function App() {
 
         <aside className="rail">
           <nav className="tabs">
-            {(["events", "copilot", "alerts", "decisions", "missions"] as RailTab[]).map((name) => (
-              <button
-                key={name}
-                className={name === tab ? "tab tab-active" : "tab"}
-                onClick={() => setTab(name)}
-              >
-                {name}
-              </button>
-            ))}
+            {(["events", "alerts", "decisions", "copilot", "missions", "forecast"] as RailTab[]).map(
+              (name) => (
+                <button
+                  key={name}
+                  className={name === tab ? "tab tab-active" : "tab"}
+                  onClick={() => setTab(name)}
+                >
+                  {name}
+                  {/* The unattended count rides on the tab, because the operator will be looking at the
+                      map when it changes. */}
+                  {name === "alerts" && unresolvedAlerts.length > 0 && (
+                    <span className="tab-badge">{unresolvedAlerts.length}</span>
+                  )}
+                </button>
+              ),
+            )}
           </nav>
           <div className="rail-body">
-            <ErrorBoundary label={tab}>
-              {tab === "events" && <EventFeed />}
-              {tab === "copilot" && <Placeholder label="The copilot" phase="Phase 4" />}
-              {tab === "alerts" && <Placeholder label="The alerts inbox" phase="Phase 4" />}
-              {tab === "decisions" && <Placeholder label="Recommendations" phase="Phase 4" />}
-              {tab === "missions" && <Placeholder label="Mission control" phase="Phase 6" />}
+            {/* Keyed by tab so a panel that throws is contained to that tab and remounts cleanly when
+                the operator switches away and back, rather than poisoning the rail. */}
+            <ErrorBoundary key={tab} label={tab}>
+              {tab === "events" && <EventFeed onExplain={onExplain} />}
+              {tab === "alerts" && <AlertsPanel onExplain={onExplain} />}
+              {tab === "decisions" && <DecisionsPanel onExplain={onExplain} />}
+              {tab === "copilot" && <CopilotPanel onExplain={onExplain} />}
+              {tab === "missions" && <MissionsPanel />}
+              {tab === "forecast" && <ForecastPanel />}
             </ErrorBoundary>
           </div>
         </aside>
       </main>
+
+      {/* One drawer for events, alerts and recommendations. Outside the rail so it can be wide enough
+          for an evidence list without squeezing the map. */}
+      <ErrorBoundary label="the explanation">
+        <ExplanationDrawer subject={explaining} onClose={closeDrawer} />
+      </ErrorBoundary>
 
       <footer className="timeline-strip">
         <span className="timeline-label">timeline</span>
