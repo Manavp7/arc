@@ -120,7 +120,11 @@ class Tool:
 
 
 class ToolBelt:
-    """The nine tools, wired to service endpoints."""
+    """The ten tools, wired to service endpoints.
+
+    Ten rather than the PRD's nine, because the side-effecting `run_simulation` was split into a safe
+    projection and an injecting tool. See the note on `INJECTION_INTENT`.
+    """
 
     def __init__(
         self,
@@ -130,6 +134,7 @@ class ToolBelt:
         prediction_url: str,
         worldmodel_url: str,
         ingest_url: str,
+        simulation_url: str = "",
         graph: Any = None,
         tenant_id: str = "default",
     ) -> None:
@@ -138,6 +143,9 @@ class ToolBelt:
         self.prediction_url = prediction_url.rstrip("/")
         self.worldmodel_url = worldmodel_url.rstrip("/")
         self.ingest_url = ingest_url.rstrip("/")
+        # Defaulted from the conventional port when not supplied, so an older caller keeps working rather
+        # than constructing a belt whose simulation tool silently points at nothing.
+        self.simulation_url = (simulation_url or "http://127.0.0.1:8109").rstrip("/")
         self.graph = graph
         self.tenant_id = tenant_id
         self._client: httpx.AsyncClient | None = None
@@ -499,8 +507,49 @@ class ToolBelt:
                 spec=ToolSpec(
                     name="run_simulation",
                     description=(
-                        "Inject a what-if scenario into the simulated site: a fire in a zone, or a power "
-                        "failure. Only use when the user explicitly asks to simulate or test something."
+                        "Project what WOULD happen in a what-if scenario, without changing anything: a "
+                        "gate closing, a dock breaking down, a fire spreading, flooding, a drone running "
+                        "out of battery, or a route being severed. Returns quantified impact and the "
+                        "entities affected. Use when the user asks what would happen if something occurred."
+                    ),
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "scenario": {
+                                "type": "string",
+                                "enum": [
+                                    "gate_closure",
+                                    "dock_breakdown",
+                                    "fire_spread",
+                                    "flood_level",
+                                    "drone_battery_death",
+                                    "bridge_collapse",
+                                ],
+                            },
+                            "zone_id": {
+                                "type": "string",
+                                "description": "Where the scenario happens",
+                            },
+                            "duration_s": {"type": "number"},
+                            "level_m": {"type": "number", "description": "For flood_level"},
+                            "wind_speed_mps": {"type": "number", "description": "For fire_spread"},
+                            "wind_bearing_deg": {
+                                "type": "number",
+                                "description": "For fire_spread",
+                            },
+                        },
+                        "required": ["scenario"],
+                    },
+                ),
+                run=self.run_simulation,
+            ),
+            Tool(
+                spec=ToolSpec(
+                    name="inject_incident",
+                    description=(
+                        "MAKE something happen on the simulated site: start a fire, or cut power. This "
+                        "CHANGES the site. Only use when the user explicitly asks to inject, test or drill "
+                        "something. To ask what WOULD happen, use run_simulation instead."
                     ),
                     parameters={
                         "type": "object",
@@ -512,7 +561,7 @@ class ToolBelt:
                         "required": ["scenario"],
                     },
                 ),
-                run=self.run_simulation,
+                run=self.inject_incident,
             ),
         ]
 
@@ -902,24 +951,105 @@ class ToolBelt:
             data={"recorded": True, "decision": body, "awaiting_approval": True},
         )
 
-    #: Words that mean the user is asking for a what-if, not for advice.
-    SIMULATION_INTENT = (
-        "simulate",
-        "simulation",
-        "what if",
-        "what-if",
-        "test the",
+    #: Words that mean "make it happen", not "tell me what would happen".
+    #:
+    #: Narrowed when `run_simulation` became a safe projection and `inject_incident` became the side-effecting
+    #: tool. "Simulate", "what if", "scenario" and "pretend" all now describe the SAFE tool, so leaving them
+    #: here would let "simulate a fire at dock 3" authorise a real injection — the original bug in a new
+    #: place, and harder to spot because the word in the question matches the word in the tool that must not
+    #: run.
+    #:
+    #: What remains is unambiguous about intent to act: inject, drill, trigger, actually.
+    INJECTION_INTENT = (
         "inject",
         "drill",
-        "dry run",
-        "pretend",
-        "scenario",
+        "trigger a",
+        "trigger an",
+        "actually start",
+        "actually cut",
+        "really start",
+        "set off",
+        "start a real",
     )
 
-    def wants_simulation(self) -> bool:
-        return any(phrase in self.question.lower() for phrase in self.SIMULATION_INTENT)
+    def wants_injection(self) -> bool:
+        """Whether the question asked to MAKE something happen.
+
+        Deliberately conservative: a false negative refuses an injection the user wanted and says how to ask
+        again, while a false positive starts a fire nobody asked for. Those are not symmetric.
+        """
+        return any(phrase in self.question.lower() for phrase in self.INJECTION_INTENT)
 
     async def run_simulation(self, arguments: dict[str, Any]) -> ToolResult:
+        """Project a scenario. Changes nothing.
+
+        This used to be the injecting tool, and separating the two is the point.
+        `run_simulation` now asks the simulation service for a counterfactual projection against a frozen copy
+        of the world; `inject_incident` is the one that makes something happen. Naming the safe operation
+        `run_simulation` and the dangerous one `inject_incident` also means the model's most likely reading of
+        "simulate this" reaches the harmless tool — the eval caught it choosing the old tool for "there is a
+        fire at dock 3, what should we do?", where it wanted to START one.
+        """
+        arguments = self._coerce(
+            arguments,
+            duration_s=float,
+            level_m=float,
+            wind_speed_mps=float,
+            wind_bearing_deg=float,
+        )
+        arguments, zone_problem = await self._resolve_zone(arguments)
+        if zone_problem is not None:
+            return ToolResult(
+                name="run_simulation",
+                ok=True,
+                source=f"{self.api_url}/api/spatial/zones",
+                brief={"error": zone_problem, "note": f"Say exactly: {zone_problem}"},
+                data={"error": zone_problem},
+            )
+
+        scenario = str(arguments.pop("scenario", "") or "").strip()
+        if not scenario:
+            return ToolResult(name="run_simulation", ok=False, error="scenario is required")
+        client = await self._http()
+        try:
+            response = await client.post(
+                f"{self.simulation_url}/simulations",
+                json={"scenario": scenario, "params": arguments},
+                timeout=60.0,
+            )
+            if response.status_code == 400:
+                return ToolResult(
+                    name="run_simulation", ok=False, error=_detail(response) or "unknown scenario"
+                )
+            response.raise_for_status()
+            run = response.json()
+        except httpx.HTTPError as exc:
+            return ToolResult(
+                name="run_simulation",
+                ok=False,
+                error=f"the simulation service did not answer: {describe_error(exc)}",
+            )
+
+        return ToolResult(
+            name="run_simulation",
+            ok=True,
+            source=f"{self.simulation_url}/simulations",
+            evidence=run.get("impacted_entities", [])[:10],
+            brief={
+                "scenario": scenario,
+                "summary": (run.get("results") or {}).get("summary"),
+                "impact": run.get("kpi_deltas"),
+                "entities_affected": len(run.get("impacted_entities") or []),
+                "confidence": run.get("confidence"),
+                # Carried into the brief, not just the full data. The model summarises from the brief, and an
+                # answer that quotes a projection without its assumptions presents a guess as a measurement.
+                "assumptions": (run.get("results") or {}).get("assumptions", [])[:3],
+                "note": "This is a projection. Nothing on the site was changed.",
+            },
+            data=run,
+        )
+
+    async def inject_incident(self, arguments: dict[str, Any]) -> ToolResult:
         arguments = self._coerce(arguments, duration_s=float)
         scenario = str(arguments.get("scenario") or "").strip()
 
@@ -933,7 +1063,7 @@ class ToolBelt:
         # So the only side-effecting tool refuses unless the question itself asked for a what-if. A
         # refusal is returned as a *successful* result carrying an explanation, because the agent should
         # go on to answer the real question rather than treat this as an outage.
-        if self.question and not self.wants_simulation():
+        if self.question and not self.wants_injection():
             self.refusals += 1
             log.warning(
                 "copilot.simulation_refused",
@@ -941,23 +1071,24 @@ class ToolBelt:
                 scenario=scenario,
             )
             return ToolResult(
-                name="run_simulation",
+                name="inject_incident",
                 ok=True,
                 source="refused",
                 data={
                     "injected": False,
                     "refused": True,
                     "reason": (
-                        "This tool injects an incident into the simulated site and the question did not "
-                        "ask for a simulation. Nothing was injected. Ask again with the word 'simulate' "
-                        "if that is what you want."
+                        "This tool MAKES something happen on the simulated site and the question did "
+                        "not ask for that. Nothing was injected. To ask what WOULD happen, use "
+                        "run_simulation, which changes nothing. To actually inject, ask again using the "
+                        "word 'inject' or 'drill'."
                     ),
                 },
             )
 
         if scenario not in ("fire", "power_failure"):
             return ToolResult(
-                name="run_simulation",
+                name="inject_incident",
                 ok=False,
                 error="scenario must be 'fire' or 'power_failure'",
             )
@@ -972,9 +1103,9 @@ class ToolBelt:
             response.raise_for_status()
             body = response.json()
         except httpx.HTTPError as exc:
-            return ToolResult(name="run_simulation", ok=False, error=f"could not inject: {exc}")
+            return ToolResult(name="inject_incident", ok=False, error=f"could not inject: {exc}")
         return ToolResult(
-            name="run_simulation",
+            name="inject_incident",
             ok=True,
             source=f"{self.ingest_url}/simulation/inject/{scenario}",
             data={"injected": body, "note": "This affects the SIMULATED site only."},
@@ -1080,3 +1211,17 @@ def _counted(values: Any) -> dict[str, int]:
 
 
 __all__ = ["Tool", "ToolBelt", "ToolResult"]
+
+
+def _detail(response: Any) -> str | None:
+    """A downstream FastAPI error message, when there is one.
+
+    Forwarding the message matters: "unknown scenario 'flooding'; available: flood_level, ..." lets the model
+    retry correctly, where "the simulation service returned 400" leaves it to guess.
+    """
+    try:
+        body = response.json()
+    except Exception:
+        return None
+    detail = body.get("detail") if isinstance(body, dict) else None
+    return detail if isinstance(detail, str) else None

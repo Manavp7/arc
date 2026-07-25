@@ -48,6 +48,7 @@ class CopilotService(SioService):
             prediction_url=f"http://127.0.0.1:{self.settings.prediction_port}",
             worldmodel_url=f"http://127.0.0.1:{self.settings.worldmodel_port}",
             ingest_url=f"http://127.0.0.1:{self.settings.ingest_port}",
+            simulation_url=f"http://127.0.0.1:{self.settings.simulation_port}",
             graph=get_graph(self.settings),
             tenant_id=self.settings.tenant_id,
         )

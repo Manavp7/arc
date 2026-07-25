@@ -83,7 +83,7 @@ def an_agent(**kwargs: Any) -> tuple[CopilotAgent, FakeBelt, ScriptedLLM]:
 
 
 # ------------------------------------------------------------------ tool schemas
-def test_all_nine_tools_are_offered() -> None:
+def test_all_ten_tools_are_offered() -> None:
     belt = ToolBelt(
         api_url="http://x",
         spatial_url="http://x",
@@ -92,7 +92,7 @@ def test_all_nine_tools_are_offered() -> None:
         ingest_url="http://x",
     )
     names = [tool.name for tool in belt.tools()]
-    assert len(names) == 9, f"the PRD names nine tools, found {len(names)}"
+    assert len(names) == 10, f"expected ten tools, found {len(names)}"
     for required in (
         "graph_query",
         "semantic_search",
@@ -140,7 +140,7 @@ def test_the_side_effecting_tool_is_offered_last() -> None:
         worldmodel_url="http://x",
         ingest_url="http://x",
     )
-    assert [tool.name for tool in belt.tools()][-1] == "run_simulation"
+    assert [tool.name for tool in belt.tools()][-1] == "inject_incident"
 
 
 # --------------------------------------------------------- parsing and validation
@@ -374,10 +374,15 @@ async def test_an_empty_model_reply_still_reports_the_data() -> None:
 
 
 # --------------------------------------------------------------- the safety guard
-async def test_the_simulation_tool_refuses_unless_asked_for_a_what_if() -> None:
+async def test_the_injecting_tool_refuses_unless_asked_to_act() -> None:
     """Found by the tool-calling eval: asked "There is a fire at dock 3, what should we do?", the pinned
     model chose to INJECT a fire. The tool description already forbade that; instructions a model can
     ignore are not controls.
+
+    The guard now sits on `inject_incident`, which is the tool that changes something. `run_simulation` became
+    a projection and needs no guard, because there is nothing to guard against — which is a better fix than
+    the guard: the safest place for a dangerous capability is behind a different name from the one the model
+    reaches for.
     """
     belt = ToolBelt(
         api_url="http://fake",
@@ -387,13 +392,38 @@ async def test_the_simulation_tool_refuses_unless_asked_for_a_what_if() -> None:
         ingest_url="http://fake",
     )
     belt.question = "There is a fire at dock 3. What should we do?"
-    refused = await belt.run_simulation({"scenario": "fire", "zone_id": "dock_3"})
+    refused = await belt.inject_incident({"scenario": "fire", "zone_id": "dock_3"})
     assert refused.ok, (
         "a refusal is a successful result, so the agent goes on to answer the real question"
     )
     assert refused.data["refused"] is True
     assert refused.data["injected"] is False
     assert belt.refusals == 1
+
+
+async def test_the_projection_tool_needs_no_guard_and_has_none() -> None:
+    """`run_simulation` changes nothing, so refusing it would only obstruct.
+
+    Worth asserting, because the obvious instinct after building a guard is to apply it everywhere — and a
+    projection tool that refuses to answer "what would happen if a gate closed" unless the question contains a
+    magic word is a tool nobody can use.
+
+    It fails here only because the simulation service is unreachable in this harness, which is the point: it
+    got as far as trying.
+    """
+    belt = ToolBelt(
+        api_url="http://127.0.0.1:1",
+        spatial_url="http://127.0.0.1:1",
+        prediction_url="http://127.0.0.1:1",
+        worldmodel_url="http://127.0.0.1:1",
+        ingest_url="http://127.0.0.1:1",
+        simulation_url="http://127.0.0.1:1",
+    )
+    belt.question = "There is a fire at dock 3. What should we do?"
+    result = await belt.run_simulation({"scenario": "fire_spread", "zone_id": "dock_3"})
+    assert belt.refusals == 0, "a projection must never be refused for lacking a magic word"
+    assert not result.ok
+    assert "simulation service" in (result.error or "")
 
 
 def test_simulation_intent_detection() -> None:
@@ -404,21 +434,35 @@ def test_simulation_intent_detection() -> None:
         worldmodel_url="http://x",
         ingest_url="http://x",
     )
+    # Only an unambiguous intent to ACT authorises an injection.
+    #
+    # The word list was narrowed when `run_simulation` became a safe projection and `inject_incident` became
+    # the side-effecting tool. "Simulate", "what if", "scenario" and "pretend" now all describe the SAFE tool,
+    # so leaving them here would let "simulate a fire at dock 3" start a real one — the original bug in a new
+    # place, and harder to spot because the word in the question matches the word in the tool that must not
+    # run.
     for asked in (
-        "Simulate a fire at dock 3",
-        "What if there were a power failure?",
-        "Run a drill for the fire response",
         "Inject a fire so we can test the response",
+        "Run a fire drill",
+        "Trigger a power failure",
+        "Actually start a fire in the test yard",
     ):
         belt.question = asked
-        assert belt.wants_simulation(), asked
+        assert belt.wants_injection(), asked
     for not_asked in (
+        # Advice, not a request to act. The original failure: asked what to do about a fire, the model wanted
+        # to start one.
         "There is a fire at dock 3. What should we do?",
         "Has any camera seen fire?",
         "How many trucks are on site?",
+        # And the what-if phrasings, which must reach the PROJECTION rather than authorise an injection.
+        "Simulate a fire at dock 3",
+        "What if there were a power failure?",
+        "What would happen if gate A closed?",
+        "Model the scenario where dock 3 breaks down",
     ):
         belt.question = not_asked
-        assert not belt.wants_simulation(), not_asked
+        assert not belt.wants_injection(), not_asked
 
 
 # ---------------------------------------------------------------- keyword routing
