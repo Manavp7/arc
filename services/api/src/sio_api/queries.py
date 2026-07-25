@@ -8,6 +8,7 @@ whose entire pitch is explainability.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -272,6 +273,38 @@ class ReadModel:
             }
             for row in rows
         ]
+
+    async def cameras(self, *, tenant_id: str) -> list[dict[str, Any]]:
+        """Every camera with its field of view, as GeoJSON.
+
+        Added for the 3D twin, which draws each camera's coverage as a frustum — the one thing a 3D view shows
+        that the 2D map genuinely cannot, because coverage is a volume and a flat polygon is its shadow.
+
+        The FOV has been in the `sources` table since Phase 0 and no endpoint returned it: `cameras_covering`
+        takes a zone and answers "which cameras see it" without ever handing back the geometry. So the data for
+        blind-spot analysis was present and unreachable from outside the database.
+        """
+        rows = await self.pool.fetch(
+            """
+            SELECT source_id, label, kind, zone_id,
+                   ST_Y(geom::geometry) AS lat,
+                   ST_X(geom::geometry) AS lon,
+                   ST_AsGeoJSON(fov::geometry) AS fov,
+                   config
+              FROM sources
+             WHERE tenant_id = %s AND kind = 'camera' AND geom IS NOT NULL
+             ORDER BY source_id
+            """,
+            (tenant_id,),
+        )
+        cameras: list[dict[str, Any]] = []
+        for row in rows:
+            camera = dict(row)
+            # Parsed here rather than in the browser. `ST_AsGeoJSON` returns a string, and leaving every client
+            # to remember that is how one of them forgets and renders "[object Object]".
+            camera["fov"] = json.loads(camera["fov"]) if camera.get("fov") else None
+            cameras.append(camera)
+        return cameras
 
     async def cameras_covering(self, *, tenant_id: str, zone_id: str) -> list[dict[str, Any]]:
         """Which cameras cover a zone (PRD M6 acceptance criterion)."""

@@ -195,11 +195,14 @@ code {
 }
 
 .tab {
-  /* A basis of ~30% gives three per row, which divides nine exactly. At 22% (four per row) the ninth tab
-     orphaned itself onto a third row stretched across the whole rail, which reads as a mistake. Three rows of
-     three is deliberate; two rows of four plus one is not. Each label gets ~119px, comfortably more than the
-     47px the longest needs. */
-  flex: 1 1 30%;
+  /* A basis of ~22% gives four per row, which divides TEN into two rows of four plus two — and a last row of
+     two reads as deliberate in a way one orphan does not.
+
+     Second time adding a tab has reshuffled this: nine at 22% orphaned the ninth, so I moved to 30% for three
+     rows of three, and then a tenth orphaned itself at 30%. Chasing the basis per tab count is a losing game;
+     if an eleventh appears, the right fix is to stop tuning the basis. Each label gets ~85px, comfortably more
+     than the 47px the longest needs. */
+  flex: 1 1 22%;
   min-width: 0;
   padding: 9px 2px;
   font-size: 10px;
@@ -3024,4 +3027,130 @@ code {
 .mission-control code {
   font-family: var(--mono);
   font-size: 0.72rem;
+}
+
+/* ---------------------------------------------------------------- the 3D twin
+   Cesium ships its own stylesheet for widgets we have all disabled, so what is left is the canvas and our own
+   controls over it. */
+.twin-view {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.twin-canvas {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+}
+
+/* Cesium sizes its container from CSS, and without an explicit height the viewer computes zero and renders
+   nothing — a black rectangle with no error, which is a miserable half hour. */
+.twin-canvas .cesium-viewer,
+.twin-canvas .cesium-widget,
+.twin-canvas .cesium-widget canvas {
+  height: 100%;
+  width: 100%;
+}
+
+.twin-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.9rem;
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  font-size: 0.74rem;
+}
+
+.twin-controls .checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.twin-controls .checkbox input[type="checkbox"] {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.twin-controls .checkbox:has(input:disabled) {
+  color: var(--text-dim);
+  cursor: not-allowed;
+}
+
+/* The caption that says which parts of the picture are data and which are assumptions. Dim, but present:
+   somebody judging whether a camera clears a container stack has to know the mast height is a guess. */
+.twin-note {
+  flex: 1 1 16rem;
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.twin-warn {
+  color: var(--warn);
+}
+
+.twin-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  height: 100%;
+  padding: 2rem;
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--text);
+}
+
+.twin-fallback .muted {
+  max-width: 32rem;
+  color: var(--text-dim);
+  font-size: 0.74rem;
+  line-height: 1.5;
+}
+
+/* Cesium's credit container is a legal requirement for the imagery, so it is styled to READ rather than
+   hidden — removing it would breach the terms of the providers it credits.
+
+   It was occupying 12% of the viewport in 9.6px dim grey with no backing plate, directly over aerial
+   photography: simultaneously unmissable and unreadable, which is the worst of both. A plate and a height cap
+   make it legible and bounded. */
+.twin-canvas .cesium-widget-credits {
+  max-height: 3.2rem;
+  overflow-y: auto;
+  padding: 0.2rem 0.4rem;
+  background: rgb(11 15 20 / 82%);
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 0.62rem;
+  line-height: 1.35;
+}
+
+.twin-canvas .cesium-widget-credits a {
+  color: var(--accent);
+}
+
+/* The recentre button, matching the shared form kit's ghost styling. */
+.twin-controls button.ghost {
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: none;
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  cursor: pointer;
+}
+
+.twin-controls button.ghost:hover {
+  border-color: var(--accent);
+  color: var(--text);
 }

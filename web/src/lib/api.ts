@@ -219,6 +219,24 @@ export const api = {
 
   zones: () => request<Zone[]>("/spatial/zones"),
 
+  /**
+   * Cameras with their fields of view.
+   *
+   * The FOV has been in the `sources` table since Phase 0 and nothing returned it — `cameras_covering` answers
+   * "which cameras see this zone" without handing back the geometry. So the data for coverage and blind-spot
+   * analysis was present and unreachable from outside the database until the 3D twin needed it.
+   */
+  cameras: () =>
+    request<
+      {
+        source_id: string;
+        label: string | null;
+        lat: number;
+        lon: number;
+        fov: { type: string; coordinates: number[][][] } | null;
+      }[]
+    >("/spatial/cameras"),
+
   alerts: (params: { state?: string; limit?: number } = {}) =>
     request<Alert[]>(`/alerts${query(params)}`),
 

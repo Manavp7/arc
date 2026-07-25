@@ -369,6 +369,11 @@ class ApiService(SioService):
                 {**entity.to_wire(), "distance_m": round(distance, 1)} for entity, distance in found
             ]
 
+        @api.get("/spatial/cameras", tags=["spatial"])
+        async def cameras() -> list[dict[str, Any]]:
+            """Cameras with their fields of view, for coverage and blind-spot views."""
+            return await read.cameras(tenant_id=current_tenant())
+
         @api.get("/spatial/zones")
         async def zones() -> list[dict[str, Any]]:
             return await read.zones(tenant_id=current_tenant())

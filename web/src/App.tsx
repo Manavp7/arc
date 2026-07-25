@@ -21,11 +21,16 @@ import { AnalyticsPanel } from "./components/AnalyticsPanel";
 import { CopilotPanel } from "./components/CopilotPanel";
 import { DecisionsPanel } from "./components/DecisionsPanel";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { ExplanationDrawer, fromEvent, type Explainable } from "./components/ExplanationDrawer";
+import {
+  ExplanationDrawer,
+  fromEvent,
+  type Explainable,
+} from "./components/ExplanationDrawer";
 import { ForecastPanel } from "./components/ForecastPanel";
 import { LiveMap } from "./components/LiveMap";
 import { MissionControlPanel } from "./components/MissionControlPanel";
 import { PlaybookRunsPanel } from "./components/PlaybookRunsPanel";
+import { TwinPanel } from "./components/TwinPanel";
 import { WorkflowBuilderPanel } from "./components/WorkflowBuilderPanel";
 import { Timeline } from "./components/Timeline";
 import { api } from "./lib/api";
@@ -40,6 +45,7 @@ type RailTab =
   | "copilot"
   | "missions"
   | "playbooks"
+  | "twin"
   | "forecast"
   | "analytics"
   | "builder";
@@ -59,18 +65,28 @@ const FEED_ROWS = 80;
 function ConnectionBadge() {
   const connection = useSioStore((state) => state.connection);
   const lastMessageAt = useSioStore((state) => state.lastMessageAt);
-  const label = { live: "live", connecting: "connecting", reconnecting: "reconnecting", closed: "offline" }[
-    connection
-  ];
+  const label = {
+    live: "live",
+    connecting: "connecting",
+    reconnecting: "reconnecting",
+    closed: "offline",
+  }[connection];
   return (
-    <span className={`badge badge-${connection}`} title={lastMessageAt ?? "no messages yet"}>
+    <span
+      className={`badge badge-${connection}`}
+      title={lastMessageAt ?? "no messages yet"}
+    >
       <i className="dot" />
       {label}
     </span>
   );
 }
 
-function EventFeed({ onExplain }: { onExplain: (subject: Explainable) => void }) {
+function EventFeed({
+  onExplain,
+}: {
+  onExplain: (subject: Explainable) => void;
+}) {
   const liveEvents = useSioStore((state) => state.events);
   const historyEvents = useSioStore((state) => state.historyEvents);
   const replayAt = useSioStore((state) => state.replayAt);
@@ -99,40 +115,57 @@ function EventFeed({ onExplain }: { onExplain: (subject: Explainable) => void })
     <>
       {events.length > shown.length && (
         <p className="feed-note">
-          showing the {shown.length} most recent of {events.length} — use the timeline for the rest
+          showing the {shown.length} most recent of {events.length} — use the
+          timeline for the rest
         </p>
       )}
       <ul className="feed">
         {shown.map((event: SioEvent) => (
-        <li key={event.event_id} className={`feed-item sev-${event.severity}`}>
-          <div className="feed-head">
-            <span className="feed-type">{event.type.replace(/_/g, " ")}</span>
-            {/* 24-hour, matching the drawer and the timeline. The feed showed "8:01:42 AM" beside a
+          <li
+            key={event.event_id}
+            className={`feed-item sev-${event.severity}`}
+          >
+            <div className="feed-head">
+              <span className="feed-type">{event.type.replace(/_/g, " ")}</span>
+              {/* 24-hour, matching the drawer and the timeline. The feed showed "8:01:42 AM" beside a
                 drawer showing "08:01:42" for the same event, which invites the reader to wonder whether
                 they are looking at the same thing. Operations software has no business being ambiguous
                 about time. */}
-            <time>{new Date(event.ts).toLocaleTimeString([], { hour12: false })}</time>
-          </div>
-          {event.explanation.summary && <p className="feed-summary">{event.explanation.summary}</p>}
-          <div className="feed-meta">
-            <span title="confidence">{Math.round(event.confidence * 100)}%</span>
-            {event.entities.slice(0, 2).map((entityId) => (
-              <button key={entityId} className="chip" onClick={() => selectEntity(entityId)}>
-                {entityId.slice(0, 12)}
-              </button>
-            ))}
-            {event.source_ids.slice(0, 2).map((source) => (
-              <span key={source} className="chip chip-quiet">
-                {source}
+              <time>
+                {new Date(event.ts).toLocaleTimeString([], { hour12: false })}
+              </time>
+            </div>
+            {event.explanation.summary && (
+              <p className="feed-summary">{event.explanation.summary}</p>
+            )}
+            <div className="feed-meta">
+              <span title="confidence">
+                {Math.round(event.confidence * 100)}%
               </span>
-            ))}
-            {/* Every event already carries a full explanation — which clause matched, with what value,
+              {event.entities.slice(0, 2).map((entityId) => (
+                <button
+                  key={entityId}
+                  className="chip"
+                  onClick={() => selectEntity(entityId)}
+                >
+                  {entityId.slice(0, 12)}
+                </button>
+              ))}
+              {event.source_ids.slice(0, 2).map((source) => (
+                <span key={source} className="chip chip-quiet">
+                  {source}
+                </span>
+              ))}
+              {/* Every event already carries a full explanation — which clause matched, with what value,
                 against which evidence. Until the drawer existed it was reachable only by curl. */}
-            <button className="link-btn" onClick={() => onExplain(fromEvent(event))}>
-              why?
-            </button>
-          </div>
-        </li>
+              <button
+                className="link-btn"
+                onClick={() => onExplain(fromEvent(event))}
+              >
+                why?
+              </button>
+            </div>
+          </li>
         ))}
       </ul>
     </>
@@ -141,7 +174,9 @@ function EventFeed({ onExplain }: { onExplain: (subject: Explainable) => void })
 
 function EntityDetail() {
   const selectedId = useSioStore((state) => state.selectedEntityId);
-  const entity = useSioStore((state) => (selectedId ? state.entities.get(selectedId) : undefined));
+  const entity = useSioStore((state) =>
+    selectedId ? state.entities.get(selectedId) : undefined,
+  );
   const selectEntity = useSioStore((state) => state.selectEntity);
 
   if (!selectedId) return null;
@@ -161,7 +196,9 @@ function EntityDetail() {
   // stayed more than 15 minutes") turns on. Dock-specific dwell is a different measure and belongs
   // to the zone-dwell rule in Phase 3, so this row is labelled honestly rather than "dwell".
   const onSiteMinutes = Math.round(
-    (new Date(entity.last_seen).getTime() - new Date(entity.first_seen).getTime()) / 60000,
+    (new Date(entity.last_seen).getTime() -
+      new Date(entity.first_seen).getTime()) /
+      60000,
   );
 
   return (
@@ -189,7 +226,8 @@ function EntityDetail() {
           <>
             <dt>position</dt>
             <dd>
-              {entity.state.geo.lat.toFixed(5)}, {entity.state.geo.lon.toFixed(5)}
+              {entity.state.geo.lat.toFixed(5)},{" "}
+              {entity.state.geo.lon.toFixed(5)}
             </dd>
           </>
         )}
@@ -206,7 +244,9 @@ function EntityDetail() {
             <em>{Math.round(provenance.confidence * 100)}%</em>
           </li>
         ))}
-        {entity.provenance.length === 0 && <li className="empty">no provenance recorded</li>}
+        {entity.provenance.length === 0 && (
+          <li className="empty">no provenance recorded</li>
+        )}
       </ul>
     </aside>
   );
@@ -215,7 +255,10 @@ function EntityDetail() {
 export default function App() {
   const [tab, setTab] = useState<RailTab>("events");
   const [explaining, setExplaining] = useState<Explainable | null>(null);
-  const onExplain = useCallback((subject: Explainable) => setExplaining(subject), []);
+  const onExplain = useCallback(
+    (subject: Explainable) => setExplaining(subject),
+    [],
+  );
   const closeDrawer = useCallback(() => setExplaining(null), []);
   const setConnection = useSioStore((state) => state.setConnection);
   const upsertEntity = useSioStore((state) => state.upsertEntity);
@@ -236,11 +279,14 @@ export default function App() {
   //
   // The copilot's definition is the right one: a camera is not ON the site, it IS the site.
   const liveCount = useSioStore(
-    (state) => [...state.entities.values()].filter((entity) => !entity.is_static).length,
+    (state) =>
+      [...state.entities.values()].filter((entity) => !entity.is_static).length,
   );
   // Same definition during replay, so the number does not change meaning when scrubbing.
   const historyCount = useSioStore(
-    (state) => [...state.historyEntities.values()].filter((entity) => !entity.is_static).length,
+    (state) =>
+      [...state.historyEntities.values()].filter((entity) => !entity.is_static)
+        .length,
   );
   const scrubbing = useSioStore((state) => state.replayAt !== null);
   const entityCount = scrubbing ? historyCount : liveCount;
@@ -300,7 +346,10 @@ export default function App() {
           SIO <span>Spatial Intelligence OS</span>
         </h1>
         <div className="topbar-right">
-          <span className="stat" title="Moving entities seen in the last 5 minutes — fixed infrastructure is not counted">
+          <span
+            className="stat"
+            title="Moving entities seen in the last 5 minutes — fixed infrastructure is not counted"
+          >
             {entityCount} entities
           </span>
           <span className="stat">{unresolvedAlerts.length} open alerts</span>
@@ -330,26 +379,25 @@ export default function App() {
                 "copilot",
                 "missions",
                 "playbooks",
+                "twin",
                 "forecast",
                 "analytics",
                 "builder",
               ] as RailTab[]
-            ).map(
-              (name) => (
-                <button
-                  key={name}
-                  className={name === tab ? "tab tab-active" : "tab"}
-                  onClick={() => setTab(name)}
-                >
-                  {name}
-                  {/* The unattended count rides on the tab, because the operator will be looking at the
+            ).map((name) => (
+              <button
+                key={name}
+                className={name === tab ? "tab tab-active" : "tab"}
+                onClick={() => setTab(name)}
+              >
+                {name}
+                {/* The unattended count rides on the tab, because the operator will be looking at the
                       map when it changes. */}
-                  {name === "alerts" && unresolvedAlerts.length > 0 && (
-                    <span className="tab-badge">{unresolvedAlerts.length}</span>
-                  )}
-                </button>
-              ),
-            )}
+                {name === "alerts" && unresolvedAlerts.length > 0 && (
+                  <span className="tab-badge">{unresolvedAlerts.length}</span>
+                )}
+              </button>
+            ))}
           </nav>
           <div className="rail-body">
             {/* Keyed by tab so a panel that throws is contained to that tab and remounts cleanly when
@@ -361,6 +409,9 @@ export default function App() {
               {tab === "copilot" && <CopilotPanel onExplain={onExplain} />}
               {tab === "missions" && <MissionControlPanel />}
               {tab === "playbooks" && <PlaybookRunsPanel />}
+              {/* Mounted only while the tab is open, which is what keeps the lazy chunk unrequested until
+                  somebody asks — and lets Cesium release its WebGL context when they leave. */}
+              {tab === "twin" && <TwinPanel />}
               {tab === "forecast" && <ForecastPanel />}
               {tab === "analytics" && <AnalyticsPanel />}
               {tab === "builder" && <WorkflowBuilderPanel />}

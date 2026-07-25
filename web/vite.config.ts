@@ -1,5 +1,6 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig, loadEnv } from "vite";
+import cesium from "vite-plugin-cesium";
 
 /**
  * Vite configuration.
@@ -15,7 +16,22 @@ export default defineConfig(({ mode }) => {
   const webPort = Number(env.SIO_WEB_PORT ?? 5173);
 
   return {
-    plugins: [react()],
+    // `cesium()` copies Cesium's Workers, Assets, Widgets and ThirdParty directories into the build and
+    // defines CESIUM_BASE_URL. Without it Cesium's JS loads fine and its web workers 404 at runtime, which
+    // presents as a viewer rendering a black rectangle and logging nothing that names the cause.
+    //
+    // `rebuildCesium: true` IS LOAD-BEARING, and the default is a trap. In its default mode the plugin
+    // copies a prebuilt Cesium and injects `<script src="/cesium/Cesium.js">` into index.html — a blocking,
+    // non-module script on EVERY page view, plus 14MB of assets. That is strictly worse than bundling: it
+    // defeats the React.lazy boundary completely, and it does so silently, while the build output looks
+    // better because the async chunk shrinks from 4.5MB to 62kB.
+    //
+    // I nearly shipped that. The build log read like a win. Checking dist/index.html for the script tag is
+    // what caught it — the same class of mistake as a smaller bundle that loads more bytes.
+    //
+    // With `rebuildCesium`, Cesium is compiled into the graph, the only import is TwinPanel's dynamic one, and
+    // Rollup emits it as an async chunk that arrives when somebody opens the 3D tab and never otherwise.
+    plugins: [react(), cesium({ rebuildCesium: true })],
     server: {
       port: webPort,
       strictPort: true,
@@ -54,7 +70,16 @@ export default defineConfig(({ mode }) => {
           // Written as a function rather than the object form because Rollup 5 (Vite 8) only
           // accepts `manualChunks` as a function.
           manualChunks(id: string) {
-            if (id.includes("maplibre-gl") || id.includes("@deck.gl") || id.includes("@luma.gl")) {
+            // Cesium is NOT chunked here, deliberately. `manualChunks` would pull it into a chunk the entry
+            // graph references, defeating the `React.lazy` boundary in TwinPanel — the whole point of which
+            // is that ~3MB never arrives for the operators who never open the 3D tab. Rollup already emits it
+            // as its own async chunk because the only import is dynamic; the correct action is to leave it
+            // alone.
+            if (
+              id.includes("maplibre-gl") ||
+              id.includes("@deck.gl") ||
+              id.includes("@luma.gl")
+            ) {
               return "geo";
             }
             if (id.includes("recharts") || id.includes("d3-")) {
