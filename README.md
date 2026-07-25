@@ -13,8 +13,9 @@ response, industrial safety — each is a *configuration* of the same substrate.
 > Full product definition: [`docs/PRD.md`](docs/PRD.md).
 > Architecture and the swappable-seam map: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-**Status:** Phase 2 complete — real ONNX detection feeds tracking, multi-sensor fusion and a
-semantic frame index; entities in the world model are reconstructed from sensor data, not simulated.
+**Status:** Phase 3 complete. Real ONNX detection feeds tracking and multi-sensor fusion; zone
+membership fires events through a declarative rule engine; forecasts carry intervals whose coverage has
+been measured against held-out history; and the console scrubs and replays the recorded past.
 See [Roadmap](#roadmap).
 
 ---
@@ -101,7 +102,7 @@ docs/              PRD, architecture, deployment, governance, GPU swap, models, 
 | 0 | Foundations: workspace, schemas, core ports, bootstrap, datastores, Justfile, CI | **done** (macOS sign-off pending) |
 | 1 | Skeleton that boots: ingest simulator → api → live map | **done** |
 | 2 | Perception → tracking → fusion → world model + semantic search | **done** |
-| 3 | Spatial engine, events + anomalies, forecasting, timeline replay | spatial + events + forecasting **done** |
+| 3 | Spatial engine, events + anomalies, forecasting, timeline replay | **done** |
 | 4 | Copilot + MCP, workflows, decisions, agents, alerts → **demo ships here** | — |
 | 5 | Governance enforced: authn/authz, PII redaction, audit, multi-tenancy | — |
 | 6 | Simulation, mission control, analytics, developer platform (SDKs/webhooks/plugins) | — |
