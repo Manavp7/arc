@@ -12,6 +12,7 @@ does not parse, a pgvector operator used wrongly, a bucket that exists but rejec
 
 from __future__ import annotations
 
+import contextlib
 import os
 from datetime import timedelta
 
@@ -759,3 +760,65 @@ async def test_every_prediction_query_runs_against_postgres(pool, cfg) -> None: 
 
     # And the full cycle, which is what the timer calls and what the 500 came from.
     await service.tick()
+
+
+async def test_every_service_endpoint_responds(pool, cfg) -> None:  # type: ignore[no-untyped-def]
+    """Call every GET route of every database-backed service against real Postgres.
+
+    The broad net for a narrow, recurring bug. Phase 3 produced four failures that were all the same
+    shape — SQL that no test ever executed — and each was found by a human running the thing:
+    ``entities.geo``, ``sources.name``, ``events.entity_id``, and a bare placeholder in an IS NULL test
+    that returned a 500 on the backtest endpoint's first ever request.
+
+    Route handlers are code. This does not assert on their content — that is what the focused tests are
+    for — only that each one runs. A 500 from a typo is not a subtle failure, but it is invisible until
+    something calls it.
+    """
+    from fastapi.testclient import TestClient
+    from sio_events.service import EventsService
+    from sio_prediction.service import PredictionService
+    from sio_spatial.service import SpatialService
+
+    from sio_core.bus.memory import MemoryBus
+
+    services = [
+        SpatialService(settings=cfg, bus=MemoryBus()),
+        EventsService(settings=cfg, bus=MemoryBus()),
+        PredictionService(settings=cfg, bus=MemoryBus()),
+    ]
+    # Routes needing a path parameter that only exists at runtime; a 404 for an unknown id is correct
+    # behaviour and not what this test is looking for.
+    substitutions = {
+        "zone_id": "gate_a",
+        "source_id": "cam-gate-a",
+        "entity_id": "ent_does_not_exist",
+    }
+
+    failures: list[str] = []
+    for service in services:
+        service.pool = pool
+        if hasattr(service, "setup"):
+            with contextlib.suppress(Exception):
+                await service.setup()
+
+        client = TestClient(service.app)
+        for route in service.app.routes:
+            methods = getattr(route, "methods", set()) or set()
+            path = getattr(route, "path", "")
+            if "GET" not in methods or not path or path.startswith(("/openapi", "/docs", "/redoc")):
+                continue
+            called = path
+            for name, value in substitutions.items():
+                called = called.replace("{" + name + "}", value)
+            if "{" in called:
+                continue  # a parameter this test cannot sensibly invent
+            response = client.get(called)
+            if response.status_code >= 500:
+                failures.append(
+                    f"{service.name} GET {called} -> {response.status_code}: {response.text[:200]}"
+                )
+
+        with contextlib.suppress(Exception):
+            await service.teardown()
+
+    assert not failures, "endpoints returning a server error:\n  " + "\n  ".join(failures)

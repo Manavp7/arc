@@ -166,3 +166,34 @@ def test_no_service_reads_os_environ_directly() -> None:
         "read configuration from sio_core.config.Settings, not os.environ:\n  "
         + "\n  ".join(offenders)
     )
+
+
+def test_no_sql_tests_a_bare_placeholder_for_null() -> None:
+    """Postgres cannot infer a type for a bare placeholder in an ``IS NULL`` test.
+
+    A lint rather than another bug report, because this one has now cost twice: the world model's track
+    insert failed on EVERY track for two phases (contained by the dead-letter queue, so nothing looked
+    wrong), and the prediction service's backtest endpoint returned a 500 on its first request. Both were
+    one missing ``::text``.
+
+    The idiom itself is fine; it just has to say what type it is.
+    """
+    import re
+
+    offenders: list[str] = []
+    pattern = re.compile(r"%s\s+IS\s+(?:NOT\s+)?NULL", re.IGNORECASE)
+    searched = [
+        *python_files(SERVICES_DIR),
+        *python_files(REPO_ROOT / "libs"),
+    ]
+    for path in searched:
+        text = path.read_text(encoding="utf-8")
+        for number, line in enumerate(text.splitlines(), start=1):
+            if line.lstrip().startswith(("#", "--")):
+                continue  # a comment describing the mistake is not the mistake
+            if pattern.search(line):
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{number}: {line.strip()}")
+    assert not offenders, (
+        "bare placeholder in an IS NULL test; add an explicit cast such as %s::text:\n  "
+        + "\n  ".join(offenders)
+    )

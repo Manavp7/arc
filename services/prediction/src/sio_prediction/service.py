@@ -402,7 +402,9 @@ class PredictionService(SioService):
             rows = await self.pool.fetch(
                 """
                 SELECT payload FROM forecasts
-                 WHERE tenant_id = %s AND (%s IS NULL OR target = %s)
+                 -- Cast the placeholder: Postgres cannot type a bare parameter in an IS NULL test.
+                 -- Second occurrence of this exact bug, after the world model's track insert.
+                 WHERE tenant_id = %s AND (%s::text IS NULL OR target = %s)
                  ORDER BY ts DESC LIMIT %s
                 """,
                 (self.settings.tenant_id, target, target, limit),
@@ -485,7 +487,7 @@ class PredictionService(SioService):
             rows = await self.pool.fetch(
                 """
                 SELECT source_id, ts, value FROM measurements
-                 WHERE tenant_id = %s AND metric = %s AND (%s IS NULL OR source_id = %s)
+                 WHERE tenant_id = %s AND metric = %s AND (%s::text IS NULL OR source_id = %s)
                    AND ts >= now() - make_interval(secs => %s)
                  ORDER BY ts
                 """,
