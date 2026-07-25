@@ -10,6 +10,7 @@ resolution-markers = [
 members = [
     "sio",
     "sio-agents",
+    "sio-alerts",
     "sio-api",
     "sio-copilot",
     "sio-core",
@@ -3089,6 +3090,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "sio-agents" },
+    { name = "sio-alerts" },
     { name = "sio-api" },
     { name = "sio-copilot" },
     { name = "sio-core" },
@@ -3119,6 +3121,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "sio-agents", editable = "services/agents" },
+    { name = "sio-alerts", editable = "services/alerts" },
     { name = "sio-api", editable = "services/api" },
     { name = "sio-copilot", editable = "services/copilot" },
     { name = "sio-core", editable = "libs/sio_core" },
@@ -3150,6 +3153,23 @@ dev = [
 name = "sio-agents"
 version = "0.1.0"
 source = { editable = "services/agents" }
+dependencies = [
+    { name = "httpx" },
+    { name = "sio-core" },
+    { name = "sio-schemas" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "sio-core", editable = "libs/sio_core" },
+    { name = "sio-schemas", editable = "libs/sio_schemas" },
+]
+
+[[package]]
+name = "sio-alerts"
+version = "0.1.0"
+source = { editable = "services/alerts" }
 dependencies = [
     { name = "httpx" },
     { name = "sio-core" },
