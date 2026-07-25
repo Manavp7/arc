@@ -2234,11 +2234,19 @@ code {
   padding: 0.6rem 0 2.5rem;
 }
 
-.workflow-builder .panel-header {
+/* --- the shared form kit -----------------------------------------------------------------------------
+   Scoped to `.form-panel`, which any panel opts into, rather than to one panel's class.
+
+   The reason is a bug worth not repeating: the builder's first stylesheet defined `.primary`, `.ghost`,
+   `.muted`, `.status`, `.hint` and `.panel-header` under its OWN class, and there were no global rules for any
+   of them. So the next panel to use those obvious names would have rendered every button as bare body text —
+   because the global reset strips `button`, and a missing CSS rule fails silently. Mission Control was that
+   next panel, and this scope is what stopped it happening twice. */
+.form-panel .panel-header {
   margin-bottom: 0.2rem;
 }
 
-.workflow-builder .panel-header h2 {
+.form-panel .panel-header h2 {
   /* The browser default is 21px bold, which made this by a wide margin the loudest typography in a rail that
      otherwise runs at 10–13px. */
   margin: 0 0 0.3rem;
@@ -2248,7 +2256,7 @@ code {
   color: var(--text);
 }
 
-.workflow-builder .hint {
+.form-panel .hint {
   margin: 0 0 0.5rem;
   font-size: 0.72rem;
   line-height: 1.45;
@@ -2576,7 +2584,7 @@ code {
 
 /* Buttons. Every one of these was bare body text before, because the global reset strips `button` and this
    panel's classes had no rules. */
-.workflow-builder button.primary {
+.form-panel button.primary {
   margin-top: 0.7rem;
   padding: 0.4rem 0.9rem;
   border: 1px solid var(--accent);
@@ -2588,11 +2596,11 @@ code {
   cursor: pointer;
 }
 
-.workflow-builder button.primary:hover:not(:disabled) {
+.form-panel button.primary:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 32%, transparent);
 }
 
-.workflow-builder button.primary:disabled {
+.form-panel button.primary:disabled {
   /* Visibly dead. The first version's disabled state was byte-identical to its enabled one — same colour,
      opacity 1, still `cursor: pointer` — so a user would click a dead CTA repeatedly and get nothing back. */
   border-color: var(--border);
@@ -2602,7 +2610,7 @@ code {
   opacity: 0.65;
 }
 
-.workflow-builder button.ghost {
+.form-panel button.ghost {
   padding: 0.24rem 0.55rem;
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -2612,19 +2620,19 @@ code {
   cursor: pointer;
 }
 
-.workflow-builder button.ghost:hover {
+.form-panel button.ghost:hover {
   border-color: var(--accent);
   color: var(--text);
 }
 
 /* Destructive actions read as destructive. `delete` was the only irreversible control in the panel and was
    pixel-identical to `edit` sitting next to it. */
-.workflow-builder button.ghost.danger:hover {
+.form-panel button.ghost.danger:hover {
   border-color: var(--danger);
   color: var(--danger);
 }
 
-.workflow-builder .status {
+.form-panel .status {
   margin: 0.5rem 0 0;
   font-size: 0.72rem;
   line-height: 1.45;
@@ -2633,19 +2641,19 @@ code {
 /* Coloured by OUTCOME. The first version painted every message in the success green, including the six that
    are failures — "could not load the vocabulary", "refused", "could not delete". An error dressed as a success
    is worse than an unstyled one, because the colour is what people read before the words. */
-.workflow-builder .status-ok {
+.form-panel .status-ok {
   color: var(--ok);
 }
 
-.workflow-builder .status-bad {
+.form-panel .status-bad {
   color: var(--danger);
 }
 
-.workflow-builder .status-busy {
+.form-panel .status-busy {
   color: var(--text-dim);
 }
 
-.workflow-builder .status code {
+.form-panel .status code {
   font-family: var(--mono);
   font-size: 0.7rem;
   /* Inherits the status green rather than the verdict amber: same typeface, but the colour still says which
@@ -2682,7 +2690,7 @@ code {
 
 /* `.muted` rendered at full `--text` brightness, identical to the bold name beside it, so the Armed workflows
    list had no visual hierarchy at all. */
-.workflow-builder .muted {
+.form-panel .muted {
   color: var(--text-dim);
   font-size: 0.7rem;
   font-weight: 400;
@@ -2702,7 +2710,7 @@ code {
   margin-top: 0.15rem;
 }
 
-.workflow-builder .footnote {
+.form-panel .footnote {
   margin-top: 1rem;
   padding-top: 0.6rem;
   border-top: 1px solid var(--border);
@@ -2710,4 +2718,249 @@ code {
   font-style: italic;
   line-height: 1.45;
   color: var(--text-dim);
+}
+
+/* ---------------------------------------------------------------- mission control
+   Built around one journey — create → assign → watch live → replay — because that is this phase's acceptance,
+   and a screen that supports one journey completely is worth more than one that half-supports six.
+
+   Written against a list of every class the panel uses, checked mechanically against this file. The builder's
+   stylesheet shipped with six class names that had no rules, and every button in it rendered as bare body text
+   because the global reset strips `button` — a missing CSS rule fails silently, exactly like a missing API
+   field. Grepping the JSX for class names and diffing against the stylesheet takes ten seconds and would have
+   caught it. */
+.mission-control {
+  padding: 0.6rem 0 2.5rem;
+}
+
+.mission-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.mission-row {
+  padding: 0.5rem 0.55rem;
+  margin-bottom: 0.35rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+
+.mission-row:hover {
+  border-color: var(--accent);
+}
+
+.mission-row.selected {
+  border-left-color: var(--accent);
+  background: var(--bg-elev);
+}
+
+.mission-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  margin-bottom: 0.35rem;
+}
+
+.mission-row-head strong {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.mission-state {
+  flex-shrink: 0;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+/* State colour is meaning, not decoration: `active` and `completed` must not look alike at a glance, because
+   the question an operator asks across a list of missions is "which of these is still running?" */
+.state-active {
+  color: var(--ok);
+}
+
+.state-paused {
+  color: var(--warn);
+}
+
+.state-aborted {
+  color: var(--danger);
+}
+
+.state-completed,
+.state-draft {
+  color: var(--text-dim);
+}
+
+.progress-track {
+  height: 4px;
+  margin-bottom: 0.3rem;
+  border-radius: 2px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+
+.progress-fill.full {
+  background: var(--ok);
+}
+
+.mission-detail h4 {
+  margin: 0.9rem 0 0.4rem;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+
+.mission-actions {
+  margin: 0.5rem 0;
+}
+
+.objective-list,
+.objective-preview,
+.resource-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.76rem;
+}
+
+.objective-list li,
+.objective-preview li {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.objective-list li.met .checkbox {
+  /* Struck through, so a met objective is legible as met without reading the tick. */
+  text-decoration: line-through;
+  color: var(--text-dim);
+}
+
+/* `auto` versus `manual` is the most important distinction in this panel: it says whether the platform will
+   satisfy the objective or whether a person has to. Without the tag, a commander cannot tell which objectives
+   they are personally responsible for. */
+.auto-tag,
+.manual-tag {
+  flex-shrink: 0;
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.02em;
+}
+
+.auto-tag {
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent);
+}
+
+.manual-tag {
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+.resource-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  padding: 0.28rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.resource-list code {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The comms log is the main content, not a footnote: after an incident the question is never "what was the
+   state" but "who said what, when". Capped in height with its own scroll, because a mission that ran for an
+   hour has a log longer than the panel and the controls below it must stay reachable. */
+.comms-log {
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0.35rem 0.45rem;
+  max-height: 15rem;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  font-size: 0.72rem;
+}
+
+.comms-log li {
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+  padding: 0.18rem 0;
+  line-height: 1.45;
+}
+
+.comm-time {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  color: var(--text-dim);
+}
+
+.comm-author {
+  flex-shrink: 0;
+  min-width: 4.5rem;
+  color: var(--accent);
+}
+
+.comm-body {
+  color: var(--text);
+}
+
+/* The platform's own entries are dimmer than a person's. A log where a state change looks as loud as a human
+   sitrep buries the part somebody typed on purpose. */
+.comm-system .comm-author,
+.comm-system .comm-body {
+  color: var(--text-dim);
+}
+
+.mission-control textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 0.22rem;
+  padding: 0.34rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 0.78rem;
+  resize: vertical;
+}
+
+.mission-control textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.mission-control code {
+  font-family: var(--mono);
+  font-size: 0.72rem;
 }

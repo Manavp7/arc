@@ -7,7 +7,6 @@ import type {
   Entity,
   Forecast,
   HealthStatus,
-  Mission,
   ReplayPlan,
   SioEvent,
   Zone,
@@ -255,6 +254,84 @@ export const api = {
   analyticsReport: (hours = 24) =>
     request<{ markdown: string }>(`/analytics/report${query({ hours })}`),
 
+  // --- missions (M17) ---------------------------------------------------------------------------
+  missions: (state?: string) =>
+    request<{ missions: unknown[] }>(`/missions${query({ state })}`),
+
+  mission: (missionId: string) =>
+    request<unknown>(`/missions/${encodeURIComponent(missionId)}`),
+
+  createMission: (body: {
+    name: string;
+    zone_id?: string | null;
+    commander?: string | null;
+    objectives?: { description: string; zone_id?: string | null }[];
+  }) => request<unknown>("/missions", { method: "POST", body: JSON.stringify(body) }),
+
+  /**
+   * Move a mission through its lifecycle.
+   *
+   * `force` is a parameter rather than a separate endpoint because it is the same act with an override, and the
+   * service records the override in the comms log naming what was outstanding.
+   */
+  missionState: (missionId: string, to: string, force = false) =>
+    request<unknown>(
+      `/missions/${encodeURIComponent(missionId)}/state${query({ to, by: "console", force })}`,
+      { method: "POST" },
+    ),
+
+  assignResource: (missionId: string, resourceId: string, role?: string) =>
+    request<unknown>(
+      `/missions/${encodeURIComponent(missionId)}/resources${query({
+        resource_id: resourceId,
+        by: "console",
+        role,
+      })}`,
+      { method: "POST" },
+    ),
+
+  releaseResource: (missionId: string, resourceId: string) =>
+    request<unknown>(
+      `/missions/${encodeURIComponent(missionId)}/resources/${encodeURIComponent(resourceId)}${query({
+        by: "console",
+      })}`,
+      { method: "DELETE" },
+    ),
+
+  completeObjective: (missionId: string, objectiveId: string, done: boolean) =>
+    request<unknown>(
+      `/missions/${encodeURIComponent(missionId)}/objectives/${encodeURIComponent(objectiveId)}${query({
+        done,
+        by: "console",
+      })}`,
+      { method: "POST" },
+    ),
+
+  addComm: (missionId: string, body: string, kind = "message") =>
+    request<unknown>(`/missions/${encodeURIComponent(missionId)}/comms`, {
+      method: "POST",
+      body: JSON.stringify({ body, kind, author: "console" }),
+    }),
+
+  /** The mission's replay window, with a ready-made URL. */
+  missionReplay: (missionId: string) =>
+    request<{ name: string; from: string; to: string; live: boolean; replay_url: string }>(
+      `/missions/${encodeURIComponent(missionId)}/replay`,
+    ),
+
+  /**
+   * Plan a replay from a URL the server built.
+   *
+   * Taking the server's URL rather than reassembling it from `from`/`to`, because a `+` in an ISO timestamp
+   * decodes as a SPACE in a query string — which is exactly the bug the missions service had until its window
+   * started returning `Z`. Reconstructing it here would reintroduce it on the client.
+   */
+  replayFromUrl: (replayUrl: string) =>
+    request<{ replay_id: string; frames: number; window_s: number; wall_duration_s: number; speed: number }>(
+      replayUrl.replace(/^\/api/, ""),
+      { method: "POST" },
+    ),
+
   /**
    * The no-code builder's vocabulary: what the engine can actually run.
    *
@@ -318,8 +395,6 @@ export const api = {
         steps: Array<{ name: string; status: string; attempts: number }>;
       }>;
     }>(`/workflow/runs${query({ limit })}`),
-
-  missions: () => request<Mission[]>("/missions"),
 
   ask: (question: string) =>
     request<{

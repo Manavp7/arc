@@ -300,7 +300,7 @@ export function WorkflowBuilderPanel() {
   })();
 
   return (
-    <div className="panel workflow-builder">
+    <div className="panel form-panel workflow-builder">
       <header className="panel-header">
         <h2>Workflow builder</h2>
         <p className="hint">

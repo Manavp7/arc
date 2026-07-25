@@ -24,7 +24,8 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ExplanationDrawer, fromEvent, type Explainable } from "./components/ExplanationDrawer";
 import { ForecastPanel } from "./components/ForecastPanel";
 import { LiveMap } from "./components/LiveMap";
-import { MissionsPanel } from "./components/MissionsPanel";
+import { MissionControlPanel } from "./components/MissionControlPanel";
+import { PlaybookRunsPanel } from "./components/PlaybookRunsPanel";
 import { WorkflowBuilderPanel } from "./components/WorkflowBuilderPanel";
 import { Timeline } from "./components/Timeline";
 import { api } from "./lib/api";
@@ -38,6 +39,7 @@ type RailTab =
   | "decisions"
   | "copilot"
   | "missions"
+  | "playbooks"
   | "forecast"
   | "analytics"
   | "builder";
@@ -327,6 +329,7 @@ export default function App() {
                 "decisions",
                 "copilot",
                 "missions",
+                "playbooks",
                 "forecast",
                 "analytics",
                 "builder",
@@ -356,7 +359,8 @@ export default function App() {
               {tab === "alerts" && <AlertsPanel onExplain={onExplain} />}
               {tab === "decisions" && <DecisionsPanel onExplain={onExplain} />}
               {tab === "copilot" && <CopilotPanel onExplain={onExplain} />}
-              {tab === "missions" && <MissionsPanel />}
+              {tab === "missions" && <MissionControlPanel />}
+              {tab === "playbooks" && <PlaybookRunsPanel />}
               {tab === "forecast" && <ForecastPanel />}
               {tab === "analytics" && <AnalyticsPanel />}
               {tab === "builder" && <WorkflowBuilderPanel />}

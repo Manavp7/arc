@@ -1,5 +1,9 @@
 /**
- * Missions: playbook runs, step by step (PRD M15).
+ * Playbook runs, step by step (PRD M15).
+ *
+ * Renamed from `MissionsPanel`, because that is not what it shows. This panel lists WORKFLOW runs — the steps a
+ * playbook took when a fire was detected — and a tab labelled "missions" that showed them was a small lie that
+ * became a confusing one once M17 added actual missions. Missions are in `MissionControlPanel`.
  *
  * The demo turns on this panel. "A fire is detected and five steps visibly run" is the claim, and until now
  * the run existed only in Postgres and a log line — the most demonstrable thing the platform does was the
@@ -60,7 +64,7 @@ const STATUS_GLYPH: Record<RunStatus, string> = {
   compensated: "↩",
 };
 
-export function MissionsPanel() {
+export function PlaybookRunsPanel() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [summary, setSummary] = useState<{ runs: number; suppressed: number; byPlaybook: Record<string, number> }>({
     runs: 0,
