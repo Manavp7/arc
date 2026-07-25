@@ -141,6 +141,21 @@ Outbound, `services/webhooks` posts signed deliveries to your endpoint with retr
 [services/webhooks/README.md](services/webhooks/README.md), which covers why a body-only signature can be
 replayed for ever.
 
+## Connecting it to real sources
+
+Nine connectors ship: a real RTSP camera, an MQTT broker, Sentinel-2 via Earth Search, MAVLink drone telemetry, a
+SQL query, a CSV export, a traffic feed, Open-Meteo, and the synthetic yard.
+
+```json
+{ "connectors": [{ "source_id": "gate-a", "kind": "camera_rtsp",
+                   "modality": "video", "options": { "url": "rtsp://...", "publish_fps": 2 } }] }
+```
+
+Each is behind an optional extra and looks its dependency up at `start()`, so a default install stays fast and a
+misconfiguration says `uv pip install 'sio-ingest[rtsp]'` rather than `ModuleNotFoundError`. The SQL connector is
+read-only, enforced before it opens a connection. See [docs/CONNECTORS.md](docs/CONNECTORS.md), which documents
+every option and — more usefully — why each default is what it is.
+
 ## Running an operation
 
 The **missions** tab is Mission Control: create a mission, commit resources to it, watch it, replay it.
