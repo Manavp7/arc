@@ -118,7 +118,7 @@ docs/              PRD, architecture, deployment, governance, GPU swap, models, 
 | 4 | Copilot + MCP, workflows, decisions, agents, alerts, the console panels | **done** |
 | 4.7 | **Ship checkpoint** — `just demo`, `docs/DEMO.md`, quickstart re-verified, e2e smoke | **done** |
 | 5 | Governance enforced: authn/authz, PII redaction, immutable audit, multi-tenancy | **done** |
-| 6 | Simulation (M11) and analytics (M19) **done**; mission control, developer platform | **in progress** |
+| 6 | Simulation (M11) and analytics (M19) **done** incl. in-app views; mission control, developer platform | **in progress** |
 | 7 | Real connectors (RTSP/STAC/MAVLink/MQTT), 3D twin, GPU/production overlay | — |
 | 8 | Evaluation harnesses (mAP/HOTA/copilot), performance benchmarks, docs | — |
 
