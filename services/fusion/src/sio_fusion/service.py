@@ -33,6 +33,17 @@ from .fuse import (
 from .projection import CameraCalibration, GroundProjector, to_local_metres
 
 
+def _fleet_number(device_id: str) -> str:
+    """Turn an internal device id into something an operator would say out loud.
+
+    ``gps:gps-drone-0018`` becomes ``0018``. The namespace is an implementation detail of association,
+    and repeating the type in the label ("Drone gps-drone-0018") is noise on a crowded map.
+    """
+    without_namespace = device_id.split(":", 1)[-1]
+    tail = without_namespace.rsplit("-", 1)[-1]
+    return tail if len(tail) >= 3 else without_namespace
+
+
 class FusionService(SioService):
     """Turns per-sensor observations into one entity per real-world object.
 
@@ -285,14 +296,19 @@ class FusionService(SioService):
         """A human-facing name built from evidence, never from ground truth.
 
         A plate read by an RFID reader or by OCR is a legitimate label; the simulator's own name for
-        the agent is not, and is filtered out before it reaches here.
+        the agent is not, and is filtered out before it ever reaches here.
+
+        Falls back to a fleet-number style name derived from the device id. The internal namespace and
+        the repeated type name are stripped — a map label reading "Drone gps:gps-drone-0018" leaks
+        plumbing into the operator's view, and an operator reads "Drone 0018".
         """
+        kind = str(fused.entity_type).title()
         plate = fused.attributes.get("plate")
         if plate:
-            return f"{str(fused.entity_type).title()} {plate}"
+            return f"{kind} {plate}"
         if fused.device_ids:
-            return f"{str(fused.entity_type).title()} {sorted(fused.device_ids)[0]}"
-        return f"{str(fused.entity_type).title()} {fused.entity_id[-6:]}"
+            return f"{kind} {_fleet_number(sorted(fused.device_ids)[0])}"
+        return f"{kind} {fused.entity_id[-6:]}"
 
     async def _publish_seen_by(
         self, fused: Any, entity: Entity, ctx: MessageContext | None

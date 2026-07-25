@@ -590,3 +590,18 @@ def test_modalities_survive_the_evidence_window() -> None:
     assert len(entity.provenance) <= 40, "the evidence window stays bounded"
     assert "video" in entity.modalities, "but the camera contribution is not forgotten"
     assert entity.is_multi_sensor
+
+
+# ------------------------------------------------------------------ operator labels
+def test_a_fleet_number_reads_like_a_fleet_number() -> None:
+    """A map label must not leak association plumbing.
+
+    Live, the drone was labelled "Drone gps:gps-drone-0018": the namespace is an internal detail of
+    device identity, and repeating the type is noise on a crowded map.
+    """
+    from sio_fusion.service import _fleet_number
+
+    assert _fleet_number("gps:gps-drone-0018") == "0018"
+    assert _fleet_number("tag:TAG-ABC-123") == "123"
+    assert _fleet_number("gps:tracker") == "tracker", "nothing to strip: leave it alone"
+    assert _fleet_number("gps:a-b") == "a-b", "a two-character tail is not a fleet number"
