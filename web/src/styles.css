@@ -2119,7 +2119,11 @@ code {
 
 .histogram-bar,
 .bar-fill {
-  background: linear-gradient(90deg, rgba(78, 161, 255, 0.55), rgba(78, 161, 255, 0.85));
+  background: linear-gradient(
+    90deg,
+    rgba(78, 161, 255, 0.55),
+    rgba(78, 161, 255, 0.85)
+  );
   height: 100%;
 }
 
@@ -2388,6 +2392,19 @@ code {
   accent-color: var(--accent);
 }
 
+/* A disabled checkbox on a finished mission has to LOOK disabled. Chrome's native disabled rendering is nearly
+   invisible against this dark theme, which is the third variant of the same bug — primary buttons, then ghost
+   buttons, now checkboxes. Disabled states do not inherit from each other; each control needs saying. */
+.builder-section .checkbox input[type="checkbox"]:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.objective-list li label.checkbox:has(input:disabled) {
+  cursor: default;
+  color: var(--text-dim);
+}
+
 .step-card {
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
@@ -2557,8 +2574,13 @@ code {
 }
 
 /* Same reason inside any flex row: the default top margin left `Create as draft` sitting 14px below the
-   `cancel` beside it. */
-.builder-row > button.primary {
+   `cancel` beside it.
+
+   Scoped through `.form-panel` deliberately. The first attempt was `.builder-row > button.primary`, which has
+   IDENTICAL specificity (0-2-1) to `.form-panel button.primary` — so the later rule in the file won and the
+   margin stayed exactly where it was. A review measured it still 14px out. Specificity is not source order
+   until the weights tie, and then it is only source order. */
+.form-panel .builder-row > button.primary {
   margin-top: 0;
 }
 

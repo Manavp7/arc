@@ -108,15 +108,20 @@ export function MissionControlPanel() {
   const [objectiveText, setObjectiveText] = useState("");
   const [zones, setZones] = useState<string[]>([]);
 
-  const [entities, setEntities] = useState<{ id: string; label: string; zone: string | null }[]>([]);
+  const [entities, setEntities] = useState<
+    { id: string; label: string; zone: string | null }[]
+  >([]);
   const [comm, setComm] = useState("");
   const commsRef = useRef<HTMLUListElement | null>(null);
   const requestReplay = useSioStore((state) => state.requestReplay);
 
-  const say = useCallback((message: string, kind: "ok" | "bad" | "busy" = "ok") => {
-    setStatus(message);
-    setStatusKind(kind);
-  }, []);
+  const say = useCallback(
+    (message: string, kind: "ok" | "bad" | "busy" = "ok") => {
+      setStatus(message);
+      setStatusKind(kind);
+    },
+    [],
+  );
 
   const loadEntities = useCallback(async () => {
     try {
@@ -208,7 +213,31 @@ export function MissionControlPanel() {
    * than the dropdown they came from.
    */
   const labelFor = useCallback(
-    (entityId: string) => entities.find((entity) => entity.id === entityId)?.label ?? entityId,
+    (entityId: string) =>
+      entities.find((entity) => entity.id === entityId)?.label ?? entityId,
+    [entities],
+  );
+
+  /**
+   * Replace entity ids with their labels anywhere in a display string.
+   *
+   * Needed because the comms bodies are composed by the service, which knows ids and not labels — so the log
+   * said `sim-vsy1my-forklift-0007 assigned` two lines under a Resources list reading "Forklift 7". The same
+   * resource named two ways on one screen is arguably worse than the old, consistently-unreadable state.
+   *
+   * The STORED entry keeps the id, deliberately. It is testimony, and an id is stable while a label is not —
+   * an entity relabelled next week would silently rewrite what the log appears to say. So the id is what is
+   * recorded and the name is what is shown, which is the right way round.
+   */
+  const humanise = useCallback(
+    (text: string) =>
+      entities.reduce(
+        (result, entity) =>
+          entity.label === entity.id
+            ? result
+            : result.split(entity.id).join(entity.label),
+        text,
+      ),
     [entities],
   );
 
@@ -238,7 +267,9 @@ export function MissionControlPanel() {
         commander: "console",
         objectives,
       })) as Mission;
-      say(`Created ${mission.name}. It is a draft — start it when you are ready.`);
+      say(
+        `Created ${mission.name}. It is a draft — start it when you are ready.`,
+      );
       setName("");
       setObjectiveText("");
       setCreating(false);
@@ -335,15 +366,18 @@ export function MissionControlPanel() {
     }
   }
 
-  const terminal = detail ? ["completed", "aborted"].includes(detail.state) : false;
+  const terminal = detail
+    ? ["completed", "aborted"].includes(detail.state)
+    : false;
 
   return (
     <div className="panel form-panel mission-control">
       <header className="panel-header">
         <h2>Mission control</h2>
         <p className="hint">
-          A mission is the one thing here a person owns. Objectives with a zone complete themselves when an{" "}
-          <em>assigned</em> resource is observed there.
+          A mission is the one thing here a person owns. Objectives with a zone
+          complete themselves when an <em>assigned</em> resource is observed
+          there.
         </p>
       </header>
 
@@ -366,7 +400,10 @@ export function MissionControlPanel() {
           </label>
           <label>
             Area
-            <select value={zone} onChange={(event) => setZone(event.target.value)}>
+            <select
+              value={zone}
+              onChange={(event) => setZone(event.target.value)}
+            >
               <option value="">no particular zone</option>
               {zones.map((item) => (
                 <option key={item} value={item}>
@@ -375,8 +412,9 @@ export function MissionControlPanel() {
               ))}
             </select>
             <small>
-              Alerts raised here are attached to the mission automatically, so its record is what happened rather
-              than what somebody remembered to link.
+              Alerts raised here are attached to the mission automatically, so
+              its record is what happened rather than what somebody remembered
+              to link.
             </small>
           </label>
           <label>
@@ -385,11 +423,14 @@ export function MissionControlPanel() {
               rows={4}
               value={objectiveText}
               onChange={(event) => setObjectiveText(event.target.value)}
-              placeholder={"Get eyes on the fuel store @ fuel_store\nConfirm the area is safe"}
+              placeholder={
+                "Get eyes on the fuel store @ fuel_store\nConfirm the area is safe"
+              }
             />
             <small>
-              Add <code>@ zone</code> and the objective completes itself when an assigned resource is observed
-              there. Without a zone it stays a human judgement — which some objectives genuinely are.
+              Add <code>@ zone</code> and the objective completes itself when an
+              assigned resource is observed there. Without a zone it stays a
+              human judgement — which some objectives genuinely are.
             </small>
           </label>
           {objectives.length > 0 && (
@@ -407,7 +448,11 @@ export function MissionControlPanel() {
             </ul>
           )}
           <div className="builder-row">
-            <button className="primary" disabled={!name.trim()} onClick={() => void create()}>
+            <button
+              className="primary"
+              disabled={!name.trim()}
+              onClick={() => void create()}
+            >
               Create as draft
             </button>
             <button className="ghost" onClick={() => setCreating(false)}>
@@ -425,7 +470,11 @@ export function MissionControlPanel() {
           {missions.map((mission) => (
             <li
               key={mission.mission_id}
-              className={mission.mission_id === selectedId ? "mission-row selected" : "mission-row"}
+              className={
+                mission.mission_id === selectedId
+                  ? "mission-row selected"
+                  : "mission-row"
+              }
               onClick={() => setSelectedId(mission.mission_id)}
             >
               <div className="mission-row-head">
@@ -435,9 +484,16 @@ export function MissionControlPanel() {
                 <strong>{mission.name}</strong>
               </div>
               {/* The bar and the sentence together. A percentage alone prompts "which 40%?" every time. */}
-              <div className="progress-track" aria-label={mission.progress.summary}>
+              <div
+                className="progress-track"
+                aria-label={mission.progress.summary}
+              >
                 <div
-                  className={mission.progress.percent === 100 ? "progress-fill full" : "progress-fill"}
+                  className={
+                    mission.progress.percent === 100
+                      ? "progress-fill full"
+                      : "progress-fill"
+                  }
                   style={{ width: `${mission.progress.percent}%` }}
                 />
               </div>
@@ -457,7 +513,11 @@ export function MissionControlPanel() {
           {/* The progress the detail was missing entirely: the only bar was on the list row above. */}
           <div className="progress-track" aria-label={detail.progress.summary}>
             <div
-              className={detail.progress.percent === 100 ? "progress-fill full" : "progress-fill"}
+              className={
+                detail.progress.percent === 100
+                  ? "progress-fill full"
+                  : "progress-fill"
+              }
               style={{ width: `${detail.progress.percent}%` }}
             />
           </div>
@@ -473,7 +533,8 @@ export function MissionControlPanel() {
             ))}
             {detail.legal_transitions.length === 0 && (
               <span className="muted">
-                {detail.state} is final — a mission that could be reopened is one whose completion means nothing.
+                {detail.state} is final — a mission that could be reopened is
+                one whose completion means nothing.
               </span>
             )}
             {detail.replay && (
@@ -493,8 +554,12 @@ export function MissionControlPanel() {
             detail.legal_transitions.includes("completed") &&
             detail.progress.outstanding.length > 0 && (
               <p className="hint">
-                {detail.progress.outstanding.length} objective(s) still open, so completing is blocked.{" "}
-                <button className="ghost danger" onClick={() => void move("completed", true)}>
+                {detail.progress.outstanding.length} objective(s) still open, so
+                completing is blocked.{" "}
+                <button
+                  className="ghost danger"
+                  onClick={() => void move("completed", true)}
+                >
                   complete anyway
                 </button>{" "}
                 records the override in the log, naming what was outstanding.
@@ -504,13 +569,16 @@ export function MissionControlPanel() {
           <h4>Objectives</h4>
           {terminal && (
             <p className="muted">
-              This mission is {detail.state}, so its objectives are a record of what happened rather than a list
-              of work.
+              This mission is {detail.state}, so its objectives are a record of
+              what happened rather than a list of work.
             </p>
           )}
           <ul className="objective-list">
             {detail.objectives.map((objective) => (
-              <li key={objective.objective_id} className={objective.done ? "met" : ""}>
+              <li
+                key={objective.objective_id}
+                className={objective.done ? "met" : ""}
+              >
                 <label className="checkbox">
                   <input
                     type="checkbox"
@@ -518,23 +586,34 @@ export function MissionControlPanel() {
                     // A finished mission's objectives are a record, not a worklist. The service refuses the
                     // write; disabling the box means the operator is not invited to try.
                     disabled={terminal}
-                    onChange={(event) => void tick(objective.objective_id, event.target.checked)}
+                    onChange={(event) =>
+                      void tick(objective.objective_id, event.target.checked)
+                    }
                   />
                   {objective.description}
                 </label>
-                {objective.zone_id && <span className="auto-tag">auto · {objective.zone_id}</span>}
-                {/* The cause, not just the tick. "Objective met" without a cause makes a review harder. */}
-                {objective.satisfied_by && objective.satisfied_by.length > 0 && (
-                  <span className="muted"> observed {objective.satisfied_by.join(", ")}</span>
+                {objective.zone_id && (
+                  <span className="auto-tag">auto · {objective.zone_id}</span>
                 )}
+                {/* The cause, not just the tick. "Objective met" without a cause makes a review harder. */}
+                {objective.satisfied_by &&
+                  objective.satisfied_by.length > 0 && (
+                    <span className="muted">
+                      {" "}
+                      observed {objective.satisfied_by.map(labelFor).join(", ")}
+                    </span>
+                  )}
               </li>
             ))}
-            {detail.objectives.length === 0 && <li className="muted">No objectives set.</li>}
+            {detail.objectives.length === 0 && (
+              <li className="muted">No objectives set.</li>
+            )}
           </ul>
           {detail.progress.unassigned.length > 0 && (
             <p className="verdict-bad">
-              {detail.progress.unassigned.length} objective(s) have no assigned resource that could satisfy
-              them — that is work nobody is doing, which a progress bar cannot show you.
+              {detail.progress.unassigned.length} objective(s) have no assigned
+              resource that could satisfy them — that is work nobody is doing,
+              which a progress bar cannot show you.
             </p>
           )}
 
@@ -543,12 +622,17 @@ export function MissionControlPanel() {
             {detail.resources.map((resource) => (
               <li key={resource}>
                 <span className="resource-name">{labelFor(resource)}</span>
-                <button className="ghost danger" onClick={() => void release(resource)}>
+                <button
+                  className="ghost danger"
+                  onClick={() => void release(resource)}
+                >
                   release
                 </button>
               </li>
             ))}
-            {detail.resources.length === 0 && <li className="muted">Nothing committed.</li>}
+            {detail.resources.length === 0 && (
+              <li className="muted">Nothing committed.</li>
+            )}
           </ul>
           <label>
             Commit a resource
@@ -575,16 +659,18 @@ export function MissionControlPanel() {
                 ))}
             </select>
             <small>
-              A resource can be committed to one mission at a time. The database enforces it, so two people
-              cannot commit the same drone at once.
+              {terminal
+                ? "This mission has ended, so nothing more can be committed to it."
+                : "A resource can be committed to one mission at a time. The database enforces it, so two people cannot commit the same drone at once."}
             </small>
           </label>
 
           <h4>Comms</h4>
           {/* Append-only, and said so where somebody might expect an edit button. */}
           <p className="hint">
-            Append-only. An entry is testimony — somebody said a thing at a time — and testimony that can be
-            edited afterwards is worth nothing in a review.
+            Append-only. An entry is testimony — somebody said a thing at a time
+            — and testimony that can be edited afterwards is worth nothing in a
+            review.
           </p>
           <ul className="comms-log" ref={commsRef}>
             {(detail.comms ?? []).map((entry) => (
@@ -595,10 +681,12 @@ export function MissionControlPanel() {
                   {new Date(entry.ts).toLocaleTimeString([], { hour12: false })}
                 </span>
                 <span className="comm-author">{entry.author}</span>
-                <span className="comm-body">{entry.body}</span>
+                <span className="comm-body">{humanise(entry.body)}</span>
               </li>
             ))}
-            {(detail.comms ?? []).length === 0 && <li className="muted">Nothing logged yet.</li>}
+            {(detail.comms ?? []).length === 0 && (
+              <li className="muted">Nothing logged yet.</li>
+            )}
           </ul>
           <div className="builder-row">
             <label style={{ flex: "1 1 100%" }}>
@@ -612,15 +700,19 @@ export function MissionControlPanel() {
                 placeholder="Ground team reports the valve is closed"
               />
             </label>
-            <button className="ghost" disabled={!comm.trim()} onClick={() => void send()}>
+            <button
+              className="ghost"
+              disabled={!comm.trim()}
+              onClick={() => void send()}
+            >
               append
             </button>
           </div>
 
           {detail.alert_ids.length > 0 && (
             <p className="muted">
-              {detail.alert_ids.length} alert(s) raised in {detail.zone_id} while this mission was running are
-              attached to its record.
+              {detail.alert_ids.length} alert(s) raised in {detail.zone_id}{" "}
+              while this mission was running are attached to its record.
             </p>
           )}
         </section>
@@ -628,7 +720,9 @@ export function MissionControlPanel() {
 
       {/* Only shown here when no mission is selected — otherwise it renders beside the actions row, next to
           the control that produced it. */}
-      {status && !detail && <p className={`status status-${statusKind}`}>{status}</p>}
+      {status && !detail && (
+        <p className={`status status-${statusKind}`}>{status}</p>
+      )}
     </div>
   );
 }
@@ -649,7 +743,9 @@ function describe(error: unknown): string {
 function rank(entity: { zone: string | null }, mission: Mission): number {
   if (!entity.zone) return 0;
   const wanted = new Set(
-    mission.objectives.filter((item) => !item.done).map((item) => item.zone_id ?? ""),
+    mission.objectives
+      .filter((item) => !item.done)
+      .map((item) => item.zone_id ?? ""),
   );
   if (wanted.has(entity.zone)) return 2;
   if (entity.zone === mission.zone_id) return 1;

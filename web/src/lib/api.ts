@@ -57,7 +57,9 @@ export function explainError(error: unknown): string {
   }
   const detail = error.detail;
   if (!detail || typeof detail === "string") return error.message;
-  const outstanding = detail.outstanding?.length ? ` (${detail.outstanding.join(", ")})` : "";
+  const outstanding = detail.outstanding?.length
+    ? ` (${detail.outstanding.join(", ")})`
+    : "";
   const problems = detail.problems?.length
     ? ` ${detail.problems.map((problem) => `${problem.where}: ${problem.message}`).join("; ")}`
     : "";
@@ -68,7 +70,11 @@ export function explainError(error: unknown): string {
   return `${head}${outstanding}${problems}${detail.fix ? ` — ${detail.fix}` : ""}${legal}`;
 }
 
-async function request<T>(path: string, init?: RequestInit, retrying = false): Promise<T> {
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  retrying = false,
+): Promise<T> {
   const url = `${BASE}${path}`;
   // Every request carries a principal. `ensure()` reuses a valid session, so this is a no-op after the
   // first call — and concurrent callers share one mint rather than each getting their own.
@@ -93,7 +99,9 @@ async function request<T>(path: string, init?: RequestInit, retrying = false): P
     let message = response.statusText;
     let structured: RefusalDetail | string | undefined;
     try {
-      const body = (await response.json()) as { detail?: RefusalDetail | string };
+      const body = (await response.json()) as {
+        detail?: RefusalDetail | string;
+      };
       if (typeof body.detail === "string") {
         message = body.detail;
         structured = body.detail;
@@ -112,7 +120,9 @@ async function request<T>(path: string, init?: RequestInit, retrying = false): P
   return (await response.json()) as T;
 }
 
-function query(params: Record<string, string | number | boolean | undefined>): string {
+function query(
+  params: Record<string, string | number | boolean | undefined>,
+): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== "") search.set(key, String(value));
@@ -133,13 +143,19 @@ export const api = {
       active_within_s?: number;
       include_static?: boolean;
     } = {},
-  ) =>
-    request<Entity[]>(`/entities${query(params)}`),
+  ) => request<Entity[]>(`/entities${query(params)}`),
 
-  entity: (entityId: string) => request<Entity>(`/entities/${encodeURIComponent(entityId)}`),
+  entity: (entityId: string) =>
+    request<Entity>(`/entities/${encodeURIComponent(entityId)}`),
 
-  events: (params: { type?: string; severity?: string; limit?: number; since?: string } = {}) =>
-    request<SioEvent[]>(`/events${query(params)}`),
+  events: (
+    params: {
+      type?: string;
+      severity?: string;
+      limit?: number;
+      since?: string;
+    } = {},
+  ) => request<SioEvent[]>(`/events${query(params)}`),
 
   timeline: (params: { from?: string; to?: string; limit?: number } = {}) =>
     request<SioEvent[]>(`/timeline${query(params)}`),
@@ -149,7 +165,12 @@ export const api = {
       entities: Entity[];
       ts: string;
       count: number;
-      counts: { total: number; movers: number; static: number; in_zones: number };
+      counts: {
+        total: number;
+        movers: number;
+        static: number;
+        in_zones: number;
+      };
       presence_window_s: number;
     }>(`/world/at${query({ ts, presence_window_s: presenceWindowS })}`),
 
@@ -162,7 +183,9 @@ export const api = {
       last_event: string | null;
     }>("/timeline/bounds"),
 
-  timelineDensity: (params: { from?: string; to?: string; buckets?: number } = {}) =>
+  timelineDensity: (
+    params: { from?: string; to?: string; buckets?: number } = {},
+  ) =>
     request<{
       from: string;
       to: string;
@@ -173,24 +196,43 @@ export const api = {
       total: number;
     }>(`/timeline/density${query(params)}`),
 
-  planReplay: (params: { from?: string; to?: string; speed?: number; step_s?: number } = {}) =>
-    request<ReplayPlan>(`/replay${query(params)}`, { method: "POST" }),
+  planReplay: (
+    params: {
+      from?: string;
+      to?: string;
+      speed?: number;
+      step_s?: number;
+    } = {},
+  ) => request<ReplayPlan>(`/replay${query(params)}`, { method: "POST" }),
 
   cancelReplay: (replayId: string) =>
-    request<{ cancelled: boolean }>(`/replay/${encodeURIComponent(replayId)}`, { method: "DELETE" }),
+    request<{ cancelled: boolean }>(`/replay/${encodeURIComponent(replayId)}`, {
+      method: "DELETE",
+    }),
 
-  nearby: (params: { lat: number; lon: number; radius_m: number; type?: string }) =>
-    request<Entity[]>(`/spatial/nearby${query(params)}`),
+  nearby: (params: {
+    lat: number;
+    lon: number;
+    radius_m: number;
+    type?: string;
+  }) => request<Entity[]>(`/spatial/nearby${query(params)}`),
 
   zones: () => request<Zone[]>("/spatial/zones"),
 
   alerts: (params: { state?: string; limit?: number } = {}) =>
     request<Alert[]>(`/alerts${query(params)}`),
 
-  alertInbox: (params: { state?: string; grouped?: boolean; limit?: number } = {}) =>
+  alertInbox: (
+    params: { state?: string; grouped?: boolean; limit?: number } = {},
+  ) =>
     request<{
       alerts: Alert[];
-      groups?: Array<{ kind: string; count: number; max_score: number; alerts: Alert[] }>;
+      groups?: Array<{
+        kind: string;
+        count: number;
+        max_score: number;
+        alerts: Alert[];
+      }>;
       open?: number;
       escalated?: number;
     }>(`/alerts${query({ grouped: true, ...params })}`),
@@ -208,9 +250,12 @@ export const api = {
     }),
 
   escalateAlert: (alertId: string, reason = "escalated by hand") =>
-    request<Alert>(`/alerts/${encodeURIComponent(alertId)}/escalate${query({ reason })}`, {
-      method: "POST",
-    }),
+    request<Alert>(
+      `/alerts/${encodeURIComponent(alertId)}/escalate${query({ reason })}`,
+      {
+        method: "POST",
+      },
+    ),
 
   decisions: (params: { approval?: string; limit?: number } = {}) =>
     request<{ decisions: Decision[] }>(`/decisions${query(params)}`),
@@ -220,14 +265,21 @@ export const api = {
       `/decisions/${encodeURIComponent(decisionId)}/approve`,
       {
         method: "POST",
-        body: JSON.stringify({ option_id: optionId, approved_by: "operator", note }),
+        body: JSON.stringify({
+          option_id: optionId,
+          approved_by: "operator",
+          note,
+        }),
       },
     ),
 
   rejectDecision: (decisionId: string, reason?: string) =>
     request<{ decision_id: string; approval: string }>(
       `/decisions/${encodeURIComponent(decisionId)}/reject`,
-      { method: "POST", body: JSON.stringify({ rejected_by: "operator", reason }) },
+      {
+        method: "POST",
+        body: JSON.stringify({ rejected_by: "operator", reason }),
+      },
     ),
 
   forecasts: (params: { target?: string; limit?: number } = {}) =>
@@ -247,7 +299,12 @@ export const api = {
           horizon_s: number;
           summary?: string | null;
           why: string[];
-          points: Array<{ ts: string; value: number; lo?: number | null; hi?: number | null }>;
+          points: Array<{
+            ts: string;
+            value: number;
+            lo?: number | null;
+            hi?: number | null;
+          }>;
         }
       >;
     }>("/forecasts/latest"),
@@ -262,14 +319,25 @@ export const api = {
           count: number;
           mean: number;
           percentiles: Record<string, number>;
-          histogram: Array<{ from: number; to: number | null; count: number; share: number }>;
+          histogram: Array<{
+            from: number;
+            to: number | null;
+            count: number;
+            share: number;
+          }>;
           shape: string;
         };
         by_zone: Record<string, never>;
         open_visits_excluded: number;
       };
-      throughput: { totals: Record<string, number>; entries_per_hour: number; smoothing: string };
-      utilisation: { zones: Array<{ zone_id: string; visits: number; utilisation: number }> };
+      throughput: {
+        totals: Record<string, number>;
+        entries_per_hour: number;
+        smoothing: string;
+      };
+      utilisation: {
+        zones: Array<{ zone_id: string; visits: number; utilisation: number }>;
+      };
       risk: {
         score: number;
         band: string;
@@ -277,7 +345,12 @@ export const api = {
         formula: string;
         terms: Record<
           string,
-          { normalised: number; weight: number; contributes: number; why: string }
+          {
+            normalised: number;
+            weight: number;
+            contributes: number;
+            why: string;
+          }
         >;
       };
     }>(`/analytics/summary${query({ hours })}`),
@@ -318,7 +391,11 @@ export const api = {
     zone_id?: string | null;
     commander?: string | null;
     objectives?: { description: string; zone_id?: string | null }[];
-  }) => request<unknown>("/missions", { method: "POST", body: JSON.stringify(body) }),
+  }) =>
+    request<unknown>("/missions", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   /**
    * Move a mission through its lifecycle.
@@ -344,18 +421,22 @@ export const api = {
 
   releaseResource: (missionId: string, resourceId: string) =>
     request<unknown>(
-      `/missions/${encodeURIComponent(missionId)}/resources/${encodeURIComponent(resourceId)}${query({
-        by: "console",
-      })}`,
+      `/missions/${encodeURIComponent(missionId)}/resources/${encodeURIComponent(resourceId)}${query(
+        {
+          by: "console",
+        },
+      )}`,
       { method: "DELETE" },
     ),
 
   completeObjective: (missionId: string, objectiveId: string, done: boolean) =>
     request<unknown>(
-      `/missions/${encodeURIComponent(missionId)}/objectives/${encodeURIComponent(objectiveId)}${query({
-        done,
-        by: "console",
-      })}`,
+      `/missions/${encodeURIComponent(missionId)}/objectives/${encodeURIComponent(objectiveId)}${query(
+        {
+          done,
+          by: "console",
+        },
+      )}`,
       { method: "POST" },
     ),
 
@@ -367,9 +448,13 @@ export const api = {
 
   /** The mission's replay window, with a ready-made URL. */
   missionReplay: (missionId: string) =>
-    request<{ name: string; from: string; to: string; live: boolean; replay_url: string }>(
-      `/missions/${encodeURIComponent(missionId)}/replay`,
-    ),
+    request<{
+      name: string;
+      from: string;
+      to: string;
+      live: boolean;
+      replay_url: string;
+    }>(`/missions/${encodeURIComponent(missionId)}/replay`),
 
   /**
    * The no-code builder's vocabulary: what the engine can actually run.
@@ -410,15 +495,23 @@ export const api = {
     }>("/workflow/authored"),
 
   saveWorkflow: (name: string, document: unknown) =>
-    request<{ saved: string; path: string; execution_order: string[]; armed: boolean }>(
-      `/workflow/authored/${encodeURIComponent(name)}`,
-      { method: "PUT", body: JSON.stringify(document) },
-    ),
+    request<{
+      saved: string;
+      path: string;
+      execution_order: string[];
+      armed: boolean;
+    }>(`/workflow/authored/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      body: JSON.stringify(document),
+    }),
 
   deleteWorkflow: (name: string) =>
-    request<{ deleted: string }>(`/workflow/authored/${encodeURIComponent(name)}`, {
-      method: "DELETE",
-    }),
+    request<{ deleted: string }>(
+      `/workflow/authored/${encodeURIComponent(name)}`,
+      {
+        method: "DELETE",
+      },
+    ),
 
   workflowRuns: (limit = 20) =>
     request<{
@@ -447,7 +540,14 @@ export const api = {
         tools_used: string[];
         used_fallback: boolean;
         degraded: string[];
-        steps: Array<{ index: number; kind: string; tool?: string | null; detail: string; latency_ms: number; ok: boolean }>;
+        steps: Array<{
+          index: number;
+          kind: string;
+          tool?: string | null;
+          detail: string;
+          latency_ms: number;
+          ok: boolean;
+        }>;
       };
       elapsed_ms: number;
     }>("/copilot/ask", { method: "POST", body: JSON.stringify({ question }) }),

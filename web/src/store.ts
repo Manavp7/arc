@@ -11,9 +11,18 @@
  */
 
 import { create } from "zustand";
-import type { Alert, Decision, Entity, Forecast, Mission, SioEvent, Zone } from "./types";
+import type {
+  Alert,
+  Decision,
+  Entity,
+  Forecast,
+  Mission,
+  SioEvent,
+  Zone,
+} from "./types";
 
-export type ConnectionStatus = "connecting" | "live" | "reconnecting" | "closed";
+export type ConnectionStatus =
+  "connecting" | "live" | "reconnecting" | "closed";
 
 const MAX_EVENTS = 500;
 
@@ -93,9 +102,15 @@ interface SioState {
 function mergeLifetime(previous: Entity | undefined, incoming: Entity): Entity {
   if (!previous) return incoming;
   const first =
-    previous.first_seen < incoming.first_seen ? previous.first_seen : incoming.first_seen;
-  const last = previous.last_seen > incoming.last_seen ? previous.last_seen : incoming.last_seen;
-  if (first === incoming.first_seen && last === incoming.last_seen) return incoming;
+    previous.first_seen < incoming.first_seen
+      ? previous.first_seen
+      : incoming.first_seen;
+  const last =
+    previous.last_seen > incoming.last_seen
+      ? previous.last_seen
+      : incoming.last_seen;
+  if (first === incoming.first_seen && last === incoming.last_seen)
+    return incoming;
   return { ...incoming, first_seen: first, last_seen: last };
 }
 
@@ -122,7 +137,10 @@ export const useSioStore = create<SioState>((set) => ({
   upsertEntity: (entity) =>
     set((state) => {
       const entities = new Map(state.entities);
-      entities.set(entity.entity_id, mergeLifetime(state.entities.get(entity.entity_id), entity));
+      entities.set(
+        entity.entity_id,
+        mergeLifetime(state.entities.get(entity.entity_id), entity),
+      );
       return { entities, lastMessageAt: new Date().toISOString() };
     }),
 
@@ -130,7 +148,10 @@ export const useSioStore = create<SioState>((set) => ({
     set((state) => {
       const entities = new Map(state.entities);
       for (const entity of incoming) {
-        entities.set(entity.entity_id, mergeLifetime(state.entities.get(entity.entity_id), entity));
+        entities.set(
+          entity.entity_id,
+          mergeLifetime(state.entities.get(entity.entity_id), entity),
+        );
       }
       return { entities };
     }),
@@ -139,10 +160,10 @@ export const useSioStore = create<SioState>((set) => ({
     set((state) => ({
       // Newest first, bounded: an operator console left open for a shift must not grow without
       // limit. Full history stays queryable through /timeline.
-      events: [event, ...state.events.filter((e) => e.event_id !== event.event_id)].slice(
-        0,
-        MAX_EVENTS,
-      ),
+      events: [
+        event,
+        ...state.events.filter((e) => e.event_id !== event.event_id),
+      ].slice(0, MAX_EVENTS),
       lastMessageAt: new Date().toISOString(),
     })),
 
@@ -161,7 +182,9 @@ export const useSioStore = create<SioState>((set) => ({
     set((state) => ({
       decisions: [
         decision,
-        ...state.decisions.filter((d) => d.decision_id !== decision.decision_id),
+        ...state.decisions.filter(
+          (d) => d.decision_id !== decision.decision_id,
+        ),
       ],
     })),
 
@@ -170,7 +193,11 @@ export const useSioStore = create<SioState>((set) => ({
   setZones: (zones) => set({ zones }),
   selectEntity: (entityId) => set({ selectedEntityId: entityId }),
   setReplayAt: (ts) =>
-    set(ts === null ? { replayAt: null, replayMode: "live", replayProgress: 0 } : { replayAt: ts }),
+    set(
+      ts === null
+        ? { replayAt: null, replayMode: "live", replayProgress: 0 }
+        : { replayAt: ts },
+    ),
 
   requestReplay: (window) => set({ requestedReplay: window }),
   // Cleared by the consumer once it has started, so a request is a one-shot rather than a standing order that
@@ -200,7 +227,7 @@ export const useSioStore = create<SioState>((set) => ({
       replayAt: null,
       replayMode: "live",
       replayProgress: 0,
-  requestedReplay: null,
+      requestedReplay: null,
       // Drop the reconstruction. Holding it would keep a whole historical world alive for a view
       // nothing is showing.
       historyEntities: new Map(),
@@ -217,11 +244,11 @@ export const useSioStore = create<SioState>((set) => ({
       missions: [],
       selectedEntityId: null,
       replayAt: null,
-  historyEntities: new Map(),
-  historyEvents: [],
-  replayMode: "live" as const,
-  replayProgress: 0,
-  requestedReplay: null,
+      historyEntities: new Map(),
+      historyEvents: [],
+      replayMode: "live" as const,
+      replayProgress: 0,
+      requestedReplay: null,
     }),
 }));
 
@@ -242,7 +269,9 @@ export const positionedEntities = (entities: Map<string, Entity>): Entity[] =>
   [...entities.values()].filter((entity) => entity.state.geo != null);
 
 export const openAlerts = (alerts: Alert[]): Alert[] =>
-  alerts.filter((alert) => alert.state === "open" || alert.state === "escalated");
+  alerts.filter(
+    (alert) => alert.state === "open" || alert.state === "escalated",
+  );
 
 export const pendingDecisions = (decisions: Decision[]): Decision[] =>
   decisions.filter((decision) => decision.approval === "pending");

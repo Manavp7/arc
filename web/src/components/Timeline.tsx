@@ -60,10 +60,14 @@ export function Timeline() {
   const replayProgress = useSioStore((state) => state.replayProgress);
   const setHistory = useSioStore((state) => state.setHistory);
   const requestedReplay = useSioStore((state) => state.requestedReplay);
-  const clearRequestedReplay = useSioStore((state) => state.clearRequestedReplay);
+  const clearRequestedReplay = useSioStore(
+    (state) => state.clearRequestedReplay,
+  );
   const returnToLive = useSioStore((state) => state.returnToLive);
 
-  const [bounds, setBounds] = useState<{ start: string; end: string } | null>(null);
+  const [bounds, setBounds] = useState<{ start: string; end: string } | null>(
+    null,
+  );
   const [windowMin, setWindowMin] = useState<number>(DEFAULT_WINDOW_MIN);
   const [density, setDensity] = useState<Density | null>(null);
   const [speed, setSpeed] = useState<number>(20);
@@ -122,7 +126,12 @@ export function Timeline() {
         buckets: 120,
       })
       .then((result) => {
-        if (!cancelled) setDensity({ counts: result.counts, severe: result.severe, total: result.total });
+        if (!cancelled)
+          setDensity({
+            counts: result.counts,
+            severe: result.severe,
+            total: result.total,
+          });
       })
       .catch(() => undefined);
     return () => {
@@ -148,7 +157,9 @@ export function Timeline() {
   const scrubTo = useCallback(
     (fraction: number) => {
       const span = windowRange.end.getTime() - windowRange.start.getTime();
-      const ts = new Date(windowRange.start.getTime() + span * Math.min(1, Math.max(0, fraction)));
+      const ts = new Date(
+        windowRange.start.getTime() + span * Math.min(1, Math.max(0, fraction)),
+      );
       stopStream();
       // Show the handle immediately, then fetch. Waiting for the response before moving the handle
       // makes the control feel broken during the request.
@@ -189,48 +200,59 @@ export function Timeline() {
   );
 
   // --- playing ------------------------------------------------------------------------------
-  const play = useCallback(async (override?: { from: string; to: string; label?: string }) => {
-    stopStream();
-    setStatus(override?.label ? `planning replay of ${override.label}…` : "planning replay…");
-    try {
-      const plan = await api.planReplay({
-        // An explicit window when another panel asked for one — Mission Control replays a mission's own
-        // start-to-end rather than whatever the scrubber happens to be showing.
-        from: override?.from ?? windowRange.start.toISOString(),
-        to: override?.to ?? windowRange.end.toISOString(),
-        speed,
-      });
-      replayIdRef.current = plan.replay_id;
+  const play = useCallback(
+    async (override?: { from: string; to: string; label?: string }) => {
+      stopStream();
       setStatus(
-        (override?.label ? `${override.label}: ` : "") +
-          `${plan.frames} frames at ${plan.speed}x, ${plan.resolution_s}s per frame` +
-          (plan.capped ? " (resolution reduced to fit)" : ""),
+        override?.label
+          ? `planning replay of ${override.label}…`
+          : "planning replay…",
       );
-
-      const stream = new EventSource(`/api${plan.stream.replace(/^\/api/, "")}`);
-      streamRef.current = stream;
-      // A NAMED event, so an explicit listener is required: `onmessage` only fires for unnamed frames,
-      // and this exact mistake once silently dropped every live update in this app.
-      stream.addEventListener("ReplayFrame", (message) => {
-        const frame = JSON.parse((message as MessageEvent).data) as ReplayFrame;
-        setHistory(frame.ts, frame.entities, "playing", {
-          progress: frame.progress,
-          events: frame.events,
+      try {
+        const plan = await api.planReplay({
+          // An explicit window when another panel asked for one — Mission Control replays a mission's own
+          // start-to-end rather than whatever the scrubber happens to be showing.
+          from: override?.from ?? windowRange.start.toISOString(),
+          to: override?.to ?? windowRange.end.toISOString(),
+          speed,
         });
-        setLag(frame.lag_s);
-      });
-      stream.addEventListener("ReplayComplete", () => {
-        setStatus("replay complete");
-        stopStream();
-      });
-      stream.onerror = () => {
-        setStatus("replay stream dropped");
-        stopStream();
-      };
-    } catch {
-      setStatus("could not start a replay");
-    }
-  }, [setHistory, speed, stopStream, windowRange]);
+        replayIdRef.current = plan.replay_id;
+        setStatus(
+          (override?.label ? `${override.label}: ` : "") +
+            `${plan.frames} frames at ${plan.speed}x, ${plan.resolution_s}s per frame` +
+            (plan.capped ? " (resolution reduced to fit)" : ""),
+        );
+
+        const stream = new EventSource(
+          `/api${plan.stream.replace(/^\/api/, "")}`,
+        );
+        streamRef.current = stream;
+        // A NAMED event, so an explicit listener is required: `onmessage` only fires for unnamed frames,
+        // and this exact mistake once silently dropped every live update in this app.
+        stream.addEventListener("ReplayFrame", (message) => {
+          const frame = JSON.parse(
+            (message as MessageEvent).data,
+          ) as ReplayFrame;
+          setHistory(frame.ts, frame.entities, "playing", {
+            progress: frame.progress,
+            events: frame.events,
+          });
+          setLag(frame.lag_s);
+        });
+        stream.addEventListener("ReplayComplete", () => {
+          setStatus("replay complete");
+          stopStream();
+        });
+        stream.onerror = () => {
+          setStatus("replay stream dropped");
+          stopStream();
+        };
+      } catch {
+        setStatus("could not start a replay");
+      }
+    },
+    [setHistory, speed, stopStream, windowRange],
+  );
 
   // Another panel asked for a window. Mission Control's "replay the mission" lands here, so the scrubber, the
   // map and the event feed all move together — which is the whole point of replay, and what a panel doing its
@@ -258,10 +280,19 @@ export function Timeline() {
     if (!replayAt) return 1;
     const span = windowRange.end.getTime() - windowRange.start.getTime();
     if (span <= 0) return 1;
-    return Math.min(1, Math.max(0, (new Date(replayAt).getTime() - windowRange.start.getTime()) / span));
+    return Math.min(
+      1,
+      Math.max(
+        0,
+        (new Date(replayAt).getTime() - windowRange.start.getTime()) / span,
+      ),
+    );
   }, [replayAt, windowRange]);
 
-  const peak = useMemo(() => Math.max(1, ...(density?.counts ?? [1])), [density]);
+  const peak = useMemo(
+    () => Math.max(1, ...(density?.counts ?? [1])),
+    [density],
+  );
   const isLive = replayMode === "live";
 
   return (
@@ -277,11 +308,21 @@ export function Timeline() {
           ● live
         </button>
         {replayMode === "playing" ? (
-          <button type="button" className="tl-btn" onClick={pause} title="Pause the replay">
+          <button
+            type="button"
+            className="tl-btn"
+            onClick={pause}
+            title="Pause the replay"
+          >
             ❙❙ pause
           </button>
         ) : (
-          <button type="button" className="tl-btn" onClick={() => void play()} title="Replay this window">
+          <button
+            type="button"
+            className="tl-btn"
+            onClick={() => void play()}
+            title="Replay this window"
+          >
             ▶ play
           </button>
         )}
@@ -340,9 +381,15 @@ export function Timeline() {
             );
           })}
         </div>
-        <div className="timeline-handle" style={{ left: `${handleFraction * 100}%` }} />
+        <div
+          className="timeline-handle"
+          style={{ left: `${handleFraction * 100}%` }}
+        />
         {replayMode === "playing" && (
-          <div className="timeline-progress" style={{ width: `${replayProgress * 100}%` }} />
+          <div
+            className="timeline-progress"
+            style={{ width: `${replayProgress * 100}%` }}
+          />
         )}
       </div>
 
@@ -354,9 +401,14 @@ export function Timeline() {
         {status && <span className="tl-status">{status}</span>}
         {/* Lag is surfaced rather than hidden: a replay claiming 20x while running slower is the one
             thing a viewer cannot otherwise detect. */}
-        {lag > 0.25 && <span className="tl-lag">running {lag.toFixed(1)}s behind schedule</span>}
+        {lag > 0.25 && (
+          <span className="tl-lag">
+            running {lag.toFixed(1)}s behind schedule
+          </span>
+        )}
         <span className="tl-window">
-          {formatClock(windowRange.start.toISOString())} – {formatClock(windowRange.end.toISOString())}
+          {formatClock(windowRange.start.toISOString())} –{" "}
+          {formatClock(windowRange.end.toISOString())}
         </span>
       </div>
     </div>
