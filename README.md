@@ -122,6 +122,22 @@ docs/              PRD, architecture, deployment, governance, GPU swap, models, 
 | 7 | Real connectors (RTSP/STAC/MAVLink/MQTT), 3D twin, GPU/production overlay | — |
 | 8 | Evaluation harnesses (mAP/HOTA/copilot), performance benchmarks, docs | — |
 
+## Extending it without changing it
+
+Four extension points, discovered through Python entry points — connectors, rules, copilot tools and agents.
+Install a package; the platform picks it up.
+
+```bash
+just plugin-demo    # installs examples/plugin_demo: a tide gauge connector + a flood-warning rule
+```
+
+Verified end to end: an out-of-tree rule firing on data from an out-of-tree connector, with **no file under
+`services/` or `libs/` naming either** — which a test asserts, so "no core changes" is a check rather than a
+claim.
+
+[docs/PLUGINS.md](docs/PLUGINS.md) leads with the three conventions that cost me three attempts, each of which
+failed *silently*: the rule loaded, reported enabled, and matched nothing.
+
 ## Governance
 
 Authentication is required by default, every authorisation decision is audited, personal data is redacted
