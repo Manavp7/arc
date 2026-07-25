@@ -51,6 +51,8 @@ log = get_logger("sio.guard")
 #: to extend, and a forgotten entry is an unenforced endpoint that looks enforced — the worst of both.
 RESOURCE_PREFIXES: tuple[tuple[str, str], ...] = (
     # Longest first: `/api/spatial` must be tested before `/api`.
+    ("/api/analytics", "analytics"),
+    ("/api/simulations", "simulation"),
     ("/api/measurements", "events"),
     ("/api/replay", "timeline"),
     ("/api/world", "entities"),
@@ -75,6 +77,8 @@ RESOURCE_PREFIXES: tuple[tuple[str, str], ...] = (
     # not by using the console, which is the better order.
     # Service-local read surfaces. Each is a diagnostic view over data the platform already exposes
     # through the API, so each is governed as a read of the same noun rather than getting a noun of its own.
+    ("/analytics", "analytics"),
+    ("/simulations", "simulation"),
     ("/fusion", "entities"),
     ("/tracks", "entities"),
     ("/counts", "entities"),

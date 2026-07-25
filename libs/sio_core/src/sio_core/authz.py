@@ -222,6 +222,16 @@ POLICY: tuple[Rule, ...] = (
         description="Reloading rules and simulating an event for testing",
     ),
     Rule(
+        # Aggregate KPIs are readable by anyone authenticated, and that is a deliberate consequence of
+        # aggregating on the SERVER: the heatmap withholds cells with fewer than five distinct entities, so
+        # there is no individual movement record in the response to protect. Had the aggregation been left to
+        # the browser, this would have had to be a privileged endpoint — the privacy control and the
+        # permission are the same decision seen from two sides.
+        "analytics.read",
+        zone_scoped=True,
+        description="Aggregate KPIs, heatmaps and reports; individual positions are suppressed server-side",
+    ),
+    Rule(
         "model.read",
         description="Which detector, tracker and thresholds are running — diagnostic, and useful to all",
     ),

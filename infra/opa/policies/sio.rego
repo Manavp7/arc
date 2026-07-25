@@ -4,7 +4,7 @@
 #
 # Hand-editing this file would recreate the exact problem it exists to prevent: two
 # implementations of one policy, drifting, until dev allows what production denies.
-# Generated 2026-07-25 from 27 rules.
+# Generated 2026-07-25 from 28 rules.
 
 package sio.authz
 
@@ -48,6 +48,7 @@ known_action if input.action == "workflow.write"
 known_action if input.action == "timeline.write"
 known_action if input.action == "forecasts.write"
 known_action if input.action == "events.write"
+known_action if input.action == "analytics.read"
 known_action if input.action == "model.read"
 known_action if input.action == "entities.read"
 known_action if input.action == "events.read"
@@ -382,6 +383,32 @@ allow if {
 	tenant_matches
 }
 
+# Aggregate KPIs, heatmaps and reports; individual positions are suppressed server-side
+allow if {
+	authenticated
+	input.action == "analytics.read"
+	not startswith(input.action, "admin.")
+	input.action != "policy.write"
+	input.action != "tenant.create"
+	input.action != "decision.approve"
+	input.action != "decision.reject"
+	input.action != "workflow.execute"
+	input.action != "simulation.inject"
+	input.action != "simulation.write"
+	input.action != "pii.view"
+	input.action != "media.raw"
+	input.action != "media.read"
+	input.action != "alerts.write"
+	input.action != "decisions.write"
+	input.action != "agents.write"
+	input.action != "workflow.write"
+	input.action != "timeline.write"
+	input.action != "forecasts.write"
+	input.action != "events.write"
+	zone_permitted
+	tenant_matches
+}
+
 # Which detector, tracker and thresholds are running — diagnostic, and useful to all
 allow if {
 	authenticated
@@ -404,6 +431,7 @@ allow if {
 	input.action != "timeline.write"
 	input.action != "forecasts.write"
 	input.action != "events.write"
+	input.action != "analytics.read"
 	tenant_matches
 }
 
@@ -429,6 +457,7 @@ allow if {
 	input.action != "timeline.write"
 	input.action != "forecasts.write"
 	input.action != "events.write"
+	input.action != "analytics.read"
 	input.action != "model.read"
 	zone_permitted
 	tenant_matches
@@ -456,6 +485,7 @@ allow if {
 	input.action != "timeline.write"
 	input.action != "forecasts.write"
 	input.action != "events.write"
+	input.action != "analytics.read"
 	input.action != "model.read"
 	input.action != "entities.read"
 	zone_permitted
@@ -484,6 +514,7 @@ allow if {
 	input.action != "timeline.write"
 	input.action != "forecasts.write"
 	input.action != "events.write"
+	input.action != "analytics.read"
 	input.action != "model.read"
 	input.action != "entities.read"
 	input.action != "events.read"
@@ -513,6 +544,7 @@ allow if {
 	input.action != "timeline.write"
 	input.action != "forecasts.write"
 	input.action != "events.write"
+	input.action != "analytics.read"
 	input.action != "model.read"
 	input.action != "entities.read"
 	input.action != "events.read"
@@ -544,6 +576,7 @@ allow if {
 	input.action != "timeline.write"
 	input.action != "forecasts.write"
 	input.action != "events.write"
+	input.action != "analytics.read"
 	input.action != "model.read"
 	input.action != "entities.read"
 	input.action != "events.read"
@@ -576,6 +609,7 @@ allow if {
 	input.action != "timeline.write"
 	input.action != "forecasts.write"
 	input.action != "events.write"
+	input.action != "analytics.read"
 	input.action != "model.read"
 	input.action != "entities.read"
 	input.action != "events.read"
@@ -609,6 +643,7 @@ allow if {
 	input.action != "timeline.write"
 	input.action != "forecasts.write"
 	input.action != "events.write"
+	input.action != "analytics.read"
 	input.action != "model.read"
 	input.action != "entities.read"
 	input.action != "events.read"
@@ -643,6 +678,7 @@ allow if {
 	input.action != "timeline.write"
 	input.action != "forecasts.write"
 	input.action != "events.write"
+	input.action != "analytics.read"
 	input.action != "model.read"
 	input.action != "entities.read"
 	input.action != "events.read"

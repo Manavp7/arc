@@ -11,6 +11,7 @@ members = [
     "sio",
     "sio-agents",
     "sio-alerts",
+    "sio-analytics",
     "sio-api",
     "sio-copilot",
     "sio-core",
@@ -3353,6 +3354,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "sio-agents" },
     { name = "sio-alerts" },
+    { name = "sio-analytics" },
     { name = "sio-api" },
     { name = "sio-copilot" },
     { name = "sio-core" },
@@ -3386,6 +3388,7 @@ dev = [
 requires-dist = [
     { name = "sio-agents", editable = "services/agents" },
     { name = "sio-alerts", editable = "services/alerts" },
+    { name = "sio-analytics", editable = "services/analytics" },
     { name = "sio-api", editable = "services/api" },
     { name = "sio-copilot", editable = "services/copilot" },
     { name = "sio-core", editable = "libs/sio_core" },
@@ -3444,6 +3447,25 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "sio-core", editable = "libs/sio_core" },
+    { name = "sio-schemas", editable = "libs/sio_schemas" },
+]
+
+[[package]]
+name = "sio-analytics"
+version = "0.1.0"
+source = { editable = "services/analytics" }
+dependencies = [
+    { name = "h3" },
+    { name = "httpx" },
+    { name = "sio-core" },
+    { name = "sio-schemas" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "h3", specifier = ">=4.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "sio-core", editable = "libs/sio_core" },
     { name = "sio-schemas", editable = "libs/sio_schemas" },
