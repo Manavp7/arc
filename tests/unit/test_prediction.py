@@ -31,6 +31,7 @@ from sio_prediction.forecasters import (
 from sio_prediction.series import GapPolicy, Series, bucketise, counts_per_bucket
 from sio_prediction.targets import (
     SPECS,
+    TargetForecast,
     build,
     congestion_from_occupancy,
     time_to_threshold,
