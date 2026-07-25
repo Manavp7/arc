@@ -382,3 +382,150 @@ def test_hysteresis_stats_are_reported() -> None:
     assert tracked.stats["provisional_entries"] == 1
     assert tracked.stats["entered"] == 1
     assert tracked.stats["exits_deferred"] >= 1
+
+
+# ------------------------------------------------ the service's publish path
+class RecordingContext:
+    """Captures what a handler publishes, so the publish path can be tested without a bus."""
+
+    def __init__(self) -> None:
+        self.published: list[tuple[str, object]] = []
+
+    async def publish(self, topic: str, payload: object) -> None:
+        self.published.append((str(topic), payload))
+
+
+async def test_a_confirmed_entry_publishes_an_event_and_opens_an_edge() -> None:
+    """Exercise the real publish path.
+
+    The tracker tests above all passed while the service raised `RelationshipType has no attribute
+    LOCATED_IN` on every single entry — 80 events went out and not one edge was opened, because nothing
+    tested the code between the tracker and the bus. A component is not covered until the path that
+    *uses* it runs.
+    """
+    from sio_spatial.service import SpatialService
+
+    from sio_schemas import Entity, EntityType, Provenance
+
+    service = SpatialService()
+    service.index.replace([a_zone("dock_1", side_m=60), a_zone("yard", side_m=400)])
+    service.tracker = MembershipTracker(service.index, enter_confirm_s=1.0, exit_grace_s=5.0)
+
+    entity = Entity(
+        entity_id="ent_test",
+        tenant_id="default",
+        type=EntityType.TRUCK,
+        label="Truck ABC-123",
+        provenance=[Provenance(source_id="gps-truck-1", modality="gps", ts=utc_now())],
+    )
+    ctx = RecordingContext()
+    start = utc_now()
+
+    service.tracker.observe(entity.entity_id, ORIGIN, start)
+    changes = service.tracker.observe(entity.entity_id, ORIGIN, start + timedelta(seconds=2))
+    assert changes, "the tracker should have confirmed the entry"
+    for change in changes:
+        await service._publish_change(change, entity, ctx)  # type: ignore[arg-type]
+
+    events = [payload for topic, payload in ctx.published if topic == "events"]
+    edges = [payload for topic, payload in ctx.published if topic == "entities"]
+    assert len(events) == 2, "one event per zone entered (dock and yard)"
+    assert len(edges) == 2, "and one open edge per zone"
+    assert service._edges_opened == 2
+    assert len(service._open_edges) == 2
+
+    event = events[0]
+    assert str(event.type) in ("zone_entered", "unauthorized_entry")
+    assert event.entities == ["ent_test"]
+    assert event.explanation.summary and "Truck ABC-123" in event.explanation.summary
+    assert event.explanation.notes, "an event with no explanation is not actionable"
+    assert event.rule_id == "spatial.zone_entered"
+
+    edge = edges[0]
+    assert str(edge.type) == "entered", "the visit is one bitemporal edge, opened at entry"
+    assert edge.ts_valid_to is None, "still open"
+    assert edge.from_id == "ent_test"
+
+
+async def test_an_exit_closes_the_same_edge_rather_than_opening_another() -> None:
+    """Closing the interval is what makes "where was it at T?" a single query."""
+    from sio_spatial.service import SpatialService
+
+    from sio_schemas import Entity, EntityType
+
+    service = SpatialService()
+    service.index.replace([a_zone("dock_1", side_m=60)])
+    service.tracker = MembershipTracker(service.index, enter_confirm_s=1.0, exit_grace_s=5.0)
+    entity = Entity(entity_id="ent_x", tenant_id="default", type=EntityType.TRUCK)
+    ctx = RecordingContext()
+    start = utc_now()
+
+    service.tracker.observe("ent_x", ORIGIN, start)
+    for change in service.tracker.observe("ent_x", ORIGIN, start + timedelta(seconds=2)):
+        await service._publish_change(change, entity, ctx)  # type: ignore[arg-type]
+
+    outside = offset(ORIGIN, east_m=200)
+    service.tracker.observe("ent_x", outside, start + timedelta(seconds=5))
+    for change in service.tracker.observe("ent_x", outside, start + timedelta(seconds=20)):
+        await service._publish_change(change, entity, ctx)  # type: ignore[arg-type]
+
+    edges = [payload for topic, payload in ctx.published if topic == "entities"]
+    assert len(edges) == 2, "the same edge, published open then closed"
+    assert edges[0].id == edges[1].id, "closing must reuse the edge id, not mint a new one"
+    assert edges[0].ts_valid_to is None
+    assert edges[1].ts_valid_to is not None
+    assert service._edges_closed == 1
+    assert service._open_edges == {}
+
+
+async def test_an_exit_with_no_open_edge_is_skipped_not_invented() -> None:
+    """The entry predates this process. Fabricating a start time would corrupt the very history that
+    bitemporal storage exists to protect."""
+    from sio_spatial.membership import MembershipChange
+    from sio_spatial.service import SpatialService
+
+    from sio_schemas import Entity, EntityType
+
+    service = SpatialService()
+    service.index.replace([a_zone("dock_1", side_m=60)])
+    ctx = RecordingContext()
+
+    await service._publish_change(  # type: ignore[arg-type]
+        MembershipChange(
+            entity_id="ent_ghost",
+            zone_id="dock_1",
+            kind="exited",
+            ts=utc_now(),
+            dwell_s=120.0,
+            zone_name="Dock 1",
+        ),
+        Entity(entity_id="ent_ghost", tenant_id="default", type=EntityType.TRUCK),
+        ctx,
+    )
+    events = [payload for topic, payload in ctx.published if topic == "events"]
+    edges = [payload for topic, payload in ctx.published if topic == "entities"]
+    assert len(events) == 1, "the exit still happened and is still worth recording"
+    assert edges == [], "but no edge is invented"
+    assert service._edges_closed == 0
+
+
+async def test_entering_a_restricted_zone_raises_the_severity() -> None:
+    from sio_spatial.service import SpatialService
+
+    from sio_schemas import Entity, EntityType, Severity
+
+    service = SpatialService()
+    service.index.replace([a_zone("cage", side_m=40, restricted=True)])
+    service.tracker = MembershipTracker(service.index, enter_confirm_s=1.0)
+    entity = Entity(entity_id="ent_p", tenant_id="default", type=EntityType.PERSON)
+    ctx = RecordingContext()
+    start = utc_now()
+
+    service.tracker.observe("ent_p", ORIGIN, start)
+    for change in service.tracker.observe("ent_p", ORIGIN, start + timedelta(seconds=2)):
+        await service._publish_change(change, entity, ctx)  # type: ignore[arg-type]
+
+    event = next(payload for topic, payload in ctx.published if topic == "events")
+    assert str(event.type) == "unauthorized_entry"
+    assert event.severity == Severity.HIGH
+    assert any("restricted" in note for note in event.explanation.notes)

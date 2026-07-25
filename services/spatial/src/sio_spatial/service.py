@@ -203,10 +203,17 @@ class SpatialService(SioService):
 
         key = (change.entity_id, change.zone_id)
         if change.kind == "entered":
+            # One edge per visit, not two.
+            #
+            # `ENTERED` with a bounded validity interval *is* the visit: it opens at entry and closes
+            # at exit, so "where was the truck at 14:32?" is a single interval-overlap query. Emitting
+            # a separate `EXITED` edge would record the same fact twice and leave a reader to pair them
+            # up — and pairing them is only unambiguous while nothing has been lost, which is precisely
+            # the assumption a bitemporal store exists to avoid making.
             relationship = Relationship(
                 tenant_id=entity.tenant_id,
                 **{"from": change.entity_id, "to": change.zone_id},
-                type=RelationshipType.LOCATED_IN,
+                type=RelationshipType.ENTERED,
                 ts_valid_from=change.ts,
                 confidence=0.95,
                 evidence=[event.event_id],
