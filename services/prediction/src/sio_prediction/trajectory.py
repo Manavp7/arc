@@ -45,6 +45,9 @@ SPEED_FLOOR_MPS = 0.6
 SPEED_DECAY_S = 45.0
 # The turn rate decays faster than the speed: a vehicle mid-corner straightens out long before it stops.
 TURN_DECAY_S = 8.0
+# Beyond this positional uncertainty the prediction carries no usable information, and the honest move is
+# to stop rather than to keep emitting points. A cone wider than a yard does not describe a yard.
+MAX_USEFUL_SIGMA_M = 80.0
 # The fastest turn any yard vehicle plausibly makes. Anything beyond this is a bad heading, not a
 # manoeuvre, and it is discarded rather than averaged in.
 MAX_TURN_RATE_DEG_S = 60.0
@@ -164,12 +167,27 @@ def predict_trajectory(
         east += math.sin(radians) * speed_now * step_s
         north += math.cos(radians) * speed_now * step_s
 
-        # Cone growth. Linear from velocity uncertainty (roughly 15 per cent of current speed), plus a
-        # quadratic term for unmodelled acceleration and turning, which is what actually dominates
-        # beyond about twenty seconds.
-        velocity_sigma = 0.15 * max(speed, 1.0) * elapsed
-        manoeuvre_sigma = 0.5 * 0.35 * elapsed**2  # ~0.35 m/s^2 of unmodelled acceleration
-        sigma = math.hypot(kinematics.position_sigma_m, math.hypot(velocity_sigma, manoeuvre_sigma))
+        # Cone growth, scaled to the distance actually travelled rather than to elapsed time squared.
+        #
+        # The first version added a term for unmodelled acceleration: 0.5 * 0.35 m/s^2 * t^2. That is
+        # dimensionally correct and physically nonsense for a yard vehicle — live it produced a 630 m
+        # cone after 60 seconds for an object moving at 2.2 m/s, which is wider than the entire site and
+        # therefore says nothing at all. Sustained acceleration for a full minute is not a thing a truck
+        # in a dock apron does.
+        #
+        # Distance travelled is the natural scale for both error components:
+        #   along-track — it might stop, or press on faster, so about half the distance covered;
+        #   cross-track — a heading error of theta puts it travelled*sin(theta) to the side, and heading
+        #                 confidence decays with time rather than with distance.
+        travelled = math.hypot(east, north)
+        along_sigma = 0.5 * travelled
+        # Heading confidence depends on whether the object is actually turning. A truck running straight
+        # down a lane is highly predictable; one mid-manoeuvre is not, and giving both the same cone
+        # would be pessimistic about the first and optimistic about the second.
+        heading_drift_per_s = 0.3 + abs(kinematics.turn_rate_deg_s) * 0.1
+        heading_sigma_deg = min(60.0, 8.0 + heading_drift_per_s * elapsed)
+        cross_sigma = travelled * math.sin(math.radians(heading_sigma_deg))
+        sigma = math.hypot(kinematics.position_sigma_m, math.hypot(along_sigma, cross_sigma))
         points.append(
             PredictedPoint(
                 ts=kinematics.ts + timedelta(seconds=elapsed),
@@ -177,6 +195,21 @@ def predict_trajectory(
                 sigma_m=sigma,
             )
         )
+        if sigma > MAX_USEFUL_SIGMA_M:
+            # Truncate. Continuing would produce points whose stated uncertainty already exceeds
+            # anything an operator could act on, and a long list of them reads as a confident path.
+            truncated = True
+            break
+    else:
+        truncated = False
+
+    if truncated:
+        notes_tail = [
+            f"truncated at {points[-1].ts.isoformat()}: uncertainty passed "
+            f"{MAX_USEFUL_SIGMA_M:.0f} m, beyond which the prediction carries no usable information"
+        ]
+    else:
+        notes_tail = []
 
     return Trajectory(
         entity_id=entity_id,
@@ -187,7 +220,10 @@ def predict_trajectory(
             f"speed decays with a {SPEED_DECAY_S:.0f}s constant and the turn with {TURN_DECAY_S:.0f}s, "
             "because neither continues unchanged",
             f"uncertainty grows from {kinematics.position_sigma_m:.1f} m to "
-            f"{points[-1].sigma_m:.1f} m over {horizon_s:.0f}s",
+            f"{points[-1].sigma_m:.1f} m over "
+            f"{(points[-1].ts - kinematics.ts).total_seconds():.0f}s, scaled to the distance travelled "
+            "rather than to elapsed time squared",
+            *notes_tail,
         ],
     )
 

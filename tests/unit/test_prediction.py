@@ -329,7 +329,9 @@ def test_a_moving_entity_gets_a_path_with_a_widening_cone() -> None:
         horizon_s=60.0,
         step_s=10.0,
     )
-    assert len(path.points) == 6
+    # Up to six points, but fewer if the cone stops being informative first — which it does for a
+    # 5 m/s vehicle inside a minute, and truncating is the correct behaviour rather than a shortfall.
+    assert 3 <= len(path.points) <= 6
     assert not path.stationary
     # Heading 90 degrees is due east: longitude rises, latitude barely moves.
     assert path.points[-1].geo.lon > path.points[0].geo.lon
@@ -627,3 +629,60 @@ def test_the_summary_never_contradicts_the_points_beside_it() -> None:
     )
     for point in forecast.points:
         assert point.lo is None or point.lo >= 0
+
+
+def test_the_cone_is_scaled_to_distance_travelled_not_to_time_squared() -> None:
+    """Live, the cone was 630 m wide after 60 seconds for an object moving at 2.2 m/s — wider than the
+    entire site, and therefore saying nothing at all.
+
+    The cause was a term for unmodelled acceleration, 0.5 * 0.35 m/s^2 * t^2, which is dimensionally
+    correct and physically nonsense: sustained acceleration for a full minute is not something a truck in
+    a dock apron does. Distance travelled is the natural scale for both error components.
+    """
+    path = predict_trajectory(
+        "ent_live",
+        Kinematics(
+            geo=Geo(lat=37.7764, lon=-122.4188),
+            speed_mps=2.2,
+            heading_deg=353.0,
+            ts=START,
+            turn_rate_deg_s=-5.2,
+            position_sigma_m=1.8,
+        ),
+        horizon_s=60.0,
+        step_s=10.0,
+    )
+    travelled_m = math.hypot(
+        (path.points[-1].geo.lat - 37.7764) * 111_320,
+        (path.points[-1].geo.lon + 122.4188) * 111_320 * math.cos(math.radians(37.78)),
+    )
+    assert path.final_sigma_m < travelled_m * 1.5, (
+        f"a cone of {path.final_sigma_m:.0f} m around {travelled_m:.0f} m of travel is not a prediction"
+    )
+    assert path.final_sigma_m < 100.0
+
+
+def test_a_useless_cone_is_truncated_rather_than_extended() -> None:
+    """Continuing produces points whose stated uncertainty already exceeds anything an operator could
+    act on — and a long list of them reads as a confident path."""
+    from sio_prediction.trajectory import MAX_USEFUL_SIGMA_M
+
+    path = predict_trajectory(
+        "ent_fast",
+        Kinematics(geo=Geo(lat=0.0, lon=0.0), speed_mps=15.0, heading_deg=0.0, ts=START),
+        horizon_s=300.0,
+        step_s=10.0,
+    )
+    assert len(path.points) < 30, "it must stop long before the requested horizon"
+    assert path.final_sigma_m <= MAX_USEFUL_SIGMA_M * 2
+    assert any("truncated" in note for note in path.notes)
+
+
+def test_a_straight_runner_gets_a_tighter_cone_than_one_mid_turn() -> None:
+    """A truck running down a lane is predictable; one manoeuvring is not. One cone for both would be
+    pessimistic about the first and optimistic about the second."""
+    common = {"geo": Geo(lat=0.0, lon=0.0), "speed_mps": 5.0, "heading_deg": 0.0, "ts": START}
+    straight = predict_trajectory("a", Kinematics(**common, turn_rate_deg_s=0.0), horizon_s=40.0)
+    turning = predict_trajectory("b", Kinematics(**common, turn_rate_deg_s=8.0), horizon_s=40.0)
+    assert straight.final_sigma_m < turning.final_sigma_m
+    assert straight.confidence() > turning.confidence()
