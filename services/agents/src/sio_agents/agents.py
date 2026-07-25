@@ -201,10 +201,14 @@ class LogisticsAgent:
         occupied = [dock for dock in docks if dock.get("occupancy", 0) > 0]
         free = [dock["zone_id"] for dock in docks if dock.get("occupancy", 0) == 0]
 
+        # `.get("zone_id", "")` is the trap here, and it crashed on live data: the default applies only when
+        # the key is ABSENT, not when it is present and null — and an entity that is in no zone has
+        # `zone_id: null`, so this raised AttributeError on None. The stub in the unit test always returned a
+        # string, which is why the test passed and the service did not.
         in_a_dock = {
             entity.get("entity_id")
             for entity in trucks
-            if (entity.get("state") or {}).get("zone_id", "").startswith("dock")
+            if str((entity.get("state") or {}).get("zone_id") or "").startswith("dock")
         }
         waiting = [entity for entity in trucks if entity.get("entity_id") not in in_a_dock]
 

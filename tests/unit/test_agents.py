@@ -438,7 +438,17 @@ async def test_the_logistics_agent_needs_both_a_queue_and_a_free_dock() -> None:
                         {
                             "entity_id": f"t{index}",
                             "label": f"Truck {index}",
-                            "state": {"zone_id": "yard"},
+                            # A MIXTURE of shapes, deliberately. The first version always returned a string
+                            # zone_id, and the service crashed on live data: an entity in no zone has
+                            # `zone_id: null`, `.get("zone_id", "")` returns None for a present-but-null
+                            # key, and None has no `.startswith`. A stub tidier than reality tests
+                            # something other than reality.
+                            "state": [
+                                {"zone_id": "yard"},
+                                {"zone_id": None},
+                                {},
+                                {"zone_id": "dock_1"},
+                            ][index % 4],
                         }
                         for index in range(self.trucks)
                     ]
