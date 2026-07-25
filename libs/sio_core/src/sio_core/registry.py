@@ -183,6 +183,22 @@ def get_llm(settings: Settings | None = None) -> Any:
         log.info("registry.llm", backend="scripted")
         return ScriptedLLM()
 
+    if provider == "openai_compat":
+        from .llm.openai_compat import OpenAICompatLLM
+
+        log.info(
+            "registry.llm",
+            backend="openai_compat",
+            model=settings.llm_model,
+            url=settings.openai_base_url,
+        )
+        return OpenAICompatLLM(
+            url=settings.openai_base_url,
+            model=settings.llm_model,
+            api_key=settings.openai_api_key or None,
+            timeout_s=settings.llm_timeout_s,
+        )
+
     from .llm.ollama import OllamaLLM
 
     log.info("registry.llm", backend=provider, model=settings.llm_model, url=settings.ollama_url)

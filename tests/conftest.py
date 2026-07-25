@@ -28,6 +28,23 @@ def pytest_configure(config: pytest.Config) -> None:
     os.environ.setdefault("SIO_METRICS_ENABLED", "true")
 
 
+@pytest.fixture
+def pristine_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Strip SIO_/NEO4J_ variables so the *code* defaults are what gets asserted.
+
+    `pytest_configure` above deliberately forces infra-free adapters for the whole session, and the repository
+    also ships a `.env` listing every field with its default. Both are right for the rest of the suite and both
+    make it impossible to test configuration RESOLUTION — the profile, the defaults — because every seam is
+    already off its declared default before the code under test is consulted.
+
+    Lives here rather than in one test file because two tests now need it, and the second one I wrote by
+    duplicating the first before noticing. Pair it with `Settings(_env_file=None)` to shut out the `.env` too.
+    """
+    for key in list(os.environ):
+        if key.startswith(("SIO_", "NEO4J_")):
+            monkeypatch.delenv(key, raising=False)
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Skip infra/e2e rings unless the operator opted in with ``SIO_TEST_INFRA=1``."""
     if os.environ.get("SIO_TEST_INFRA") == "1":

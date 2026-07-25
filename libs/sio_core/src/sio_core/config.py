@@ -12,7 +12,7 @@ import logging
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, Field, computed_field, field_validator
+from pydantic import AliasChoices, Field, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # stdlib logging, not `sio_core.telemetry`: telemetry reads settings, so importing it here would be a
@@ -21,7 +21,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 log = logging.getLogger("sio.config")
 
 BusBackend = Literal["redis", "memory", "kafka"]
-GraphBackend = Literal["neo4j", "postgres", "memory"]
+GraphBackend = Literal["neo4j", "postgres", "memory", "memgraph"]
 VectorBackend = Literal["pgvector", "memory", "qdrant"]
 BlobBackend = Literal["minio", "file"]
 DetectorKind = Literal["auto", "onnx", "onnx_seg", "synthetic", "null", "deepstream"]
@@ -33,6 +33,35 @@ AuthMode = Literal["dev", "keycloak"]
 PolicyEngineKind = Literal["embedded", "opa", "openfga"]
 WorkflowRunnerKind = Literal["temporal", "inline"]
 CepRuntime = Literal["native", "bytewax"]
+#: `cpu` is the default and what `just check` runs on. `gpu` is the production overlay (PRD §9.3).
+Profile = Literal["cpu", "gpu"]
+
+#: What `SIO_PROFILE=gpu` selects, seam by seam.
+#:
+#: Written as data rather than as a branch so `just doctor` can print it, `docs/GPU_SWAP.md` can be generated
+#: against it, and a test can assert every value is a legal member of its own Literal — which is how a typo here
+#: becomes a test failure rather than a runtime surprise on someone else's cluster.
+GPU_PROFILE: dict[str, str] = {
+    # Kafka rather than Redis Streams: at GPU throughput the bottleneck stops being inference and becomes the
+    # bus, and Redis Streams has no partitioning story for parallel consumers of one topic.
+    "bus_backend": "kafka",
+    # Memgraph speaks Bolt and Cypher, so the Neo4j adapter's queries carry over; it is in-memory, which is the
+    # point at the write rates a GPU pipeline produces.
+    "graph_backend": "memgraph",
+    "vector_backend": "qdrant",
+    # DeepStream keeps decode, inference and tracking on the GPU — the copy back to host memory per frame is
+    # what caps the ONNX path, not the model.
+    "detector": "deepstream",
+    "tracker": "deepstream",
+    "forecaster": "timesfm",
+    # Anything OpenAI-compatible: vLLM, NIM, TGI. The adapter names none of them.
+    "llm_provider": "openai_compat",
+    # A default endpoint, so `SIO_PROFILE=gpu` is COHERENT rather than merely selected. Without this the base
+    # URL stays empty, the adapter builds `/v1`, and the profile boots into a configuration that cannot work —
+    # which is worse than not having a profile, because it looks configured. 8001 is the port vLLM's own
+    # quickstart uses; override it for NIM or a remote host.
+    "openai_base_url": "http://127.0.0.1:8001/v1",
+}
 
 
 def _neo4j(name: str) -> AliasChoices:
@@ -42,6 +71,33 @@ def _neo4j(name: str) -> AliasChoices:
 
 class Settings(BaseSettings):
     """Effective configuration. See ``.env.example`` for documentation of every field."""
+
+    @model_validator(mode="after")
+    def _apply_profile(self) -> Settings:
+        """Let `SIO_PROFILE=gpu` set every seam at once — except the ones changed from their default.
+
+        The rule is **"still at its default"**, not `model_fields_set`, and finding out why cost a debugging
+        session worth recording: this repository ships a `.env` that explicitly lists EVERY field with its
+        default value, as documentation. So `model_fields_set` contains all 130 of them on every run, and a
+        profile gated on "was this field supplied?" could never apply anything at all. Pydantic was reporting
+        the truth; the truth just was not the question I meant to ask.
+
+        Comparing against the declared default asks the question I actually meant: has somebody *changed* this?
+        An operator who edits `SIO_LLM_PROVIDER=scripted` differs from the default and wins — which matters
+        because `SIO_PROFILE=gpu SIO_LLM_PROVIDER=scripted` is precisely how you test GPU wiring on a laptop
+        with no GPU.
+
+        The honest limitation: setting a seam explicitly TO its default value is indistinguishable from leaving
+        it alone, so the profile overrides it. That is the harmless direction, and distinguishing them would
+        need provenance tracking that pydantic-settings does not offer.
+        """
+        if self.profile != "gpu":
+            return self
+        for field, value in GPU_PROFILE.items():
+            declared = type(self).model_fields.get(field)
+            if declared is not None and getattr(self, field) == declared.default:
+                object.__setattr__(self, field, value)
+        return self
 
     model_config = SettingsConfigDict(
         env_prefix="SIO_",
@@ -58,6 +114,18 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_format: Literal["console", "json"] = "console"
     data_dir: Path = Path(".sio")
+
+    # --- the profile ---------------------------------------------------------
+    #
+    # One flip instead of eleven. Every seam below can be set individually — and for a real deployment that is
+    # what you want, because nobody swaps all of them at once. But "run this on GPUs" is a single intention, and
+    # making somebody express it as eleven environment variables guarantees that one of them will be missed and
+    # the resulting half-swapped system will be blamed on the platform.
+    #
+    # An explicitly-set seam always WINS over the profile (see `_apply_profile`). A profile that overrode
+    # deliberate configuration would be a trap: `SIO_PROFILE=gpu SIO_LLM_PROVIDER=scripted` has to mean what it
+    # says, because that combination is exactly how somebody tests GPU wiring without a GPU.
+    profile: Profile = "cpu"
 
     # --- adapter selection (the swappable seams) ----------------------------
     bus_backend: BusBackend = "redis"
@@ -429,6 +497,7 @@ class Settings(BaseSettings):
     def adapter_summary(self) -> dict[str, str]:
         """Which adapter is active per port — surfaced on ``/health`` for debuggability."""
         return {
+            "profile": self.profile,
             "bus": self.bus_backend,
             "graph": self.graph_backend,
             "vector": self.vector_backend,

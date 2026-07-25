@@ -11,20 +11,6 @@ from sio_core.config import Settings, get_settings, reset_settings
 from sio_core.errors import ConfigError
 
 
-@pytest.fixture
-def pristine_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Strip SIO_/NEO4J_ variables so the *code* defaults are what gets asserted.
-
-    ``tests/conftest.py`` deliberately forces infra-free adapters for the whole session, so
-    without this a "defaults" test would only be re-reading the test harness.
-    """
-    import os
-
-    for key in list(os.environ):
-        if key.startswith(("SIO_", "NEO4J_")):
-            monkeypatch.delenv(key, raising=False)
-
-
 def test_defaults_are_local_first(pristine_env: None) -> None:
     cfg = Settings(_env_file=None)  # type: ignore[call-arg]
     assert cfg.bus_backend == "redis"
@@ -143,6 +129,10 @@ def test_ensure_dirs_creates_runtime_layout(tmp_path: Path) -> None:
 def test_adapter_summary_covers_every_seam(pristine_env: None) -> None:
     summary = Settings(_env_file=None).adapter_summary()  # type: ignore[call-arg]
     assert set(summary) == {
+        # Not a seam, but the thing that SETS the seams. `/health` has to say which world it is in, or a
+        # profile swap is invisible in production — an operator looking at a degraded GPU deployment would
+        # see eleven adapter names and no indication that one flag chose all of them.
+        "profile",
         "bus",
         "graph",
         "vector",
