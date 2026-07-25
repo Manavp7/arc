@@ -41,6 +41,9 @@ type RailTab = "events" | "alerts" | "decisions" | "copilot" | "missions" | "for
  */
 const LIVE_WINDOW_S = 300;
 
+/** Feed rows rendered at once. See the note in `EventFeed`. */
+const FEED_ROWS = 80;
+
 function ConnectionBadge() {
   const connection = useSioStore((state) => state.connection);
   const lastMessageAt = useSioStore((state) => state.lastMessageAt);
@@ -63,6 +66,15 @@ function EventFeed({ onExplain }: { onExplain: (subject: Explainable) => void })
   // different moments at once, which is worse than not replaying at all because it looks correct.
   const events = replayAt ? historyEvents : liveEvents;
   const selectEntity = useSioStore((state) => state.selectEntity);
+  /**
+   * How many feed rows to render.
+   *
+   * The store keeps 500 events and the feed rendered every one, each with a button — 500 rows and 500
+   * event handlers in a 900 px scroller that nobody scrolls past the first screen of. Capped, with the
+   * total stated, because silently truncating would be its own small lie: an operator who has seen
+   * "showing 80 of 500" knows to reach for the timeline, and one shown 80 rows with no note does not.
+   */
+  const shown = events.slice(0, FEED_ROWS);
 
   if (events.length === 0) {
     return (
@@ -72,8 +84,14 @@ function EventFeed({ onExplain }: { onExplain: (subject: Explainable) => void })
     );
   }
   return (
-    <ul className="feed">
-      {events.map((event: SioEvent) => (
+    <>
+      {events.length > shown.length && (
+        <p className="feed-note">
+          showing the {shown.length} most recent of {events.length} — use the timeline for the rest
+        </p>
+      )}
+      <ul className="feed">
+        {shown.map((event: SioEvent) => (
         <li key={event.event_id} className={`feed-item sev-${event.severity}`}>
           <div className="feed-head">
             <span className="feed-type">{event.type.replace(/_/g, " ")}</span>
@@ -103,8 +121,9 @@ function EventFeed({ onExplain }: { onExplain: (subject: Explainable) => void })
             </button>
           </div>
         </li>
-      ))}
-    </ul>
+        ))}
+      </ul>
+    </>
   );
 }
 

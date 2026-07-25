@@ -161,13 +161,17 @@ class SpatialService(SioService):
             f"spatial.zone_{change.kind}", note="geometric membership with hysteresis"
         )
         if change.kind == "entered":
+            # One note, not two. Split across two bullets the second one opened with "and", which reads
+            # as a formatting accident in a list the operator is meant to trust — and a note is a
+            # standalone claim, not a clause.
             explanation.add_note(
                 f"position was inside the {change.zone_name} polygon by more than "
-                f"{self.tracker.margin_m:.0f} m"
+                f"{self.tracker.margin_m:.0f} m, and held there for "
+                f"{self.tracker.enter_confirm_s:.0f} s"
             )
             explanation.add_note(
-                f"and held there for {self.tracker.enter_confirm_s:.0f} s, so a vehicle clipping the "
-                "corner while turning does not count as an entry"
+                "the hold is required so a vehicle clipping the corner while turning does not count as "
+                "an entry"
             )
         else:
             explanation.add_note(

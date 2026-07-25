@@ -197,3 +197,29 @@ def test_no_sql_tests_a_bare_placeholder_for_null() -> None:
         "bare placeholder in an IS NULL test; add an explicit cast such as %s::text:\n  "
         + "\n  ".join(offenders)
     )
+
+
+def test_no_explanation_note_opens_with_a_conjunction() -> None:
+    """An explanation note is a standalone claim, not a clause.
+
+    The zone-entry explanation read as two bullets:
+
+        - position was inside the Staging area polygon by more than 2 m
+        - and held there for 2 s, so a vehicle clipping the corner while turning does not count
+
+    One sentence split in two, so the second bullet opened with "and". In a list an operator is meant to
+    trust, that reads as a formatting accident — and it invites the reader to wonder what else in the
+    explanation was assembled carelessly.
+    """
+    import re
+
+    root = Path(__file__).resolve().parents[2]
+    offenders: list[str] = []
+    pattern = re.compile(r"""add_note\(\s*f?["'](and|but|or|so|because|which)\b""", re.IGNORECASE)
+    for path in sorted(root.glob("services/*/src/**/*.py")) + sorted(
+        root.glob("libs/*/src/**/*.py")
+    ):
+        for number, line in enumerate(path.read_text().splitlines(), start=1):
+            if pattern.search(line):
+                offenders.append(f"{path.relative_to(root)}:{number}: {line.strip()[:90]}")
+    assert not offenders, "these notes are clauses, not claims:\n" + "\n".join(offenders)

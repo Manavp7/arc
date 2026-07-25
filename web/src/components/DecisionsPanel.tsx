@@ -177,6 +177,14 @@ function DecisionCard({
 
       {expanded && (
         <div className="decision-options">
+          {/* When two options score the same, the ranking between them is arbitrary and the UI must not
+              imply otherwise. An operator who sees "recommended" on one of two identical rows reasonably
+              assumes something distinguishes them. */}
+          {tiedTop(decision) && (
+            <p className="decision-tie">
+              the top {tiedTop(decision)} options score the same — the order between them is arbitrary
+            </p>
+          )}
           {decision.options?.map((option) => (
             <OptionRow
               key={option.option_id}
@@ -222,6 +230,17 @@ function DecisionCard({
   );
 }
 
+/** How many options share the top score, when more than one does. */
+function tiedTop(decision: Decision): number {
+  const scores = (decision.options ?? [])
+    .filter((option) => option.feasible && option.action !== "no_action")
+    .map((option) => option.score);
+  if (scores.length < 2) return 0;
+  const best = Math.max(...scores);
+  const tied = scores.filter((score) => Math.abs(score - best) < 0.05).length;
+  return tied > 1 ? tied : 0;
+}
+
 function OptionRow({
   option,
   recommended,
@@ -260,8 +279,21 @@ function OptionRow({
         {option.rejection_reason && <div className="option-why-not">{option.rejection_reason}</div>}
       </div>
       {approvable && option.feasible && (
-        <button type="button" className="option-approve" disabled={busy} onClick={onApprove}>
-          approve this
+        <button
+          type="button"
+          className="option-approve"
+          disabled={busy}
+          onClick={onApprove}
+          title={
+            option.action === "no_action"
+              ? "Record a deliberate decision to take no action"
+              : "Authorise this option specifically"
+          }
+        >
+          {/* "Approve doing nothing" is deliberately offered and deliberately worded. Choosing not to act
+              is a real decision an operator should be able to record, and it belongs in the audit trail —
+              but a button reading "approve this" on a no-action row reads like a mistake. */}
+          {option.action === "no_action" ? "approve doing nothing" : "approve this"}
         </button>
       )}
     </div>

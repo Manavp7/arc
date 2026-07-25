@@ -19,6 +19,15 @@ import { fromAlert, type Explainable } from "./ExplanationDrawer";
 
 const REFRESH_MS = 5000;
 
+/**
+ * Rows rendered at once.
+ *
+ * The inbox rendered all hundred, each with buttons, in a scroller nobody reads past the first screen of.
+ * The cap is safe *because* the server orders the list: the rows that matter are the ones at the top, which
+ * is exactly the reason this component does not re-sort.
+ */
+const ROWS = 40;
+
 function ageOf(iso: string): string {
   const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
   if (seconds < 60) return `${seconds.toFixed(0)}s`;
@@ -28,7 +37,9 @@ function ageOf(iso: string): string {
 
 export function AlertsPanel({ onExplain }: { onExplain: (subject: Explainable) => void }) {
   const [alerts, setAlerts] = useState<Alert[]>([]);
-  const [groups, setGroups] = useState<Array<{ kind: string; count: number; max_score: number }>>([]);
+  const [groups, setGroups] = useState<
+    Array<{ kind: string; count: number; max_score: number; alerts?: Alert[] }>
+  >([]);
   const [filter, setFilter] = useState<string>("live");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -135,8 +146,15 @@ export function AlertsPanel({ onExplain }: { onExplain: (subject: Explainable) =
             </span>
           )}
           {groups.slice(0, 3).map((group) => (
-            <span key={group.kind} className="pill pill-quiet">
-              {group.kind.replace(/_/g, " ")} ×{group.count}
+            <span
+              key={group.kind}
+              className="pill pill-quiet"
+              title={`${group.count} occurrences folded into ${group.alerts?.length ?? 0} alert(s)`}
+            >
+              {/* "occurrences", not a bare multiplier. These count folded repeats while the rows below
+                  count alerts, so three chips reading ×33 ×38 ×30 above 100 rows summed to 101 and looked
+                  like an arithmetic error. Both numbers were right; only the label was ambiguous. */}
+              {group.kind.replace(/_/g, " ")} {group.count} occurrences
             </span>
           ))}
         </div>
@@ -165,8 +183,14 @@ export function AlertsPanel({ onExplain }: { onExplain: (subject: Explainable) =
         </p>
       )}
 
+      {alerts.length > ROWS && (
+        <p className="feed-note">
+          showing the {ROWS} highest-priority of {alerts.length} — narrow the filter to see the rest
+        </p>
+      )}
+
       <ul className="alerts-list">
-        {alerts.map((alert) => (
+        {alerts.slice(0, ROWS).map((alert) => (
           <li
             key={alert.alert_id}
             className={`alert-row sev-${alert.severity} state-${alert.state}`}

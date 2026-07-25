@@ -1908,3 +1908,20 @@ code {
   font-size: 9px;
   padding: 3px 6px;
 }
+
+/* "showing N of M" — a truncated list must say it is truncated. An operator who has seen the note
+   knows to reach for the timeline or the filter; one shown a short list with no note does not. */
+.feed-note {
+  color: var(--text-dim);
+  font-size: 9px;
+  font-style: italic;
+  margin: 0 2px 4px;
+}
+
+/* A tie at the top of a ranking. Stated, because "recommended" on one of two identical rows implies
+   something distinguishes them. */
+.decision-tie {
+  color: var(--warn);
+  font-size: 9px;
+  margin: 0 0 4px;
+}
