@@ -186,6 +186,11 @@ test-all: check
 eval *args:
     {{uv}} pytest tests/eval -m eval {{args}}
 
+# End-to-end performance benchmark: 10 -> 50 events/s, latency percentiles, time-to-first-insight.
+# Needs a running platform.
+bench *args:
+    {{uv}} python scripts/bench.py {{args}}
+
 # Verify the copilot's model can actually select tools (gate for Phase 4).
 eval-tools *args:
     {{uv}} python scripts/eval_tool_calling.py {{args}}

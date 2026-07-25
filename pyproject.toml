@@ -68,6 +68,9 @@ sio-missions = { workspace = true }
 
 [dependency-groups]
 dev = [
+    # For `just bench`: CPU and RSS across the platform's processes (NFR §13). A dev dependency
+    # rather than a runtime one — the platform does not need it, only the benchmark does.
+    "psutil>=6.0",
     "pytest>=8.4",
     "pytest-asyncio>=1.0",
     "pytest-cov>=6.0",
