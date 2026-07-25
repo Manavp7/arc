@@ -17,6 +17,7 @@ synthetic detector. No silent black frames.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -142,13 +143,24 @@ class CameraRenderer:
             candidates = self._sprites.get("truck") if detector_class in ("truck", "car") else None
         if not candidates:
             return None
-        index = (hash(agent_id) if agent_id else 0) % len(candidates)
+        # A STABLE hash, not the builtin. Python randomises string hashing per process (PYTHONHASHSEED), so
+        # `hash(agent_id)` picks a different sprite for the same agent on every restart. Within one run that is
+        # harmless — the docstring's claim holds — but it means the same simulation seed does not reproduce the
+        # same frames, which makes any measurement taken against rendered output unreproducible.
+        #
+        # Found by the detection eval: mAP moved between runs of identical code (0.248, then 0.214), which is
+        # exactly the property that makes a metric useless for spotting regressions. md5 is a hash function
+        # here, not a security control.
+        digest = (
+            hashlib.md5(agent_id.encode(), usedforsecurity=False).digest() if agent_id else b"\x00"
+        )
+        index = digest[0] % len(candidates)
         return candidates[index]
 
     def _background(self, source_id: str) -> Any:
         if source_id not in self._backgrounds:
             self._backgrounds[source_id] = _synthetic_background(
-                FRAME_WIDTH, FRAME_HEIGHT, seed=abs(hash(source_id)) % 10_000
+                FRAME_WIDTH, FRAME_HEIGHT, seed=_stable_seed(source_id)
             )
         return self._backgrounds[source_id]
 
@@ -158,6 +170,21 @@ class CameraRenderer:
             "sprite_classes": {label: len(items) for label, items in self._sprites.items()},
             "frames_rendered": self._frames_rendered,
         }
+
+
+def _stable_seed(value: str) -> int:
+    """A seed that is the same in every process.
+
+    The builtin `hash()` is randomised per process for strings, so seeding anything from it means the "stable,
+    distinguishable scene" each camera is documented to have is only stable until the service restarts. Nothing
+    breaks in production — a background that differs between restarts is invisible — but it makes every
+    measurement taken against rendered frames unreproducible, which is how the detection eval came to report a
+    different mAP on identical code three runs in a row.
+    """
+    return (
+        int.from_bytes(hashlib.md5(value.encode(), usedforsecurity=False).digest()[:4], "big")
+        % 10_000
+    )
 
 
 def _composite(frame: Any, rgba: Any, x: int, y: int) -> None:
