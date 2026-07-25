@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .authn import ANONYMOUS, DevJwtAuth, Principal, build_authenticator
+from .authn import ANONYMOUS, DevJwtAuth, Principal, ServiceIdentity, build_authenticator
 from .authz import Decision, authorise, policy_engine, require
 from .config import Settings, get_settings, reset_settings
 from .errors import (
@@ -65,6 +65,7 @@ __all__ = [
     "PgPool",
     "PolicyDenied",
     "Principal",
+    "ServiceIdentity",
     "Settings",
     "SioError",
     "SioService",

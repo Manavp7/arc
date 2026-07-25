@@ -154,11 +154,66 @@ POLICY: tuple[Rule, ...] = (
         requires_pii_scope=True,
         description="Unblurred frames contain faces and plates",
     ),
+    Rule(
+        "media.read",
+        zone_scoped=True,
+        description=(
+            "Stored frames, which are blurred before they reach the object store. The unblurred "
+            "originals are a different action (media.raw) behind a different door"
+        ),
+    ),
     # --- ordinary operations -----------------------------------------------------------------
     Rule(
         "alerts.write",
         roles=("operator", "commander", "admin"),
         description="Acknowledging and resolving is an operator's job",
+    ),
+    # --- machine principals ------------------------------------------------------------------
+    #
+    # Services authenticate too, with the `service` role and the actions their jobs need. The tempting
+    # alternative is to exempt internal calls, or to give them admin and stop thinking — which is exactly
+    # how "internal" becomes a synonym for "unaudited". Every one of these appears in the audit trail as
+    # `service:agents` or `service:copilot`, distinguishable from a person.
+    Rule(
+        "decisions.write",
+        roles=("service", "operator", "commander", "admin"),
+        description="Asking for a recommendation. Producing options is not acting on them",
+    ),
+    Rule(
+        "agents.write",
+        roles=("service", "admin"),
+        description="An agent recording its own observations and proposals",
+    ),
+    Rule(
+        "workflow.write",
+        roles=("service", "commander", "admin"),
+        description="Recording playbook progress; executing is workflow.execute and needs a commander",
+    ),
+    # --- computations, which change nothing in the world -------------------------------------
+    #
+    # Starting a replay, running a forecast, reloading rules, simulating an event: all of these compute or
+    # re-read. None of them moves a vehicle or discloses personal data, so they are granted broadly. The
+    # distinction that matters in this policy is not read-versus-write but WHETHER SOMETHING HAPPENS
+    # PHYSICALLY — which is why `decision.approve` and `workflow.execute` sit behind a commander and these
+    # do not.
+    Rule(
+        "timeline.write",
+        roles=("operator", "commander", "admin", "ml_engineer", "integrator", "service"),
+        description="Starting and cancelling a replay session; it reconstructs history, it changes none",
+    ),
+    Rule(
+        "forecasts.write",
+        roles=("operator", "commander", "admin", "ml_engineer", "service"),
+        description="Running a forecast on demand",
+    ),
+    Rule(
+        "events.write",
+        roles=("operator", "commander", "admin", "ml_engineer", "service"),
+        description="Reloading rules and simulating an event for testing",
+    ),
+    Rule(
+        "model.read",
+        description="Which detector, tracker and thresholds are running — diagnostic, and useful to all",
     ),
     Rule(
         "entities.read",
@@ -169,8 +224,16 @@ POLICY: tuple[Rule, ...] = (
     Rule("alerts.read", zone_scoped=True, description="Reading alerts, within permitted zones"),
     Rule(
         "copilot.ask",
-        roles=("operator", "commander", "admin", "ml_engineer", "integrator"),
+        roles=("operator", "commander", "admin", "ml_engineer", "integrator", "service"),
         description="Asking questions; the answers are redacted unless pii.view also passes",
+    ),
+    Rule(
+        # GraphQL is read parity over the same world model (PRD M17), so it is governed as a read even on
+        # POST — the method is a transport detail of the protocol, not a statement about the operation.
+        # If mutations are added, they need their own action rather than inheriting this one.
+        "graphql.*",
+        roles=("operator", "commander", "admin", "ml_engineer", "integrator", "service"),
+        description="GraphQL queries over the world model; read parity with the REST surface",
     ),
     Rule(
         "integration.write",

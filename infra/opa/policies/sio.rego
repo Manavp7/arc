@@ -4,7 +4,7 @@
 #
 # Hand-editing this file would recreate the exact problem it exists to prevent: two
 # implementations of one policy, drifting, until dev allows what production denies.
-# Generated 2026-07-25 from 17 rules.
+# Generated 2026-07-25 from 26 rules.
 
 package sio.authz
 
@@ -39,11 +39,20 @@ known_action if input.action == "workflow.execute"
 known_action if input.action == "simulation.inject"
 known_action if input.action == "pii.view"
 known_action if input.action == "media.raw"
+known_action if input.action == "media.read"
 known_action if input.action == "alerts.write"
+known_action if input.action == "decisions.write"
+known_action if input.action == "agents.write"
+known_action if input.action == "workflow.write"
+known_action if input.action == "timeline.write"
+known_action if input.action == "forecasts.write"
+known_action if input.action == "events.write"
+known_action if input.action == "model.read"
 known_action if input.action == "entities.read"
 known_action if input.action == "events.read"
 known_action if input.action == "alerts.read"
 known_action if input.action == "copilot.ask"
+known_action if startswith(input.action, "graphql.")
 known_action if input.action == "integration.write"
 known_action if input.action == "model.write"
 known_action if endswith(input.action, ".read")
@@ -175,6 +184,23 @@ allow if {
 	tenant_matches
 }
 
+# Stored frames, which are blurred before they reach the object store. The unblurred originals are a different action (media.raw) behind a different door
+allow if {
+	authenticated
+	input.action == "media.read"
+	not startswith(input.action, "admin.")
+	input.action != "policy.write"
+	input.action != "tenant.create"
+	input.action != "decision.approve"
+	input.action != "decision.reject"
+	input.action != "workflow.execute"
+	input.action != "simulation.inject"
+	input.action != "pii.view"
+	input.action != "media.raw"
+	zone_permitted
+	tenant_matches
+}
+
 # Acknowledging and resolving is an operator's job
 allow if {
 	authenticated
@@ -188,8 +214,168 @@ allow if {
 	input.action != "simulation.inject"
 	input.action != "pii.view"
 	input.action != "media.raw"
+	input.action != "media.read"
 	some role in ["operator", "commander", "admin"]
 	role in input.principal.roles
+	tenant_matches
+}
+
+# Asking for a recommendation. Producing options is not acting on them
+allow if {
+	authenticated
+	input.action == "decisions.write"
+	not startswith(input.action, "admin.")
+	input.action != "policy.write"
+	input.action != "tenant.create"
+	input.action != "decision.approve"
+	input.action != "decision.reject"
+	input.action != "workflow.execute"
+	input.action != "simulation.inject"
+	input.action != "pii.view"
+	input.action != "media.raw"
+	input.action != "media.read"
+	input.action != "alerts.write"
+	some role in ["service", "operator", "commander", "admin"]
+	role in input.principal.roles
+	tenant_matches
+}
+
+# An agent recording its own observations and proposals
+allow if {
+	authenticated
+	input.action == "agents.write"
+	not startswith(input.action, "admin.")
+	input.action != "policy.write"
+	input.action != "tenant.create"
+	input.action != "decision.approve"
+	input.action != "decision.reject"
+	input.action != "workflow.execute"
+	input.action != "simulation.inject"
+	input.action != "pii.view"
+	input.action != "media.raw"
+	input.action != "media.read"
+	input.action != "alerts.write"
+	input.action != "decisions.write"
+	some role in ["service", "admin"]
+	role in input.principal.roles
+	tenant_matches
+}
+
+# Recording playbook progress; executing is workflow.execute and needs a commander
+allow if {
+	authenticated
+	input.action == "workflow.write"
+	not startswith(input.action, "admin.")
+	input.action != "policy.write"
+	input.action != "tenant.create"
+	input.action != "decision.approve"
+	input.action != "decision.reject"
+	input.action != "workflow.execute"
+	input.action != "simulation.inject"
+	input.action != "pii.view"
+	input.action != "media.raw"
+	input.action != "media.read"
+	input.action != "alerts.write"
+	input.action != "decisions.write"
+	input.action != "agents.write"
+	some role in ["service", "commander", "admin"]
+	role in input.principal.roles
+	tenant_matches
+}
+
+# Starting and cancelling a replay session; it reconstructs history, it changes none
+allow if {
+	authenticated
+	input.action == "timeline.write"
+	not startswith(input.action, "admin.")
+	input.action != "policy.write"
+	input.action != "tenant.create"
+	input.action != "decision.approve"
+	input.action != "decision.reject"
+	input.action != "workflow.execute"
+	input.action != "simulation.inject"
+	input.action != "pii.view"
+	input.action != "media.raw"
+	input.action != "media.read"
+	input.action != "alerts.write"
+	input.action != "decisions.write"
+	input.action != "agents.write"
+	input.action != "workflow.write"
+	some role in ["operator", "commander", "admin", "ml_engineer", "integrator", "service"]
+	role in input.principal.roles
+	tenant_matches
+}
+
+# Running a forecast on demand
+allow if {
+	authenticated
+	input.action == "forecasts.write"
+	not startswith(input.action, "admin.")
+	input.action != "policy.write"
+	input.action != "tenant.create"
+	input.action != "decision.approve"
+	input.action != "decision.reject"
+	input.action != "workflow.execute"
+	input.action != "simulation.inject"
+	input.action != "pii.view"
+	input.action != "media.raw"
+	input.action != "media.read"
+	input.action != "alerts.write"
+	input.action != "decisions.write"
+	input.action != "agents.write"
+	input.action != "workflow.write"
+	input.action != "timeline.write"
+	some role in ["operator", "commander", "admin", "ml_engineer", "service"]
+	role in input.principal.roles
+	tenant_matches
+}
+
+# Reloading rules and simulating an event for testing
+allow if {
+	authenticated
+	input.action == "events.write"
+	not startswith(input.action, "admin.")
+	input.action != "policy.write"
+	input.action != "tenant.create"
+	input.action != "decision.approve"
+	input.action != "decision.reject"
+	input.action != "workflow.execute"
+	input.action != "simulation.inject"
+	input.action != "pii.view"
+	input.action != "media.raw"
+	input.action != "media.read"
+	input.action != "alerts.write"
+	input.action != "decisions.write"
+	input.action != "agents.write"
+	input.action != "workflow.write"
+	input.action != "timeline.write"
+	input.action != "forecasts.write"
+	some role in ["operator", "commander", "admin", "ml_engineer", "service"]
+	role in input.principal.roles
+	tenant_matches
+}
+
+# Which detector, tracker and thresholds are running — diagnostic, and useful to all
+allow if {
+	authenticated
+	input.action == "model.read"
+	not startswith(input.action, "admin.")
+	input.action != "policy.write"
+	input.action != "tenant.create"
+	input.action != "decision.approve"
+	input.action != "decision.reject"
+	input.action != "workflow.execute"
+	input.action != "simulation.inject"
+	input.action != "pii.view"
+	input.action != "media.raw"
+	input.action != "media.read"
+	input.action != "alerts.write"
+	input.action != "decisions.write"
+	input.action != "agents.write"
+	input.action != "workflow.write"
+	input.action != "timeline.write"
+	input.action != "forecasts.write"
+	input.action != "events.write"
 	tenant_matches
 }
 
@@ -206,7 +392,15 @@ allow if {
 	input.action != "simulation.inject"
 	input.action != "pii.view"
 	input.action != "media.raw"
+	input.action != "media.read"
 	input.action != "alerts.write"
+	input.action != "decisions.write"
+	input.action != "agents.write"
+	input.action != "workflow.write"
+	input.action != "timeline.write"
+	input.action != "forecasts.write"
+	input.action != "events.write"
+	input.action != "model.read"
 	zone_permitted
 	tenant_matches
 }
@@ -224,7 +418,15 @@ allow if {
 	input.action != "simulation.inject"
 	input.action != "pii.view"
 	input.action != "media.raw"
+	input.action != "media.read"
 	input.action != "alerts.write"
+	input.action != "decisions.write"
+	input.action != "agents.write"
+	input.action != "workflow.write"
+	input.action != "timeline.write"
+	input.action != "forecasts.write"
+	input.action != "events.write"
+	input.action != "model.read"
 	input.action != "entities.read"
 	zone_permitted
 	tenant_matches
@@ -243,7 +445,15 @@ allow if {
 	input.action != "simulation.inject"
 	input.action != "pii.view"
 	input.action != "media.raw"
+	input.action != "media.read"
 	input.action != "alerts.write"
+	input.action != "decisions.write"
+	input.action != "agents.write"
+	input.action != "workflow.write"
+	input.action != "timeline.write"
+	input.action != "forecasts.write"
+	input.action != "events.write"
+	input.action != "model.read"
 	input.action != "entities.read"
 	input.action != "events.read"
 	zone_permitted
@@ -263,11 +473,50 @@ allow if {
 	input.action != "simulation.inject"
 	input.action != "pii.view"
 	input.action != "media.raw"
+	input.action != "media.read"
 	input.action != "alerts.write"
+	input.action != "decisions.write"
+	input.action != "agents.write"
+	input.action != "workflow.write"
+	input.action != "timeline.write"
+	input.action != "forecasts.write"
+	input.action != "events.write"
+	input.action != "model.read"
 	input.action != "entities.read"
 	input.action != "events.read"
 	input.action != "alerts.read"
-	some role in ["operator", "commander", "admin", "ml_engineer", "integrator"]
+	some role in ["operator", "commander", "admin", "ml_engineer", "integrator", "service"]
+	role in input.principal.roles
+	tenant_matches
+}
+
+# GraphQL queries over the world model; read parity with the REST surface
+allow if {
+	authenticated
+	startswith(input.action, "graphql.")
+	not startswith(input.action, "admin.")
+	input.action != "policy.write"
+	input.action != "tenant.create"
+	input.action != "decision.approve"
+	input.action != "decision.reject"
+	input.action != "workflow.execute"
+	input.action != "simulation.inject"
+	input.action != "pii.view"
+	input.action != "media.raw"
+	input.action != "media.read"
+	input.action != "alerts.write"
+	input.action != "decisions.write"
+	input.action != "agents.write"
+	input.action != "workflow.write"
+	input.action != "timeline.write"
+	input.action != "forecasts.write"
+	input.action != "events.write"
+	input.action != "model.read"
+	input.action != "entities.read"
+	input.action != "events.read"
+	input.action != "alerts.read"
+	input.action != "copilot.ask"
+	some role in ["operator", "commander", "admin", "ml_engineer", "integrator", "service"]
 	role in input.principal.roles
 	tenant_matches
 }
@@ -285,11 +534,20 @@ allow if {
 	input.action != "simulation.inject"
 	input.action != "pii.view"
 	input.action != "media.raw"
+	input.action != "media.read"
 	input.action != "alerts.write"
+	input.action != "decisions.write"
+	input.action != "agents.write"
+	input.action != "workflow.write"
+	input.action != "timeline.write"
+	input.action != "forecasts.write"
+	input.action != "events.write"
+	input.action != "model.read"
 	input.action != "entities.read"
 	input.action != "events.read"
 	input.action != "alerts.read"
 	input.action != "copilot.ask"
+	not startswith(input.action, "graphql.")
 	some role in ["integrator", "admin"]
 	role in input.principal.roles
 	tenant_matches
@@ -308,11 +566,20 @@ allow if {
 	input.action != "simulation.inject"
 	input.action != "pii.view"
 	input.action != "media.raw"
+	input.action != "media.read"
 	input.action != "alerts.write"
+	input.action != "decisions.write"
+	input.action != "agents.write"
+	input.action != "workflow.write"
+	input.action != "timeline.write"
+	input.action != "forecasts.write"
+	input.action != "events.write"
+	input.action != "model.read"
 	input.action != "entities.read"
 	input.action != "events.read"
 	input.action != "alerts.read"
 	input.action != "copilot.ask"
+	not startswith(input.action, "graphql.")
 	input.action != "integration.write"
 	some role in ["ml_engineer", "admin"]
 	role in input.principal.roles
@@ -332,11 +599,20 @@ allow if {
 	input.action != "simulation.inject"
 	input.action != "pii.view"
 	input.action != "media.raw"
+	input.action != "media.read"
 	input.action != "alerts.write"
+	input.action != "decisions.write"
+	input.action != "agents.write"
+	input.action != "workflow.write"
+	input.action != "timeline.write"
+	input.action != "forecasts.write"
+	input.action != "events.write"
+	input.action != "model.read"
 	input.action != "entities.read"
 	input.action != "events.read"
 	input.action != "alerts.read"
 	input.action != "copilot.ask"
+	not startswith(input.action, "graphql.")
 	input.action != "integration.write"
 	input.action != "model.write"
 	tenant_matches

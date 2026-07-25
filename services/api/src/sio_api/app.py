@@ -22,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 
 from sio_core import MessageContext, SioService, describe_error, get_blob, get_pg_pool
+from sio_core.authn import ServiceIdentity
 from sio_core.telemetry import set_trace_id
 from sio_core.tenancy import current_tenant
 from sio_schemas import BusMessage, Entity, Event, HealthStatus, new_id, utc_now
@@ -355,6 +356,12 @@ class ApiService(SioService):
         # fields, and when a service is down it returns 503 NAMING the service rather than an empty list.
         # An empty list is indistinguishable from "nothing is happening", which is the one thing an operator
         # must not be told when a service has actually fallen over.
+        # A service identity for the API's own outbound work.
+        #
+        # Used only as a FALLBACK when a request arrives with no user token — an internal caller, a
+        # background task. Forwarding a user's request uses the user's token; see the note in `_forward`.
+        identity = ServiceIdentity("api", self.settings)
+
         async def _forward(
             service: str,
             port: int,
@@ -367,10 +374,22 @@ class ApiService(SioService):
             # coroutine. ASYNC109 flags `timeout=` on an async def because callers reasonably expect the
             # latter.
             http_timeout_s: float = 15.0,
+            request: Request | None = None,
         ) -> Any:
             import httpx
 
             url = f"http://127.0.0.1:{port}{path}"
+            # THE CALLER'S TOKEN IS PROPAGATED, not replaced with the API's own.
+            #
+            # This is the difference between a proxy and a confused deputy. Substituting a service identity
+            # would make every downstream audit row read `service:api` — losing the only fact that matters
+            # after an incident, which is which person did it — and would scope the downstream query to the
+            # API's tenant rather than the caller's, which is a cross-tenant leak wearing a proxy costume.
+            #
+            # The service identity is the fallback, for the internal callers that legitimately have no user
+            # behind them.
+            inbound = request.headers.get("authorization") if request is not None else None
+            headers = {"Authorization": inbound} if inbound else identity.headers()
             try:
                 async with httpx.AsyncClient(timeout=http_timeout_s) as client:
                     response = await client.request(
@@ -378,6 +397,7 @@ class ApiService(SioService):
                         url,
                         params={k: v for k, v in (params or {}).items() if v is not None},
                         json=body,
+                        headers=headers,
                     )
                     if response.status_code >= 400:
                         # Pass the downstream status through. Turning a 404 into a 503 would tell an
@@ -398,7 +418,10 @@ class ApiService(SioService):
 
         @api.get("/alerts", tags=["alerts"])
         async def alerts(
-            state: str | None = None, grouped: bool = True, limit: int = Query(50, le=500)
+            request: Request,
+            state: str | None = None,
+            grouped: bool = True,
+            limit: int = Query(50, le=500),
         ) -> Any:
             """The alerts inbox, forwarded from the alerts service."""
             return await _forward(
@@ -406,59 +429,77 @@ class ApiService(SioService):
                 self.settings.alerts_port,
                 "/alerts",
                 params={"state": state, "grouped": grouped, "limit": limit},
+                request=request,
             )
 
         @api.get("/alerts/{alert_id}", tags=["alerts"])
-        async def alert_detail(alert_id: str) -> Any:
+        async def alert_detail(request: Request, alert_id: str) -> Any:
             return await _forward("alerts", self.settings.alerts_port, f"/alerts/{alert_id}")
 
         @api.post("/alerts/{alert_id}/ack", tags=["alerts"])
-        async def acknowledge_alert(alert_id: str, body: dict[str, Any] | None = None) -> Any:
+        async def acknowledge_alert(
+            request: Request, alert_id: str, body: dict[str, Any] | None = None
+        ) -> Any:
             return await _forward(
                 "alerts",
                 self.settings.alerts_port,
                 f"/alerts/{alert_id}/ack",
                 method="POST",
                 body=body or {"ack_by": "operator"},
+                request=request,
             )
 
         @api.post("/alerts/{alert_id}/resolve", tags=["alerts"])
-        async def resolve_alert(alert_id: str, body: dict[str, Any] | None = None) -> Any:
+        async def resolve_alert(
+            request: Request, alert_id: str, body: dict[str, Any] | None = None
+        ) -> Any:
             return await _forward(
                 "alerts",
                 self.settings.alerts_port,
                 f"/alerts/{alert_id}/resolve",
                 method="POST",
                 body=body or {"resolved_by": "operator"},
+                request=request,
             )
 
         @api.post("/alerts/{alert_id}/escalate", tags=["alerts"])
-        async def escalate_alert(alert_id: str, reason: str = "escalated by hand") -> Any:
+        async def escalate_alert(
+            request: Request, alert_id: str, reason: str = "escalated by hand"
+        ) -> Any:
             return await _forward(
                 "alerts",
                 self.settings.alerts_port,
                 f"/alerts/{alert_id}/escalate",
                 method="POST",
                 params={"reason": reason},
+                request=request,
             )
 
         @api.get("/decisions", tags=["decisions"])
-        async def decisions(approval: str | None = None, limit: int = Query(20, le=200)) -> Any:
+        async def decisions(
+            request: Request, approval: str | None = None, limit: int = Query(20, le=200)
+        ) -> Any:
             return await _forward(
                 "decision",
                 self.settings.decision_port,
                 "/decisions",
                 params={"approval": approval, "limit": limit},
+                request=request,
             )
 
         @api.get("/decisions/{decision_id}", tags=["decisions"])
-        async def decision_detail(decision_id: str) -> Any:
+        async def decision_detail(request: Request, decision_id: str) -> Any:
             return await _forward(
-                "decision", self.settings.decision_port, f"/decisions/{decision_id}"
+                "decision",
+                self.settings.decision_port,
+                f"/decisions/{decision_id}",
+                request=request,
             )
 
         @api.post("/decisions/{decision_id}/approve", tags=["decisions"])
-        async def approve_decision(decision_id: str, body: dict[str, Any] | None = None) -> Any:
+        async def approve_decision(
+            request: Request, decision_id: str, body: dict[str, Any] | None = None
+        ) -> Any:
             """Approve a recommendation. Forwarded, never decided here.
 
             Worth being explicit: the API does not implement approval. It forwards to the service that owns
@@ -472,58 +513,73 @@ class ApiService(SioService):
                 method="POST",
                 body=body or {"approved_by": "operator"},
                 http_timeout_s=30.0,
+                request=request,
             )
 
         @api.post("/decisions/{decision_id}/reject", tags=["decisions"])
-        async def reject_decision(decision_id: str, body: dict[str, Any] | None = None) -> Any:
+        async def reject_decision(
+            request: Request, decision_id: str, body: dict[str, Any] | None = None
+        ) -> Any:
             return await _forward(
                 "decision",
                 self.settings.decision_port,
                 f"/decisions/{decision_id}/reject",
                 method="POST",
                 body=body or {"rejected_by": "operator"},
+                request=request,
             )
 
         @api.get("/forecasts", tags=["prediction"])
-        async def forecasts(target: str | None = None, limit: int = Query(20, le=200)) -> Any:
+        async def forecasts(
+            request: Request, target: str | None = None, limit: int = Query(20, le=200)
+        ) -> Any:
             return await _forward(
                 "prediction",
                 self.settings.prediction_port,
                 "/forecasts",
                 params={"target": target, "limit": limit},
+                request=request,
             )
 
         @api.get("/forecasts/latest", tags=["prediction"])
-        async def latest_forecasts() -> Any:
+        async def latest_forecasts(request: Request) -> Any:
             return await _forward("prediction", self.settings.prediction_port, "/forecasts/latest")
 
         @api.get("/workflow/runs", tags=["workflow"])
-        async def workflow_runs(limit: int = Query(20, le=200)) -> Any:
+        async def workflow_runs(request: Request, limit: int = Query(20, le=200)) -> Any:
             return await _forward(
-                "workflow", self.settings.workflow_port, "/workflow/runs", params={"limit": limit}
+                "workflow",
+                self.settings.workflow_port,
+                "/workflow/runs",
+                params={"limit": limit},
+                request=request,
             )
 
         @api.get("/workflow/playbooks", tags=["workflow"])
-        async def workflow_playbooks() -> Any:
+        async def workflow_playbooks(request: Request) -> Any:
             return await _forward("workflow", self.settings.workflow_port, "/workflow/playbooks")
 
         @api.get("/agents", tags=["agents"])
-        async def agents() -> Any:
+        async def agents(request: Request) -> Any:
             return await _forward("agents", self.settings.agents_port, "/agents")
 
         @api.get("/agents/cycles", tags=["agents"])
-        async def agent_cycles() -> Any:
+        async def agent_cycles(request: Request) -> Any:
             return await _forward("agents", self.settings.agents_port, "/agents/cycles")
 
         @api.get("/audit", tags=["governance"])
-        async def audit(limit: int = Query(50, le=500)) -> Any:
+        async def audit(request: Request, limit: int = Query(50, le=500)) -> Any:
             """The audit trail. Forwarded from the agents service, which owns the writes."""
             return await _forward(
-                "agents", self.settings.agents_port, "/agents/audit", params={"limit": limit}
+                "agents",
+                self.settings.agents_port,
+                "/agents/audit",
+                params={"limit": limit},
+                request=request,
             )
 
         @api.post("/copilot/ask", tags=["copilot"])
-        async def copilot_ask(body: dict[str, Any]) -> Any:
+        async def copilot_ask(request: Request, body: dict[str, Any]) -> Any:
             """Ask the copilot. Generous timeout: a local model takes seconds, not milliseconds."""
             return await _forward(
                 "copilot",
@@ -532,6 +588,7 @@ class ApiService(SioService):
                 method="POST",
                 body=body,
                 http_timeout_s=120.0,
+                request=request,
             )
 
         @api.get("/search/frames")

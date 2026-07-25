@@ -50,6 +50,11 @@ log = get_logger("sio.guard")
 #: Derived rather than hand-annotated per handler. A decorator on each route is a list somebody will forget
 #: to extend, and a forgotten entry is an unenforced endpoint that looks enforced — the worst of both.
 RESOURCE_PREFIXES: tuple[tuple[str, str], ...] = (
+    # Longest first: `/api/spatial` must be tested before `/api`.
+    ("/api/measurements", "events"),
+    ("/api/replay", "timeline"),
+    ("/api/world", "entities"),
+    ("/api/stats", "entities"),
     ("/api/spatial", "spatial"),
     ("/api/timeline", "timeline"),
     ("/api/forecasts", "forecasts"),
@@ -65,6 +70,18 @@ RESOURCE_PREFIXES: tuple[tuple[str, str], ...] = (
     ("/api/media", "media"),
     ("/api/policies", "policy"),
     ("/api/admin", "admin"),
+    # The SSE feed the console lives on, and stored media. Both were unmapped, which meant both were
+    # denied to everyone — the live map went blank and every frame 403'd. Found by the route-coverage test,
+    # not by using the console, which is the better order.
+    # Service-local read surfaces. Each is a diagnostic view over data the platform already exposes
+    # through the API, so each is governed as a read of the same noun rather than getting a noun of its own.
+    ("/fusion", "entities"),
+    ("/tracks", "entities"),
+    ("/counts", "entities"),
+    ("/cross-camera", "entities"),
+    ("/detect", "model"),
+    ("/stream", "events"),
+    ("/media", "media"),
     ("/copilot", "copilot"),
     ("/alerts", "alerts"),
     ("/decisions", "decisions"),
@@ -75,6 +92,26 @@ RESOURCE_PREFIXES: tuple[tuple[str, str], ...] = (
     ("/timeline", "timeline"),
     ("/forecasts", "forecasts"),
     ("/graphql", "graphql"),
+    # The governance service's own routes. Absent from the first version, and the omission proved the
+    # design: `GET /audit` on port 8118 resolved to `unmapped.request`, was denied by default, and said so
+    # in the log. A new route is visibly ungoverned rather than invisibly unprotected — which is the whole
+    # reason the fallback is deny rather than allow.
+    ("/governance", "admin"),
+    ("/policies", "policy"),
+    ("/audit", "audit"),
+    # Service-local surfaces that exist on several services.
+    ("/detector", "model"),
+    ("/tracker", "model"),
+    ("/rules", "policy"),
+    ("/world", "entities"),
+    ("/search", "search"),
+    ("/entities", "entities"),
+    ("/events", "events"),
+    ("/predict", "forecasts"),
+    ("/replay", "timeline"),
+    ("/mcp", "copilot"),
+    ("/connectors", "integration"),
+    ("/site", "spatial"),
 )
 
 #: Path suffixes that name an action more precisely than the HTTP method does.

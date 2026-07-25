@@ -27,7 +27,7 @@ from typing import Any
 
 import httpx
 
-from sio_core import describe_error, get_logger
+from sio_core import ServiceIdentity, describe_error, get_logger
 from sio_core.llm import ToolSpec
 
 #: Strings a model sends when it means "no value".
@@ -141,6 +141,7 @@ class ToolBelt:
         self.graph = graph
         self.tenant_id = tenant_id
         self._client: httpx.AsyncClient | None = None
+        self.identity = ServiceIdentity("copilot")
         self.calls = 0
         self.failures = 0
         self.question = ""
@@ -156,7 +157,22 @@ class ToolBelt:
 
     async def _http(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=TOOL_TIMEOUT_S)
+            # Authenticated with the copilot's own service identity.
+            #
+            # The tool belt calls the platform's own services, and those endpoints now require a principal.
+            # The alternative to a service identity is exempting internal traffic, which is a hole that
+            # grows — and it would leave every tool call unattributable in the audit trail. Every one of
+            # these appears as `service:copilot`, distinguishable from a person.
+            #
+            # `event_hooks` rather than default headers, because the token is short-lived: fixing it at
+            # client construction would pin whichever token was current when the process started, and the
+            # client outlives it.
+            async def attach_token(request: httpx.Request) -> None:
+                request.headers["Authorization"] = f"Bearer {self.identity.token()}"
+
+            self._client = httpx.AsyncClient(
+                timeout=TOOL_TIMEOUT_S, event_hooks={"request": [attach_token]}
+            )
         return self._client
 
     async def close(self) -> None:

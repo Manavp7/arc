@@ -49,6 +49,9 @@ log = get_logger("sio.authn")
 #: Everything else requires a principal, because every additional exclusion is a hole that will be found.
 PUBLIC_PATHS: tuple[str, ...] = (
     "/health",
+    # The API exposes an alias under its own prefix. Same justification as `/health`: liveness cannot
+    # require a credential from the thing whose job is to check whether the credential issuer is alive.
+    "/api/health",
     "/metrics",
     "/auth/dev/token",
     "/docs",
@@ -387,6 +390,65 @@ class KeycloakOidcAuth:
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+
+
+class ServiceIdentity:
+    """A service's own principal, for work no user initiated.
+
+    Most requests in this platform carry a user's token and should keep carrying it: the downstream service
+    then audits the real principal and scopes to the real tenant, which is why the API forwards the caller's
+    Authorization header rather than substituting its own.
+
+    But some work has no user behind it — an agent observing the site on a timer, the copilot warming its
+    model, a workflow dispatching a step. That work still has to authenticate, and the alternative to a
+    service identity is an exemption, which is a hole that grows.
+
+    Three properties worth stating:
+
+    **Short-lived and refreshed.** Ten minutes, renewed on demand. A long-lived service token is a
+    credential sitting in memory for the life of the process with no way to revoke it.
+
+    **The `service` role, not `admin`.** It is tempting to give internal calls admin and stop thinking, and
+    it is exactly how "internal" becomes a synonym for "unaudited". A service gets the actions its job needs
+    and the audit trail names it — `agents`, `copilot` — rather than a person.
+
+    **Its own subject.** `service:agents` is distinguishable from a user in every audit row, so "who did
+    this" has a truthful answer even when the answer is "nothing did, it was a timer".
+    """
+
+    #: Deliberately shorter than a user session. A service can always mint another.
+    TTL_S = 600
+
+    def __init__(self, service: str, settings: Settings | None = None) -> None:
+        self.service = service
+        self.settings = settings or get_settings()
+        self._issuer = DevJwtAuth(self.settings)
+        self._token = ""
+        self._expires_at = 0.0
+
+    @property
+    def roles(self) -> tuple[str, ...]:
+        return ("service",)
+
+    def token(self) -> str:
+        """The current token, minted or renewed as needed."""
+        # Renewed a minute early, so a request never starts with a token that expires mid-flight.
+        if self._token and time.time() < self._expires_at - 60:
+            return self._token
+        self._token = self._issuer.issue(
+            subject=f"service:{self.service}",
+            tenant_id=self.settings.tenant_id,
+            roles=self.roles,
+            clearance=2,
+            pii_scope=False,
+            ttl_s=self.TTL_S,
+        )
+        self._expires_at = time.time() + self.TTL_S
+        log.info("authn.service_token_minted", service=self.service, ttl_s=self.TTL_S)
+        return self._token
+
+    def headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.token()}"}
 
 
 def build_authenticator(settings: Settings | None = None) -> Authenticator:

@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from sio_core import (
     MessageContext,
     PgPool,
+    ServiceIdentity,
     SioService,
     get_embedder,
     get_pg_pool,
@@ -34,7 +35,16 @@ class AgentsService(SioService):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.pool: PgPool = get_pg_pool(self.settings)
-        self.client = httpx.AsyncClient(timeout=10.0)
+        self.identity = ServiceIdentity("agents", self.settings)
+
+        # Authenticated with the agents service's own identity, attached per request because the token is
+        # short-lived. An agent observes on a timer with no user behind it, so it needs a principal of its
+        # own — and it appears in the audit trail as `service:agents`, which is the truthful answer to "who
+        # did this" when the answer is "a timer did".
+        async def attach_token(request: httpx.Request) -> None:
+            request.headers["Authorization"] = f"Bearer {self.identity.token()}"
+
+        self.client = httpx.AsyncClient(timeout=10.0, event_hooks={"request": [attach_token]})
         self.memory = AgentMemory(
             get_vectors(self.settings),
             get_embedder(self.settings),
