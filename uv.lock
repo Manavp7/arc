@@ -23,6 +23,7 @@ members = [
     "sio-perception",
     "sio-prediction",
     "sio-schemas",
+    "sio-simulation",
     "sio-spatial",
     "sio-tracking",
     "sio-workflow",
@@ -3364,6 +3365,7 @@ dependencies = [
     { name = "sio-perception" },
     { name = "sio-prediction" },
     { name = "sio-schemas" },
+    { name = "sio-simulation" },
     { name = "sio-spatial" },
     { name = "sio-tracking" },
     { name = "sio-workflow" },
@@ -3396,6 +3398,7 @@ requires-dist = [
     { name = "sio-perception", editable = "services/perception" },
     { name = "sio-prediction", editable = "services/prediction" },
     { name = "sio-schemas", editable = "libs/sio_schemas" },
+    { name = "sio-simulation", editable = "services/simulation" },
     { name = "sio-spatial", editable = "services/spatial" },
     { name = "sio-tracking", editable = "services/tracking" },
     { name = "sio-workflow", editable = "services/workflow" },
@@ -3747,6 +3750,23 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "pydantic", specifier = ">=2.11" }]
+
+[[package]]
+name = "sio-simulation"
+version = "0.1.0"
+source = { editable = "services/simulation" }
+dependencies = [
+    { name = "httpx" },
+    { name = "sio-core" },
+    { name = "sio-schemas" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "sio-core", editable = "libs/sio_core" },
+    { name = "sio-schemas", editable = "libs/sio_schemas" },
+]
 
 [[package]]
 name = "sio-spatial"

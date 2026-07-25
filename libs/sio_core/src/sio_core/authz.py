@@ -140,6 +140,16 @@ POLICY: tuple[Rule, ...] = (
         roles=("operator", "commander", "admin", "ml_engineer"),
         description="Injecting a simulated incident affects no physical thing",
     ),
+    Rule(
+        # Running a WHAT-IF is deliberately broader than INJECTING one, and the two are separate actions
+        # because they do genuinely different things. A projection reads a frozen copy of the world and does
+        # arithmetic — it is the safest operation in the platform, and gating it behind a role nobody has
+        # would mean nobody ever asks "what if". An injection changes the simulated site, so it stays
+        # narrower.
+        "simulation.write",
+        roles=("viewer", "operator", "commander", "admin", "ml_engineer", "integrator", "service"),
+        description="Running a what-if projection; it reads a frozen copy of the world and changes nothing",
+    ),
     # --- personal data -----------------------------------------------------------------------
     Rule(
         "pii.view",

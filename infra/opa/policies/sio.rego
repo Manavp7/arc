@@ -4,7 +4,7 @@
 #
 # Hand-editing this file would recreate the exact problem it exists to prevent: two
 # implementations of one policy, drifting, until dev allows what production denies.
-# Generated 2026-07-25 from 26 rules.
+# Generated 2026-07-25 from 27 rules.
 
 package sio.authz
 
@@ -37,6 +37,7 @@ known_action if input.action == "decision.approve"
 known_action if input.action == "decision.reject"
 known_action if input.action == "workflow.execute"
 known_action if input.action == "simulation.inject"
+known_action if input.action == "simulation.write"
 known_action if input.action == "pii.view"
 known_action if input.action == "media.raw"
 known_action if input.action == "media.read"
@@ -148,6 +149,22 @@ allow if {
 	tenant_matches
 }
 
+# Running a what-if projection; it reads a frozen copy of the world and changes nothing
+allow if {
+	authenticated
+	input.action == "simulation.write"
+	not startswith(input.action, "admin.")
+	input.action != "policy.write"
+	input.action != "tenant.create"
+	input.action != "decision.approve"
+	input.action != "decision.reject"
+	input.action != "workflow.execute"
+	input.action != "simulation.inject"
+	some role in ["viewer", "operator", "commander", "admin", "ml_engineer", "integrator", "service"]
+	role in input.principal.roles
+	tenant_matches
+}
+
 # Unredacted personal data needs both the role and the explicit scope
 allow if {
 	authenticated
@@ -159,6 +176,7 @@ allow if {
 	input.action != "decision.reject"
 	input.action != "workflow.execute"
 	input.action != "simulation.inject"
+	input.action != "simulation.write"
 	some role in ["commander", "admin"]
 	role in input.principal.roles
 	input.principal.clearance >= 2
@@ -177,6 +195,7 @@ allow if {
 	input.action != "decision.reject"
 	input.action != "workflow.execute"
 	input.action != "simulation.inject"
+	input.action != "simulation.write"
 	input.action != "pii.view"
 	some role in ["commander", "admin"]
 	role in input.principal.roles
@@ -195,6 +214,7 @@ allow if {
 	input.action != "decision.reject"
 	input.action != "workflow.execute"
 	input.action != "simulation.inject"
+	input.action != "simulation.write"
 	input.action != "pii.view"
 	input.action != "media.raw"
 	zone_permitted
@@ -212,6 +232,7 @@ allow if {
 	input.action != "decision.reject"
 	input.action != "workflow.execute"
 	input.action != "simulation.inject"
+	input.action != "simulation.write"
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
@@ -231,6 +252,7 @@ allow if {
 	input.action != "decision.reject"
 	input.action != "workflow.execute"
 	input.action != "simulation.inject"
+	input.action != "simulation.write"
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
@@ -251,6 +273,7 @@ allow if {
 	input.action != "decision.reject"
 	input.action != "workflow.execute"
 	input.action != "simulation.inject"
+	input.action != "simulation.write"
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
@@ -272,6 +295,7 @@ allow if {
 	input.action != "decision.reject"
 	input.action != "workflow.execute"
 	input.action != "simulation.inject"
+	input.action != "simulation.write"
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
@@ -294,6 +318,7 @@ allow if {
 	input.action != "decision.reject"
 	input.action != "workflow.execute"
 	input.action != "simulation.inject"
+	input.action != "simulation.write"
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
@@ -317,6 +342,7 @@ allow if {
 	input.action != "decision.reject"
 	input.action != "workflow.execute"
 	input.action != "simulation.inject"
+	input.action != "simulation.write"
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
@@ -341,6 +367,7 @@ allow if {
 	input.action != "decision.reject"
 	input.action != "workflow.execute"
 	input.action != "simulation.inject"
+	input.action != "simulation.write"
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
@@ -366,6 +393,7 @@ allow if {
 	input.action != "decision.reject"
 	input.action != "workflow.execute"
 	input.action != "simulation.inject"
+	input.action != "simulation.write"
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
@@ -390,6 +418,7 @@ allow if {
 	input.action != "decision.reject"
 	input.action != "workflow.execute"
 	input.action != "simulation.inject"
+	input.action != "simulation.write"
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
@@ -416,6 +445,7 @@ allow if {
 	input.action != "decision.reject"
 	input.action != "workflow.execute"
 	input.action != "simulation.inject"
+	input.action != "simulation.write"
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
@@ -443,6 +473,7 @@ allow if {
 	input.action != "decision.reject"
 	input.action != "workflow.execute"
 	input.action != "simulation.inject"
+	input.action != "simulation.write"
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
@@ -471,6 +502,7 @@ allow if {
 	input.action != "decision.reject"
 	input.action != "workflow.execute"
 	input.action != "simulation.inject"
+	input.action != "simulation.write"
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
@@ -501,6 +533,7 @@ allow if {
 	input.action != "decision.reject"
 	input.action != "workflow.execute"
 	input.action != "simulation.inject"
+	input.action != "simulation.write"
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
@@ -532,6 +565,7 @@ allow if {
 	input.action != "decision.reject"
 	input.action != "workflow.execute"
 	input.action != "simulation.inject"
+	input.action != "simulation.write"
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
@@ -564,6 +598,7 @@ allow if {
 	input.action != "decision.reject"
 	input.action != "workflow.execute"
 	input.action != "simulation.inject"
+	input.action != "simulation.write"
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
@@ -597,6 +632,7 @@ allow if {
 	input.action != "decision.reject"
 	input.action != "workflow.execute"
 	input.action != "simulation.inject"
+	input.action != "simulation.write"
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"

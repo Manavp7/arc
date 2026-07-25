@@ -28,6 +28,7 @@ dependencies = [
     "sio-agents",
     "sio-alerts",
     "sio-governance",
+    "sio-simulation",
 ]
 
 [tool.uv]
@@ -55,6 +56,7 @@ sio-decision = { workspace = true }
 sio-agents = { workspace = true }
 sio-alerts = { workspace = true }
 sio-governance = { workspace = true }
+sio-simulation = { workspace = true }
 
 [dependency-groups]
 dev = [

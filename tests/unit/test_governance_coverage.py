@@ -44,6 +44,7 @@ SERVICES: tuple[tuple[str, str], ...] = (
     ("tracking", "sio_tracking.service:TrackingService"),
     ("fusion", "sio_fusion.service:FusionService"),
     ("ingest", "sio_ingest.service:IngestService"),
+    ("simulation", "sio_simulation.service:SimulationService"),
 )
 
 
