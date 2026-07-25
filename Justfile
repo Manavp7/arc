@@ -50,12 +50,15 @@ doctor *args:
 services *args:
     bash scripts/services.sh start {{args}}
 
+# Stop the datastores, keeping their data.
 services-stop *args:
     bash scripts/services.sh stop {{args}}
 
+# What is running, on which port, and whether it answers.
 services-status:
     bash scripts/services.sh status
 
+# Restart the datastores, keeping their data.
 services-restart *args:
     bash scripts/services.sh restart {{args}}
 
@@ -126,9 +129,11 @@ dev-core *args:
 stop:
     {{uv}} python scripts/supervisor.py --stop
 
+# Run the API gateway alone (the rest of the stack must already be up).
 api:
     {{uv}} python -m sio_api
 
+# Run the web console's dev server alone.
 web:
     cd web && npm run dev
 
@@ -140,6 +145,7 @@ seed *args:
 demo *args:
     {{uv}} python scripts/demo.py {{args}}
 
+# Wipe the demo's state and start the scenario again from zero.
 demo-reset:
     {{uv}} python scripts/demo.py --reset
 
@@ -156,14 +162,17 @@ e2e:
     @echo "running the end-to-end rings against the live platform..."
     SIO_TEST_INFRA=1 {{uv}} pytest tests/e2e tests/integration -v
 
+# Lint and check formatting without changing anything.
 lint:
     {{uv}} ruff check .
     {{uv}} ruff format --check .
 
+# Format every Python and web source in place.
 fmt:
     {{uv}} ruff check --fix .
     {{uv}} ruff format .
 
+# Run mypy over the libraries and services.
 typecheck:
     {{uv}} mypy libs/sio_schemas/src libs/sio_core/src
 
@@ -179,12 +188,17 @@ test-infra *args:
 test-e2e *args:
     SIO_TEST_INFRA=1 {{uv}} pytest tests/e2e -m e2e {{args}}
 
+# Every ring: unit, integration and e2e. Needs infrastructure.
 test-all: check
     SIO_TEST_INFRA=1 {{uv}} pytest tests
 
 # Quality harnesses: detection mAP, tracking HOTA, copilot Q&A, event precision/recall.
 eval *args:
     {{uv}} pytest tests/eval -m eval {{args}}
+
+# Regenerate docs/RECIPES.md from this file. A test fails if it is stale.
+recipes:
+    {{uv}} python scripts/gen_recipes.py
 
 # End-to-end performance benchmark: 10 -> 50 events/s, latency percentiles, time-to-first-insight.
 # Needs a running platform.
@@ -199,6 +213,7 @@ eval-tools *args:
 schemas:
     {{uv}} python -m sio_schemas.export --out docs/schemas
 
+# Typecheck and build the web console.
 web-check:
     #!/usr/bin/env bash
     set -euo pipefail

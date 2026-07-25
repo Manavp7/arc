@@ -145,6 +145,72 @@ Drag the scrubber at the bottom backwards.
 
 ---
 
+## The next five, if they are still asking
+
+Everything above is the core loop. These four are what to reach for when somebody wants to know what else is
+there — one each, not all four, and let them pick.
+
+### Mission control (the **missions** tab)
+
+Create a mission, give it an objective with a zone, commit a resource to it.
+
+> A mission is the one object here that a *person* owns. Everything else is machine-first — events are
+> detected, alerts ranked, decisions recommended. This is a human declaring an intent.
+
+Then wait. The objective ticks itself.
+
+> That is the part worth watching. An objective with a zone completes when an **assigned** resource is
+> observed there — the platform already knows whether the drone arrived, so asking a commander to tell it
+> what it can see is both insulting and unreliable. A forklift wandering through does not count; only what
+> you committed.
+
+If they ask about governance, try to commit the same drone to a second mission. It is refused, by a database
+constraint rather than a service check — "dispatching the same drone to two fires is the failure that slips
+through a read-then-write under concurrency".
+
+### Analytics (the **analytics** tab)
+
+> The dwell distribution is the one to look at. It reports a *shape*, not just a mean: "long right tail, p95
+> is 24x the median, so the mean of 2.4 describes almost nobody". A single average across a bimodal
+> distribution is a number that is true and useless.
+
+### The 3D twin (the **twin** tab)
+
+Toggle **camera coverage**.
+
+> A 3D view of a flat yard is mostly a worse 2D map. The one thing it genuinely adds is this: a camera's
+> field of view is a **volume**, and the map can only draw its shadow. Two cameras that overlap at head
+> height but not at ground level look identical on the map and obviously different here.
+
+Say the caveat before they spot it: the mast height is an assumption, and the caption on screen says so.
+
+Worth mentioning if the audience is technical: the tab is lazy-loaded. Cesium is 4.5 MB and arrives when you
+open it, so the operators who never do pay nothing.
+
+### The no-code builder (the **builder** tab)
+
+Type a workflow with a deliberate mistake in it — an activity that does not exist.
+
+> It refuses, and it names the eight that do. Every problem at once, with the fix — not the first one, then
+> the next one, then the next. The workflow it writes is executed by the *same* engine as the Python
+> playbooks, with the same retries, compensation and cooldowns.
+
+---
+
+## Authentication, if they ask "is any of this secured?"
+
+Do not skip past this; it is a short and good answer.
+
+> Every request carries a signed token, every route maps to a policy action, and every denial is written to
+> an append-only audit table that Postgres itself refuses to let anyone update. The demo runs with a local
+> issuer so there is no login screen in the way — Keycloak and OPA drop in behind the same interfaces, and
+> the wiring is documented.
+
+If they push: `curl` any endpoint without a token in front of them. The refusal names the action and the
+role required, rather than saying 403.
+
+---
+
 ## What to say if it is slow
 
 Be straightforward about it. The honest version lands better than an apology.
@@ -195,8 +261,9 @@ to expire (15 min of simulated time) or just run the reset again.
 
 Say these before you are asked. They are all deliberate.
 
-- **The yard is simulated.** Real camera and GPS connectors exist behind the same ports, but the demo drives
-  a physics simulation so the incident is reproducible.
+- **The yard is simulated.** Real connectors ship — RTSP cameras, MQTT sensors, MAVLink drones, Sentinel-2
+  imagery, a SQL query against a WMS — and each is behind the same port as the simulator. The demo drives a
+  physics simulation so the incident is reproducible on demand, which a real camera cannot be.
 - **Playbook steps are dry-run by default.** They record what they *would* have done. A workflow engine that
   can only be exercised by actually closing a gate is one nobody exercises.
 - **Fire detection is a colour-and-motion heuristic**, not a trained model. It runs on the real rendered
@@ -207,3 +274,13 @@ Say these before you are asked. They are all deliberate.
 - **Keycloak and OPA are optional.** The dev default is a signed local JWT and a permissive policy, both
   tested. Production wiring is documented, not demonstrated.
 - **Single tenant in the demo.** Every table and query is tenant-scoped; the demo runs one.
+- **The 3D twin's mast height is a guess.** The source table records a camera's position and its ground
+  coverage, not how high it is mounted, so the frustum apex assumes 8 m. The caption on screen says so —
+  somebody judging whether a camera clears a container stack needs to know which part is data.
+- **The GPU profile boots but four of its adapters are stubs.** `SIO_PROFILE=gpu` flips every seam and the
+  test suite passes under it; Kafka, Qdrant, DeepStream and TimesFM construct and then refuse, each naming
+  what blocks it. Writing them untested would produce code that looks finished and has never run. The two
+  that are real — an OpenAI-compatible LLM client and Memgraph — are tested.
+- **Detection mAP on the demo fixture is 0.23**, and that number measures how well the model detects *sprite
+  renderings*, not trucks. It is a regression detector for the pipeline, not a claim about accuracy. `just
+  eval` prints it alongside HOTA, copilot accuracy and event precision/recall, each with a floor.
