@@ -262,7 +262,15 @@ class Settings(BaseSettings):
 
     # --- llm / copilot ------------------------------------------------------
     ollama_url: str = "http://127.0.0.1:11434"
-    llm_model: str = "qwen3:1.7b"
+    llm_model: str = "granite4:3b"
+    """Pinned by measurement, not by reputation — see `docs/MODELS.md`.
+
+    On this repository's own 25-question fixture over its nine tools: 91 % tool selection, 85 % argument
+    accuracy, 100 % restraint, p95 7.5 s. It was not the model published benchmarks pointed at, which is
+    the argument for running the eval: a general benchmark measures a general task.
+
+    An EXACT tag, never `:latest`. A floating tag means the model can change under a deployment without
+    anything in the repository changing, and the first symptom is a copilot quietly choosing wrong."""
     llm_temperature: float = 0.1
     llm_timeout_s: float = 60.0
     llm_max_tool_steps: int = 6

@@ -168,6 +168,32 @@ def get_embedder(settings: Settings | None = None) -> Any:
     return _cached(f"embedder:{backend}", factory)
 
 
+def get_llm(settings: Settings | None = None) -> Any:
+    """The configured language model.
+
+    Falls back to `ScriptedLLM` rather than raising when the provider is unavailable, and says so. A
+    copilot that refuses to start because Ollama is not running is a copilot nobody demos; one that
+    answers the eval set from a script and declares itself degraded is still useful, and honest about it.
+    """
+    settings = settings or get_settings()
+    provider = settings.llm_provider
+    if provider == "scripted":
+        from .llm.scripted import ScriptedLLM
+
+        log.info("registry.llm", backend="scripted")
+        return ScriptedLLM()
+
+    from .llm.ollama import OllamaLLM
+
+    log.info("registry.llm", backend=provider, model=settings.llm_model, url=settings.ollama_url)
+    return OllamaLLM(
+        url=settings.ollama_url,
+        model=settings.llm_model,
+        temperature=settings.llm_temperature,
+        timeout_s=settings.llm_timeout_s,
+    )
+
+
 def get_blob(settings: Settings | None = None) -> BlobStore:
     cfg = settings or get_settings()
     backend = cfg.blob_backend

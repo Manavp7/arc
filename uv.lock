@@ -10,6 +10,7 @@ resolution-markers = [
 members = [
     "sio",
     "sio-api",
+    "sio-copilot",
     "sio-core",
     "sio-events",
     "sio-fusion",
@@ -2942,6 +2943,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "sio-api" },
+    { name = "sio-copilot" },
     { name = "sio-core" },
     { name = "sio-events" },
     { name = "sio-fusion" },
@@ -2967,6 +2969,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "sio-api", editable = "services/api" },
+    { name = "sio-copilot", editable = "services/copilot" },
     { name = "sio-core", editable = "libs/sio_core" },
     { name = "sio-events", editable = "services/events" },
     { name = "sio-fusion", editable = "services/fusion" },
@@ -3004,6 +3007,23 @@ requires-dist = [
     { name = "sio-core", editable = "libs/sio_core" },
     { name = "sio-schemas", editable = "libs/sio_schemas" },
     { name = "strawberry-graphql", extras = ["fastapi"], specifier = ">=0.250" },
+]
+
+[[package]]
+name = "sio-copilot"
+version = "0.1.0"
+source = { editable = "services/copilot" }
+dependencies = [
+    { name = "httpx" },
+    { name = "sio-core" },
+    { name = "sio-schemas" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "sio-core", editable = "libs/sio_core" },
+    { name = "sio-schemas", editable = "libs/sio_schemas" },
 ]
 
 [[package]]
