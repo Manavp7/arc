@@ -44,10 +44,40 @@ class Route:
     An answer that ignores the tool output would let a broken tool pass the eval, which is exactly
     backwards: the fixture exists to test everything *except* token generation.
     """
+    arguments_from: Callable[[str], dict[str, Any]] | None = None
+    """Derive tool arguments from the question, merged over the static ones.
+
+    Added in Phase 8 because the eval harness found the scripted router answering the wrong question fluently:
+    "How many trucks are on site?" matched the `list entities` route, whose arguments were a static `{}`, so it
+    listed EVERYTHING. Tool selection scored 95%; argument accuracy scored 71%, and the gap was entirely this.
+
+    That matters beyond the fixture. `ScriptedLLM` is what the copilot falls back to when the model is
+    unreachable, and `copilot_allow_degraded` makes those answers user-visible — so a degraded copilot was
+    answering "how many trucks" with the total count of everything on site. A wrong answer delivered
+    confidently is the failure this platform spends most of its effort avoiding.
+    """
 
     def matches(self, question: str) -> bool:
         lowered = question.lower()
         return any(re.search(pattern, lowered) for pattern in self.patterns)
+
+    def calls_for(self, question: str) -> list[ToolCall]:
+        """The tool calls for this question, with derived arguments merged over the static ones.
+
+        Derived arguments WIN over static ones, because the static values are defaults for the general case and
+        the derived ones are what this particular question asked for. A new ToolCall is built rather than
+        mutating the route's own: routes are shared across every question, and mutating one would make the
+        second question inherit the first's arguments.
+        """
+        if self.arguments_from is None:
+            return list(self.tool_calls)
+        derived = self.arguments_from(question)
+        if not derived:
+            return list(self.tool_calls)
+        return [
+            ToolCall(name=call.name, arguments={**call.arguments, **derived})
+            for call in self.tool_calls
+        ]
 
 
 class ScriptedLLM:
@@ -105,7 +135,11 @@ class ScriptedLLM:
             )
 
         offered = {tool.name for tool in tools or []}
-        callable_now = [call for call in route.tool_calls if not offered or call.name in offered]
+        # `calls_for`, not `route.tool_calls`: this is where a route's derived arguments are applied, and using
+        # the raw list here would silently ignore every `arguments_from`.
+        callable_now = [
+            call for call in route.calls_for(question) if not offered or call.name in offered
+        ]
         if not callable_now:
             return LlmReply(
                 text=route.answer,

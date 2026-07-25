@@ -16,6 +16,7 @@ tool for "hello" is a model that will call tools for everything.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -227,6 +228,80 @@ EVAL_CASES: tuple[EvalCase, ...] = (
 )
 
 
+#: Words that name an entity type, and the type they name.
+#:
+#: Plurals and the obvious synonyms, because "how many lorries" and "where are the staff" are the same question
+#: as "trucks" and "people". Ordered longest-first at match time so "forklift" is not swallowed by a substring.
+_TYPE_WORDS: dict[str, str] = {
+    "truck": "truck",
+    "trucks": "truck",
+    "lorry": "truck",
+    "lorries": "truck",
+    "hgv": "truck",
+    "person": "person",
+    "people": "person",
+    "worker": "person",
+    "workers": "person",
+    "staff": "person",
+    "pedestrian": "person",
+    "pedestrians": "person",
+    "forklift": "forklift",
+    "forklifts": "forklift",
+    "drone": "drone",
+    "drones": "drone",
+    "vehicle": "vehicle",
+    "vehicles": "vehicle",
+}
+
+
+def _entity_filter(question: str) -> dict[str, Any]:
+    """Pull an entity type, and a zone, out of the question.
+
+    Word-boundary matching rather than `in`, because "person" is a substring of "personnel" and — more
+    awkwardly — "van" is a substring of "advance". A substring match here produces a filter nobody asked for,
+    which is worse than no filter at all: the answer is confidently about the wrong subset.
+    """
+    lowered = question.lower()
+    found: dict[str, Any] = {}
+    for word, entity_type in _TYPE_WORDS.items():
+        if re.search(rf"\b{re.escape(word)}\b", lowered):
+            found["entity_type"] = entity_type
+            break
+    zone = re.search(
+        r"\b(dock[_ ]?\d+|gate[_ ][ab]|fuel[_ ]store|lane[_ ](?:north|south)|yard)\b", lowered
+    )
+    if zone:
+        # Normalised to the id form the world model uses. "dock 3" and "dock_3" are the same place, and a
+        # filter carrying the prose form silently matches nothing.
+        found["zone_id"] = zone.group(1).replace(" ", "_")
+    return found
+
+
+def _search_query(question: str) -> dict[str, Any]:
+    """Use the question as the semantic query, minus the words that are asking rather than describing.
+
+    "Show me footage of a truck at a loading dock" should search for "truck at a loading dock", not for the
+    whole sentence — the leading request words are noise in an embedding space, and they are the same noise in
+    every question, so they pull every query toward the same point.
+    """
+    lowered = question.lower().strip().rstrip("?.")
+    for prefix in (
+        "show me footage of",
+        "show me the footage of",
+        "show me footage",
+        "show me",
+        "find footage of",
+        "find me",
+        "what did",
+        "search for",
+    ):
+        if lowered.startswith(prefix):
+            remainder = lowered[len(prefix) :].strip()
+            if remainder:
+                return {"query": remainder}
+    return {}
+
+
 def scripted_routes() -> list[Route]:
     """Recorded decisions covering **every** eval case, so CI never needs a model.
 
@@ -322,6 +397,10 @@ def scripted_routes() -> list[Route]:
             intent="frame search",
             patterns=(r"show me", r"footage", r"smoke", r"fire", r"looked like", r"picture"),
             tool_calls=[ToolCall(name="semantic_search", arguments={"query": "smoke"})],
+            # The question itself, not a hard-coded "smoke". The eval caught this: "Show me footage of a truck
+            # at a loading dock" searched for smoke and returned fire frames — the right tool answering a
+            # completely different question, fluently.
+            arguments_from=_search_query,
             answer_from=lambda results: _from_json(
                 results,
                 lambda data: (
@@ -479,6 +558,10 @@ def scripted_routes() -> list[Route]:
             intent="list entities",
             patterns=(r"how many", r"on site", r"where are", r"currently", r"right now", r".*"),
             tool_calls=[ToolCall(name="list_entities", arguments={})],
+            # Static `{}` meant "How many trucks are on site?" listed EVERYTHING. Tool selection scored 95%
+            # while argument accuracy scored 71%, and this route was most of the gap — a wrong answer given
+            # confidently, which is the failure mode this platform spends most of its effort avoiding.
+            arguments_from=_entity_filter,
             answer_from=lambda results: _from_json(
                 results,
                 lambda data: (
