@@ -195,8 +195,11 @@ code {
 }
 
 .tab {
-  /* A basis of 25% gives four per row, so each label has ~89px and none of them truncates. */
-  flex: 1 1 22%;
+  /* A basis of ~30% gives three per row, which divides nine exactly. At 22% (four per row) the ninth tab
+     orphaned itself onto a third row stretched across the whole rail, which reads as a mistake. Three rows of
+     three is deliberate; two rows of four plus one is not. Each label gets ~119px, comfortably more than the
+     47px the longest needs. */
+  flex: 1 1 30%;
   min-width: 0;
   padding: 9px 2px;
   font-size: 10px;
@@ -2553,6 +2556,12 @@ code {
   flex-shrink: 0;
 }
 
+/* Same reason inside any flex row: the default top margin left `Create as draft` sitting 14px below the
+   `cancel` beside it. */
+.builder-row > button.primary {
+  margin-top: 0;
+}
+
 .verdict-ok,
 .verdict-bad {
   padding: 0.5rem 0.6rem;
@@ -2627,6 +2636,21 @@ code {
 
 /* Destructive actions read as destructive. `delete` was the only irreversible control in the panel and was
    pixel-identical to `edit` sitting next to it. */
+/* The ghost equivalent of the primary's disabled rule. That one exists and carries a comment about a user
+   clicking a dead CTA repeatedly; this one was never written, so a disabled `append` computed to opacity 1 and
+   cursor: pointer — pixel-identical to its enabled state. The lesson did not generalise on its own. */
+.form-panel button.ghost:disabled {
+  border-color: var(--border);
+  color: var(--text-dim);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.form-panel button.ghost:disabled:hover {
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+
 .form-panel button.ghost.danger:hover {
   border-color: var(--danger);
   color: var(--danger);
@@ -2815,6 +2839,16 @@ code {
   background: var(--ok);
 }
 
+/* A mission's own name is not a section heading. The shared `.builder-section h3` rule uppercases and dims,
+   which is right for "OBJECTIVES" and wrong for a name somebody typed. */
+.mission-detail h3 {
+  font-size: 0.86rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+}
+
 .mission-detail h4 {
   margin: 0.9rem 0 0.4rem;
   font-size: 0.68rem;
@@ -2825,6 +2859,10 @@ code {
 
 .mission-actions {
   margin: 0.5rem 0;
+}
+
+.mission-detail .status {
+  margin: 0.1rem 0 0.5rem;
 }
 
 .objective-list,
@@ -2884,6 +2922,7 @@ code {
   border-bottom: 1px solid var(--border);
 }
 
+.resource-name,
 .resource-list code {
   font-family: var(--mono);
   font-size: 0.7rem;

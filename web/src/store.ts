@@ -60,6 +60,17 @@ interface SioState {
   setZones: (zones: Zone[]) => void;
   selectEntity: (entityId: string | null) => void;
   setReplayAt: (ts: string | null) => void;
+  /**
+   * A window another panel wants replayed.
+   *
+   * Mission Control declares the intent and `Timeline` executes it, because Timeline already owns replay
+   * playback — the plan, the EventSource, the named-frame listener, the scrubber. Duplicating that in Mission
+   * Control would give the app two replay implementations, and the second one would be the untested one that
+   * also happens to leave the scrubber showing "live" while the map replays.
+   */
+  requestedReplay: { from: string; to: string; label: string } | null;
+  requestReplay: (window: { from: string; to: string; label: string }) => void;
+  clearRequestedReplay: () => void;
   setHistory: (
     ts: string,
     entities: Entity[],
@@ -103,6 +114,7 @@ export const useSioStore = create<SioState>((set) => ({
   historyEvents: [],
   replayMode: "live" as const,
   replayProgress: 0,
+  requestedReplay: null,
   lastMessageAt: null,
 
   setConnection: (status) => set({ connection: status }),
@@ -160,6 +172,11 @@ export const useSioStore = create<SioState>((set) => ({
   setReplayAt: (ts) =>
     set(ts === null ? { replayAt: null, replayMode: "live", replayProgress: 0 } : { replayAt: ts }),
 
+  requestReplay: (window) => set({ requestedReplay: window }),
+  // Cleared by the consumer once it has started, so a request is a one-shot rather than a standing order that
+  // restarts the replay on every re-render.
+  clearRequestedReplay: () => set({ requestedReplay: null }),
+
   setHistory: (ts, entities, mode, options = {}) => {
     // A fresh Map each time rather than mutating: Zustand compares by reference, and mutating in place
     // would leave subscribers looking at a Map they think has not changed.
@@ -183,6 +200,7 @@ export const useSioStore = create<SioState>((set) => ({
       replayAt: null,
       replayMode: "live",
       replayProgress: 0,
+  requestedReplay: null,
       // Drop the reconstruction. Holding it would keep a whole historical world alive for a view
       // nothing is showing.
       historyEntities: new Map(),
@@ -203,6 +221,7 @@ export const useSioStore = create<SioState>((set) => ({
   historyEvents: [],
   replayMode: "live" as const,
   replayProgress: 0,
+  requestedReplay: null,
     }),
 }));
 

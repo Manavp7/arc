@@ -24,9 +24,10 @@
  * would have rendered a bare sentence — a missing CSS rule fails silently. This panel was that next panel.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { api } from "../lib/api";
+import { api, explainError } from "../lib/api";
+import { useSioStore } from "../store";
 
 interface Objective {
   objective_id: string;
@@ -109,10 +110,29 @@ export function MissionControlPanel() {
 
   const [entities, setEntities] = useState<{ id: string; label: string; zone: string | null }[]>([]);
   const [comm, setComm] = useState("");
+  const commsRef = useRef<HTMLUListElement | null>(null);
+  const requestReplay = useSioStore((state) => state.requestReplay);
 
   const say = useCallback((message: string, kind: "ok" | "bad" | "busy" = "ok") => {
     setStatus(message);
     setStatusKind(kind);
+  }, []);
+
+  const loadEntities = useCallback(async () => {
+    try {
+      const rows = await api.entities({ limit: 300, active_within_s: 600 });
+      setEntities(
+        rows
+          .filter((row) => !row.is_static)
+          .map((row) => ({
+            id: row.entity_id,
+            label: row.label || row.entity_id,
+            zone: row.state?.zone_id ?? null,
+          })),
+      );
+    } catch {
+      setEntities([]);
+    }
   }, []);
 
   const refresh = useCallback(async () => {
@@ -152,10 +172,26 @@ export function MissionControlPanel() {
   useEffect(() => {
     const timer = setInterval(() => {
       void refresh();
+      // Entities refresh on the same beat. Fetching them once per selection made the dropdown's `— in
+      // lane_north` a snapshot that could be minutes old, so an operator could commit a resource that had
+      // already left the zone — and the objective would then never complete, with nothing on screen to say
+      // why. That happened in review and cost 75 seconds of apparent breakage.
+      void loadEntities();
       if (selectedId) void loadDetail(selectedId);
     }, REFRESH_MS);
     return () => clearInterval(timer);
-  }, [refresh, loadDetail, selectedId]);
+  }, [refresh, loadDetail, loadEntities, selectedId]);
+
+  useEffect(() => {
+    void loadEntities();
+  }, [loadEntities]);
+
+  // Keep the newest testimony in view. A log pinned to the top hides exactly the entries somebody is waiting
+  // for — the objective that just completed, the message they just sent.
+  useEffect(() => {
+    const node = commsRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [detail?.comms?.length]);
 
   useEffect(() => {
     if (selectedId) void loadDetail(selectedId);
@@ -163,25 +199,18 @@ export function MissionControlPanel() {
 
   // Assignable resources: the moving things on site. Fetched when a mission is selected, because the list is
   // only meaningful next to a mission that could use them.
-  useEffect(() => {
-    if (!detail) return;
-    void (async () => {
-      try {
-        const rows = await api.entities({ limit: 300, active_within_s: 600 });
-        setEntities(
-          rows
-            .filter((row) => !row.is_static)
-            .map((row) => ({
-              id: row.entity_id,
-              label: row.label || row.entity_id,
-              zone: row.state?.zone_id ?? null,
-            })),
-        );
-      } catch {
-        setEntities([]);
-      }
-    })();
-  }, [detail?.mission_id]);
+
+  /**
+   * A readable name for an entity id.
+   *
+   * The operator picks "Truck DLF-267" and the confirmation used to say `sim-vsy1my-truck-0083`. The label was
+   * already in hand — the panel simply was not carrying it through, which made its own messages harder to read
+   * than the dropdown they came from.
+   */
+  const labelFor = useCallback(
+    (entityId: string) => entities.find((entity) => entity.id === entityId)?.label ?? entityId,
+    [entities],
+  );
 
   const objectives = useMemo(
     () =>
@@ -239,7 +268,7 @@ export function MissionControlPanel() {
     if (!detail || !resourceId) return;
     try {
       await api.assignResource(detail.mission_id, resourceId);
-      say(`${resourceId} committed.`);
+      say(`${labelFor(resourceId)} committed.`);
       await loadDetail(detail.mission_id);
     } catch (error) {
       say(describeRefusal(error), "bad");
@@ -250,7 +279,7 @@ export function MissionControlPanel() {
     if (!detail) return;
     try {
       await api.releaseResource(detail.mission_id, resourceId);
-      say(`${resourceId} released.`);
+      say(`${labelFor(resourceId)} released.`);
       await loadDetail(detail.mission_id);
     } catch (error) {
       say(describeRefusal(error), "bad");
@@ -278,21 +307,35 @@ export function MissionControlPanel() {
     }
   }
 
+  /**
+   * Actually replay the mission, rather than reporting that one could be planned.
+   *
+   * The first version POSTed a replay plan and printed "345 frames over 345s at 20x" — and nothing happened on
+   * screen. The map kept streaming live, the timeline still said `live`, and the journey's fourth step was a
+   * sentence. A browser review caught it.
+   *
+   * The fix is to hand the window to the store, where `Timeline` picks it up: that component already owns
+   * playback — the plan, the EventSource, the named-frame listener, the scrubber position. Doing it here would
+   * have given the app a second replay implementation, and the second one would be the one that leaves the
+   * scrubber reading "live" while the map replays.
+   */
   async function replay() {
     if (!detail) return;
-    say("Planning the replay…", "busy");
+    say("Handing the window to the timeline…", "busy");
     try {
       const plan = await api.missionReplay(detail.mission_id);
-      const session = await api.replayFromUrl(plan.replay_url);
+      requestReplay({ from: plan.from, to: plan.to, label: plan.name });
       say(
-        `Replaying ${plan.name}: ${session.frames} frames over ${Math.round(
-          session.window_s,
-        )}s, ${session.wall_duration_s}s of wall time at ${session.speed}x.`,
+        `Replaying ${plan.name} on the map and timeline below — ${
+          plan.live ? "from its start to now" : "start to finish"
+        }. Use the timeline's live button to come back.`,
       );
     } catch (error) {
       say(describeRefusal(error), "bad");
     }
   }
+
+  const terminal = detail ? ["completed", "aborted"].includes(detail.state) : false;
 
   return (
     <div className="panel form-panel mission-control">
@@ -411,6 +454,16 @@ export function MissionControlPanel() {
         <section className="builder-section mission-detail">
           <h3>{detail.name}</h3>
           {detail.description && <p className="muted">{detail.description}</p>}
+          {/* The progress the detail was missing entirely: the only bar was on the list row above. */}
+          <div className="progress-track" aria-label={detail.progress.summary}>
+            <div
+              className={detail.progress.percent === 100 ? "progress-fill full" : "progress-fill"}
+              style={{ width: `${detail.progress.percent}%` }}
+            />
+          </div>
+          <p className="muted">
+            {detail.progress.percent}% · {detail.progress.summary}
+          </p>
 
           <div className="builder-row mission-actions">
             {detail.legal_transitions.map((to) => (
@@ -429,6 +482,10 @@ export function MissionControlPanel() {
               </button>
             )}
           </div>
+          {/* Feedback beside the control that caused it. The status line lives at the foot of the panel, which
+              is ~600px below this row — so an operator could click "completed", be refused, and see no
+              reaction at all. */}
+          {status && <p className={`status status-${statusKind}`}>{status}</p>}
 
           {/* Completion is blocked, not forbidden. The override is offered where the block is felt, and the
               service records it in the log naming what was outstanding. */}
@@ -445,6 +502,12 @@ export function MissionControlPanel() {
             )}
 
           <h4>Objectives</h4>
+          {terminal && (
+            <p className="muted">
+              This mission is {detail.state}, so its objectives are a record of what happened rather than a list
+              of work.
+            </p>
+          )}
           <ul className="objective-list">
             {detail.objectives.map((objective) => (
               <li key={objective.objective_id} className={objective.done ? "met" : ""}>
@@ -452,6 +515,9 @@ export function MissionControlPanel() {
                   <input
                     type="checkbox"
                     checked={Boolean(objective.done)}
+                    // A finished mission's objectives are a record, not a worklist. The service refuses the
+                    // write; disabling the box means the operator is not invited to try.
+                    disabled={terminal}
                     onChange={(event) => void tick(objective.objective_id, event.target.checked)}
                   />
                   {objective.description}
@@ -476,7 +542,7 @@ export function MissionControlPanel() {
           <ul className="resource-list">
             {detail.resources.map((resource) => (
               <li key={resource}>
-                <code>{resource}</code>
+                <span className="resource-name">{labelFor(resource)}</span>
                 <button className="ghost danger" onClick={() => void release(resource)}>
                   release
                 </button>
@@ -488,6 +554,7 @@ export function MissionControlPanel() {
             Commit a resource
             <select
               value=""
+              disabled={terminal}
               onChange={(event) => {
                 void assign(event.target.value);
                 event.target.value = "";
@@ -496,6 +563,9 @@ export function MissionControlPanel() {
               <option value="">choose…</option>
               {entities
                 .filter((entity) => !detail.resources.includes(entity.id))
+                // Anything in a zone this mission has an objective for comes first. The list is 37 long and
+                // the resource that will actually complete an objective was appearing at position 40.
+                .sort((left, right) => rank(right, detail) - rank(left, detail))
                 .slice(0, 60)
                 .map((entity) => (
                   <option key={entity.id} value={entity.id}>
@@ -516,10 +586,14 @@ export function MissionControlPanel() {
             Append-only. An entry is testimony — somebody said a thing at a time — and testimony that can be
             edited afterwards is worth nothing in a review.
           </p>
-          <ul className="comms-log">
+          <ul className="comms-log" ref={commsRef}>
             {(detail.comms ?? []).map((entry) => (
               <li key={entry.comm_id} className={`comm-${entry.kind}`}>
-                <span className="comm-time">{new Date(entry.ts).toLocaleTimeString()}</span>
+                {/* 24-hour, like the event feed and the timeline. The App shell is deliberately unambiguous
+                    about time and this panel was rendering 12-hour with an AM/PM. */}
+                <span className="comm-time">
+                  {new Date(entry.ts).toLocaleTimeString([], { hour12: false })}
+                </span>
                 <span className="comm-author">{entry.author}</span>
                 <span className="comm-body">{entry.body}</span>
               </li>
@@ -552,25 +626,32 @@ export function MissionControlPanel() {
         </section>
       )}
 
-      {status && <p className={`status status-${statusKind}`}>{status}</p>}
+      {/* Only shown here when no mission is selected — otherwise it renders beside the actions row, next to
+          the control that produced it. */}
+      {status && !detail && <p className={`status status-${statusKind}`}>{status}</p>}
     </div>
   );
 }
 
-/** The service's refusals carry a message, a fix and the legal moves; keep all three. */
-function describeRefusal(error: unknown): string {
-  if (error instanceof Error) {
-    const detail = (error as { detail?: unknown }).detail;
-    if (detail && typeof detail === "object") {
-      const parts = detail as { message?: string; fix?: string; outstanding?: string[] };
-      const outstanding = parts.outstanding?.length ? ` (${parts.outstanding.join(", ")})` : "";
-      return [parts.message, outstanding, parts.fix ? ` — ${parts.fix}` : ""].join("");
-    }
-    return error.message;
-  }
-  return String(error);
-}
+/**
+ * The service's refusals carry a message, a fix and the legal moves; keep all three.
+ *
+ * Delegates to the shared `explainError`, because the first version read `error.detail` — a property `ApiError`
+ * did not have. It compiled, it looked right, and it returned the bare message every time.
+ */
+const describeRefusal = explainError;
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** How relevant an entity is to this mission: in a zone an objective needs, then in the mission's own zone. */
+function rank(entity: { zone: string | null }, mission: Mission): number {
+  if (!entity.zone) return 0;
+  const wanted = new Set(
+    mission.objectives.filter((item) => !item.done).map((item) => item.zone_id ?? ""),
+  );
+  if (wanted.has(entity.zone)) return 2;
+  if (entity.zone === mission.zone_id) return 1;
+  return 0;
 }

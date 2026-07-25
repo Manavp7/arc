@@ -1034,11 +1034,24 @@ class ApiService(SioService):
         app.include_router(GraphQLRouter(schema, path=""), prefix="/graphql", tags=["graphql"])
 
 
-def _detail_of(response: object) -> str | None:
+def _detail_of(response: object) -> str | dict[str, Any] | list[Any] | None:
     """Pull a FastAPI error detail out of a downstream response, if it has one.
 
     Forwarding the downstream *message* matters: "unknown alert alt_123" is actionable and "the alerts
     service returned 404" is not, even though both are technically true.
+
+    **Structured details are forwarded too, and the first version dropped them.** It returned only `str`, so
+    every refusal a service expressed as an object — which is every refusal carrying a `fix`, an `outstanding`
+    list, or the legal state transitions — was discarded and replaced with `"missions returned 409"`. The
+    console then had nothing to show but a status code.
+
+    That was not a missions bug. It silently degraded every structured refusal in the platform: the workflow
+    builder's validation problems, the mission state machine's explanations, the completion blockers. Each
+    service was carefully writing "1 objective(s) are still open … or pass force=true, which records the
+    override" and the gateway was throwing the whole sentence away one hop later.
+
+    Found by a browser review of Mission Control, where a refusal that the service explains in three fields
+    reached the operator as five words and a number.
     """
     try:
         body = response.json()  # type: ignore[attr-defined]
@@ -1046,6 +1059,8 @@ def _detail_of(response: object) -> str | None:
         return None
     if isinstance(body, dict):
         detail = body.get("detail")
-        if isinstance(detail, str):
+        # A string, an object or a list of validation errors — all are things a caller can use, and none of
+        # them is improved by being replaced with the status code.
+        if isinstance(detail, str | dict | list):
             return detail
     return None

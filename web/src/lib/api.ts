@@ -14,15 +14,58 @@ import type {
 
 const BASE = "/api";
 
+/** A structured refusal, as the services express them. */
+export interface RefusalDetail {
+  message?: string;
+  fix?: string;
+  outstanding?: string[];
+  problems?: { where: string; message: string; fix: string | null }[];
+  legal_transitions?: string[];
+  state?: string;
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
     readonly url: string,
+    /**
+     * The server's structured detail, when it sent one.
+     *
+     * The first version typed the body as `{ detail?: string }` and used it only as the Error message, so a
+     * refusal expressed as an OBJECT — which is every refusal carrying a `fix`, an `outstanding` list or the
+     * legal transitions — was flattened to `[object Object]` or lost. Combined with the gateway dropping
+     * structured details entirely, an operator refused by the mission state machine saw `missions returned
+     * 409` and nothing else, while the service had carefully written three fields explaining what to do.
+     */
+    readonly detail?: RefusalDetail | string,
   ) {
     super(message);
     this.name = "ApiError";
   }
+}
+
+/**
+ * Turn a caught error into the most useful sentence available.
+ *
+ * Shared rather than reimplemented per panel, because the parts worth keeping — the message, the fix, and what
+ * is outstanding — are the parts each panel would otherwise drop on its own.
+ */
+export function explainError(error: unknown): string {
+  if (!(error instanceof ApiError)) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  const detail = error.detail;
+  if (!detail || typeof detail === "string") return error.message;
+  const outstanding = detail.outstanding?.length ? ` (${detail.outstanding.join(", ")})` : "";
+  const problems = detail.problems?.length
+    ? ` ${detail.problems.map((problem) => `${problem.where}: ${problem.message}`).join("; ")}`
+    : "";
+  const legal = detail.legal_transitions?.length
+    ? ` Legal from here: ${detail.legal_transitions.join(", ")}.`
+    : "";
+  const head = detail.message ?? error.message;
+  return `${head}${outstanding}${problems}${detail.fix ? ` — ${detail.fix}` : ""}${legal}`;
 }
 
 async function request<T>(path: string, init?: RequestInit, retrying = false): Promise<T> {
@@ -47,14 +90,23 @@ async function request<T>(path: string, init?: RequestInit, retrying = false): P
   if (!response.ok) {
     // Surface the server's message: the API returns a reason for every denial, and hiding it
     // behind a generic "request failed" is how governance decisions become unexplainable.
-    let detail = response.statusText;
+    let message = response.statusText;
+    let structured: RefusalDetail | string | undefined;
     try {
-      const body = (await response.json()) as { detail?: string };
-      if (body.detail) detail = body.detail;
+      const body = (await response.json()) as { detail?: RefusalDetail | string };
+      if (typeof body.detail === "string") {
+        message = body.detail;
+        structured = body.detail;
+      } else if (body.detail && typeof body.detail === "object") {
+        // Keep the object AND derive a readable message from it, so a caller that only looks at
+        // `error.message` still gets a sentence rather than `[object Object]`.
+        structured = body.detail;
+        message = body.detail.message ?? message;
+      }
     } catch {
       /* body was not json */
     }
-    throw new ApiError(detail, response.status, url);
+    throw new ApiError(message, response.status, url, structured);
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
@@ -317,19 +369,6 @@ export const api = {
   missionReplay: (missionId: string) =>
     request<{ name: string; from: string; to: string; live: boolean; replay_url: string }>(
       `/missions/${encodeURIComponent(missionId)}/replay`,
-    ),
-
-  /**
-   * Plan a replay from a URL the server built.
-   *
-   * Taking the server's URL rather than reassembling it from `from`/`to`, because a `+` in an ISO timestamp
-   * decodes as a SPACE in a query string — which is exactly the bug the missions service had until its window
-   * started returning `Z`. Reconstructing it here would reintroduce it on the client.
-   */
-  replayFromUrl: (replayUrl: string) =>
-    request<{ replay_id: string; frames: number; window_s: number; wall_duration_s: number; speed: number }>(
-      replayUrl.replace(/^\/api/, ""),
-      { method: "POST" },
     ),
 
   /**

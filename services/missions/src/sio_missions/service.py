@@ -293,6 +293,20 @@ class MissionsService(SioService):
         state = MissionState(str(row["state"]))
         occupancy = await self._occupancy() if state == MissionState.ACTIVE else {}
         objectives, progress = evaluate(objectives, occupancy=occupancy, resources=resources)
+        described = progress.describe()
+        if state in TERMINAL and progress.outstanding:
+            # A finished mission is not "waiting on" anything — it stopped. Saying otherwise is a contradiction
+            # on the face of the record, and the browser review flagged a completed mission reading "33% ·
+            # waiting on Get eyes on the fuel store". What is true is that it ended with objectives unmet, and
+            # for an aborted or force-completed mission that is the most important fact about it.
+            verb = (
+                "unmet at completion" if state == MissionState.COMPLETED else "unmet when aborted"
+            )
+            described["summary"] = (
+                f"{progress.done} of {progress.total} met; "
+                f"{len(progress.outstanding)} {verb}: {', '.join(progress.outstanding)}"
+            )
+            described["ended_incomplete"] = True
 
         rendered: dict[str, Any] = {
             "mission_id": row["mission_id"],
@@ -304,7 +318,7 @@ class MissionsService(SioService):
             "assignees": list(row.get("assignees") or ()),
             "resources": list(resources),
             "objectives": objectives,
-            "progress": progress.describe(),
+            "progress": described,
             "created_ts": row.get("created_ts"),
             "updated_ts": row.get("updated_ts"),
             "started_ts": row.get("started_ts"),
@@ -662,6 +676,15 @@ class MissionsService(SioService):
         @app.post("/missions/{mission_id}/objectives", tags=["missions"])
         async def add_objective(mission_id: str, request: ObjectiveRequest) -> dict[str, Any]:
             row = await self._load(mission_id)
+            if MissionState(str(row["state"])) in TERMINAL:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": f"this mission is {row['state']}; adding an objective to it would change "
+                        f"a record of what happened",
+                        "fix": "open a new mission",
+                    },
+                )
             stored = dict(row.get("payload") or {})
             objectives = list(stored.get("objectives") or [])
             objective = MissionObjective(
@@ -701,6 +724,22 @@ class MissionsService(SioService):
             objectives it can and cannot check is more useful than pretending uniformity.
             """
             row = await self._load(mission_id)
+            state = MissionState(str(row["state"]))
+            if state in TERMINAL:
+                # "Final" and "editable" cannot both be true. A browser review toggled an objective on a
+                # completed mission three times and every write was accepted, swinging a finished record
+                # between 50% and 100% — so the mission's own history depended on who clicked last. The
+                # transition endpoint already refuses to leave a terminal state; this is the same rule applied
+                # to the mission's contents.
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": f"this mission is {state}, so its objectives are a record rather than a "
+                        f"list of work",
+                        "fix": "open a new mission if there is more to do",
+                        "state": str(state),
+                    },
+                )
             stored = dict(row.get("payload") or {})
             objectives = list(stored.get("objectives") or [])
             found = next(
@@ -741,6 +780,9 @@ class MissionsService(SioService):
             a thing at a time — and testimony that can be edited afterwards is worth nothing in the review that
             follows a bad outcome.
             """
+            # Deliberately NOT refused on a terminal mission, unlike objectives. A debrief is written after
+            # the operation ends, and a log that closes when the mission does would push the most considered
+            # entries — the ones written with hindsight — somewhere else entirely.
             await self._load(mission_id)
             comm_id = await self._log_comm(
                 mission_id,

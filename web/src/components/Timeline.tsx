@@ -59,6 +59,8 @@ export function Timeline() {
   const replayMode = useSioStore((state) => state.replayMode);
   const replayProgress = useSioStore((state) => state.replayProgress);
   const setHistory = useSioStore((state) => state.setHistory);
+  const requestedReplay = useSioStore((state) => state.requestedReplay);
+  const clearRequestedReplay = useSioStore((state) => state.clearRequestedReplay);
   const returnToLive = useSioStore((state) => state.returnToLive);
 
   const [bounds, setBounds] = useState<{ start: string; end: string } | null>(null);
@@ -187,18 +189,21 @@ export function Timeline() {
   );
 
   // --- playing ------------------------------------------------------------------------------
-  const play = useCallback(async () => {
+  const play = useCallback(async (override?: { from: string; to: string; label?: string }) => {
     stopStream();
-    setStatus("planning replay…");
+    setStatus(override?.label ? `planning replay of ${override.label}…` : "planning replay…");
     try {
       const plan = await api.planReplay({
-        from: windowRange.start.toISOString(),
-        to: windowRange.end.toISOString(),
+        // An explicit window when another panel asked for one — Mission Control replays a mission's own
+        // start-to-end rather than whatever the scrubber happens to be showing.
+        from: override?.from ?? windowRange.start.toISOString(),
+        to: override?.to ?? windowRange.end.toISOString(),
         speed,
       });
       replayIdRef.current = plan.replay_id;
       setStatus(
-        `${plan.frames} frames at ${plan.speed}x, ${plan.resolution_s}s per frame` +
+        (override?.label ? `${override.label}: ` : "") +
+          `${plan.frames} frames at ${plan.speed}x, ${plan.resolution_s}s per frame` +
           (plan.capped ? " (resolution reduced to fit)" : ""),
       );
 
@@ -226,6 +231,15 @@ export function Timeline() {
       setStatus("could not start a replay");
     }
   }, [setHistory, speed, stopStream, windowRange]);
+
+  // Another panel asked for a window. Mission Control's "replay the mission" lands here, so the scrubber, the
+  // map and the event feed all move together — which is the whole point of replay, and what a panel doing its
+  // own playback would have got wrong.
+  useEffect(() => {
+    if (!requestedReplay) return;
+    clearRequestedReplay();
+    void play(requestedReplay);
+  }, [requestedReplay, clearRequestedReplay, play]);
 
   const pause = useCallback(() => {
     stopStream();
