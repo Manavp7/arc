@@ -56,6 +56,8 @@ class PerceptionService(SioService):
         self._inference_ms: list[float] = []
         self._decode_failures = 0
         self._stale_skipped = 0
+        self._frames_redacted = 0
+        self._raw_retained = 0
         self._warned_stale = False
 
     # ----------------------------------------------------------------- lifecycle
@@ -289,17 +291,44 @@ class PerceptionService(SioService):
         if not observation.raw_ref:
             return
         redacted, applied = await asyncio.to_thread(self.redactor.apply, image, results)
-        if applied:
-            import cv2
+        if not applied:
+            return
+        import cv2
 
-            success, encoded = cv2.imencode(".jpg", redacted, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
-            if success:
+        # The original, but only when explicitly asked for — and under a separate key.
+        #
+        # `SIO_RETAIN_RAW` was read by the redactor and reported in its describe(), and acted on nowhere.
+        # A setting that is read, reported and does nothing is worse than an absent one: an operator who
+        # set it believed they were keeping originals and got nothing, silently. Worse, the governance
+        # posture endpoint reports `face_plate_blurring: not retain_raw`, which would have been a FALSE
+        # STATEMENT about what the deployment does.
+        #
+        # Kept under a `raw/` prefix rather than alongside, so the unblurred copy is reachable only by
+        # something that knows to ask for it — and `media.raw` is gated on both a role and the pii_scope
+        # claim, so knowing the key is not sufficient.
+        if self.settings.retain_raw:
+            original_ok, original = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            if original_ok:
                 await self.blob.put(
-                    observation.raw_ref,
-                    encoded.tobytes(),
+                    f"raw/{observation.raw_ref}",
+                    original.tobytes(),
                     content_type="image/jpeg",
-                    metadata={"redacted": "true", "regions": str(applied)},
+                    metadata={
+                        "redacted": "false",
+                        "warning": "unblurred faces and plates; access requires media.raw",
+                    },
                 )
+                self._raw_retained += 1
+
+        success, encoded = cv2.imencode(".jpg", redacted, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+        if success:
+            await self.blob.put(
+                observation.raw_ref,
+                encoded.tobytes(),
+                content_type="image/jpeg",
+                metadata={"redacted": "true", "regions": str(applied)},
+            )
+            self._frames_redacted += 1
 
     # ------------------------------------------------------------------ reporting
     async def tick(self) -> None:
@@ -311,6 +340,8 @@ class PerceptionService(SioService):
             frames_inferred=self._frames_inferred,
             detections=self._detections,
             stale_skipped=self._stale_skipped,
+            frames_redacted=self._frames_redacted,
+            raw_retained=self._raw_retained,
             mean_inference_ms=round(mean, 1),
             suppressed_fire=self.fire_detector._suppressed if self.fire_detector else 0,
         )

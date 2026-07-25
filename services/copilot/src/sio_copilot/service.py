@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from pydantic import BaseModel, Field
 
 from sio_core import SioService, describe_error, get_graph, get_llm
@@ -131,9 +131,38 @@ class CopilotService(SioService):
         await self.belt.close()
         await self.llm.close()
 
+    def _redact_for(self, http_request: Any, answer: Any) -> tuple[str, dict[str, Any], str | None]:
+        """Redact an answer unless the caller is entitled to see personal data.
+
+        Two conditions, both required: the `pii.view` action must be permitted AND the token must carry the
+        `pii_scope` claim. A role is granted once and forgotten; a scope claim is minted per token, so
+        requiring both makes seeing personal data a decision taken at issuing time rather than a standing
+        property of a job title.
+
+        The explanation is redacted too. An answer with the name removed and the name still sitting in the
+        evidence list beneath it would be a redaction in appearance only — and the evidence list is exactly
+        where an OCR'd plate or a driver's name ends up.
+        """
+        from sio_core import authorise, principal_of
+        from sio_core.pii import active_detector, redact_payload, redact_text, redaction_notice
+
+        explanation = answer.explanation.to_wire()
+        if not self.settings.redact_pii:
+            return answer.text, explanation, None
+
+        principal = principal_of(http_request)
+        if principal.pii_scope and authorise(principal, "pii.view", "copilot.answer").allowed:
+            return answer.text, explanation, None
+
+        redacted = redact_text(answer.text)
+        explanation, found = redact_payload(explanation)
+        for kind, count in redacted.found.items():
+            found[kind] = found.get(kind, 0) + count
+        return redacted.text, explanation, redaction_notice(found, active_detector())
+
     def routes(self, app: FastAPI) -> None:
         @app.post("/copilot/ask", tags=["copilot"])
-        async def ask(request: AskRequest) -> dict[str, Any]:
+        async def ask(request: AskRequest, http_request: Request) -> dict[str, Any]:
             """Answer a question, with the evidence and the reasoning attached."""
             started = time.perf_counter()
             answer = await self.agent.ask(request.question)
@@ -141,14 +170,27 @@ class CopilotService(SioService):
             self._asked += 1
             self._total_ms += elapsed
             self._slowest_ms = max(self._slowest_ms, elapsed)
-            return {
+
+            # Redaction happens HERE, at the boundary, and not inside the agent.
+            #
+            # The agent needs the real values to reason with — it cannot compute a dwell time from
+            # "<REDACTED>" — so redacting earlier would break the answer rather than protect it. The
+            # boundary is the last point at which the data is still needed and the first at which it
+            # leaves, which is where a redactor belongs.
+            text, explanation, notice = self._redact_for(http_request, answer)
+            payload: dict[str, Any] = {
                 "question": request.question,
-                "answer": answer.text,
+                "answer": text,
                 "confidence": answer.confidence,
-                "explanation": answer.explanation.to_wire(),
+                "explanation": explanation,
                 "trace": answer.trace.describe(),
                 "elapsed_ms": round(elapsed, 1),
             }
+            if notice:
+                # Said out loud, not implied. An answer with a name silently removed reads as an answer that
+                # never had one, and the reader draws a conclusion from an absence nobody told them about.
+                payload["redaction"] = notice
+            return payload
 
         @app.get("/copilot/tools", tags=["copilot"])
         async def tools() -> dict[str, Any]:

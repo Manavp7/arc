@@ -142,6 +142,9 @@ def build_process_table(profile: str, ports: dict[str, int], web_port: int) -> l
         python_service("alerts", ports.get("alerts", 8115), 3),
         python_service("missions", ports.get("missions", 8116), 3),
         python_service("analytics", ports.get("analytics", 8117), 3),
+        # Tier 1, not 3: it persists the audit trail, and records produced before it is up are buffered on
+        # the bus but not written. Starting it early narrows the window in which a denial goes unrecorded.
+        python_service("governance", ports.get("governance", 8118), 1),
     ]
     ingest = python_service("ingest", ports.get("ingest", 8101), 3)
 
