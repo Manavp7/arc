@@ -117,8 +117,16 @@ def test_documented_ports_match_the_settings() -> None:
     for port in re.findall(r"(?:localhost|127\.0\.0\.1):(\d{4})", text):
         number = int(port)
         # 5173 is vite's, which the settings also own.
-        known = {settings.port_for(name) for name in ("api", "ingest", "copilot", "alerts")} | {
+        # Read from the settings, so a port change fails here rather than in a demo. Governance was added
+        # to this set by the test failing when GOVERNANCE.md started quoting :8118 — which is the lint
+        # working: a document naming a port nothing listens on sends the reader to a closed socket.
+        known = {
+            settings.port_for(name)
+            for name in ("api", "ingest", "copilot", "alerts", "governance", "decision", "workflow")
+        } | {
             settings.web_port,
             3000,  # grafana, named in passing
+            8080,  # keycloak, in the optional-provider instructions
+            8181,  # opa, likewise
         }
         assert number in known, f"the docs point at :{number}, which nothing listens on"

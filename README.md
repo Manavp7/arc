@@ -62,7 +62,7 @@ Cleaning up: `just stop` (processes) and `just clean` (all local state under `.s
 | **World model** | entity/relationship graph (bitemporal), append-only timeline, embeddings + semantic search |
 | **Perception & fusion** | ONNX YOLO26 detection/segmentation, ReID, OCR, ByteTrack tracking, EKF multi-sensor fusion, PostGIS/H3 spatial engine |
 | **Data platform** | pluggable connectors, Redis Streams bus, Postgres/PostGIS/pgvector, MinIO object store |
-| **Governance** | authn/authz, PII redaction, immutable audit, lineage, multi-tenancy, explanations on every answer |
+| **Governance** | JWT authn (dev issuer or Keycloak), RBAC+ABAC with generated Rego, PII redaction on by default, append-only audit, enforced multi-tenancy, explanations on every answer |
 
 Everything is explainable by default: copilot answers, events, alerts and decisions all
 carry an evidence chain (sources, confidence, timeline, related entities, alternatives).
@@ -115,10 +115,36 @@ docs/              PRD, architecture, deployment, governance, GPU swap, models, 
 | 3 | Spatial engine, events + anomalies, forecasting, timeline replay | **done** |
 | 4 | Copilot + MCP, workflows, decisions, agents, alerts, the console panels | **done** |
 | 4.7 | **Ship checkpoint** — `just demo`, `docs/DEMO.md`, quickstart re-verified, e2e smoke | **done** |
-| 5 | Governance enforced: authn/authz, PII redaction, audit, multi-tenancy | — |
+| 5 | Governance enforced: authn/authz, PII redaction, immutable audit, multi-tenancy | **done** |
 | 6 | Simulation, mission control, analytics, developer platform (SDKs/webhooks/plugins) | — |
 | 7 | Real connectors (RTSP/STAC/MAVLink/MQTT), 3D twin, GPU/production overlay | — |
 | 8 | Evaluation harnesses (mAP/HOTA/copilot), performance benchmarks, docs | — |
+
+## Governance
+
+Authentication is required by default, every authorisation decision is audited, personal data is redacted
+unless the caller holds both a role and an explicit scope, faces and plates are blurred before any frame
+reaches storage, and nothing acts in the physical world without a human approving it.
+
+```bash
+# what is actually switched on in a running deployment, including what is NOT
+curl -s localhost:8118/governance/posture -H "Authorization: Bearer $TOKEN" | jq
+```
+
+[docs/GOVERNANCE.md](docs/GOVERNANCE.md) covers the model, the regulatory posture, and a
+**"what is not protected"** section — because a governance document that lists only what is protected is a
+marketing document.
+
+Optional providers, both verified against the same test suite:
+
+```bash
+just keycloak                                   # then SIO_AUTH_MODE=keycloak just dev
+just opa                                        # then SIO_POLICY_ENGINE=opa just dev
+```
+
+The Rego is **generated** from the same rule table the embedded engine evaluates (`just policies`), and a
+conformance test runs 810 principal × action × context combinations through both engines and asserts they
+agree. It found a bug nothing else would have.
 
 ## Known limitations
 
