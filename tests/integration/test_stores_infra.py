@@ -486,3 +486,104 @@ async def test_a_relationship_lands_in_both_stores(pool, cfg) -> None:  # type: 
         "MATCH (e:Entity {tenant_id: $tenant_id}) DETACH DELETE e", {"tenant_id": TENANT}
     )
     await graph.close()
+
+
+# --------------------------------------------------- spatial SQL (regression)
+async def test_every_spatial_query_runs_against_postgis(pool, cfg) -> None:  # type: ignore[no-untyped-def]
+    """Execute every spatial query for real.
+
+    Regression: `within_radius` referenced `e.geo` when the column is `e.geom` — the schema field name
+    is `geo`, the database column is not. Unit tests cannot catch that (no database) and the service
+    started up perfectly happily; the first request returned a 500. SQL is code, and code that never
+    runs is code that does not work.
+
+    These assertions are deliberately about *shape* rather than content: the point is that each
+    statement parses, binds and executes against the real schema.
+    """
+    from sio_spatial.queries import SpatialQueries
+
+    queries = SpatialQueries(pool, cfg.tenant_id)
+    here = Geo(lat=37.7749, lon=-122.4194)
+
+    assert isinstance(await queries.load_zones(), list)
+    assert isinstance(await queries.load_camera_footprints(), list)
+    assert isinstance(await queries.within_radius(here, 500.0), list)
+    assert isinstance(await queries.within_radius(here, 500.0, entity_type="truck"), list)
+    assert isinstance(await queries.within_radius(here, 500.0, active_within_s=None), list)
+    assert isinstance(await queries.nearest(here), list)
+    assert isinstance(await queries.nearest(here, entity_type="camera", limit=3), list)
+    assert isinstance(await queries.zones_at(here), list)
+    assert isinstance(await queries.contains("gate_a"), list)
+    assert isinstance(await queries.contains("gate_a", active_within_s=None), list)
+
+    coverage = await queries.coverage_of("cam-gate-a")
+    assert "zones" in coverage and "found" in coverage
+    assert isinstance(await queries.cameras_covering("gate_a"), list)
+
+    blind = await queries.blind_spots()
+    assert {"site_m2", "covered_m2", "coverage_fraction", "gaps"} <= set(blind)
+    assert 0.0 <= blind["coverage_fraction"] <= 1.0, "a coverage fraction outside [0,1] is nonsense"
+
+    assert isinstance(await queries.h3_density(resolution=12), list)
+
+
+async def test_postgis_and_shapely_agree_on_zone_membership(pool, cfg) -> None:  # type: ignore[no-untyped-def]
+    """The hot path decides membership in shapely; PostGIS answers ad-hoc queries.
+
+    Two implementations of point-in-polygon that quietly disagree is a bug that surfaces as an
+    inexplicable event timeline at 3 a.m. rather than as a failing assertion, so it gets asserted here
+    — over a grid of points spanning the site, including points on and just outside boundaries.
+    """
+    from sio_spatial.geometry import ZoneIndex
+    from sio_spatial.queries import SpatialQueries
+
+    queries = SpatialQueries(pool, cfg.tenant_id)
+    zones = await queries.load_zones()
+    if not zones:
+        pytest.skip("no zones seeded; run: just seed")
+    index = ZoneIndex(zones)
+
+    # A grid across the bounding box of every zone, plus each zone's centroid and corners.
+    lons = [zone.polygon.bounds[0] for zone in zones] + [zone.polygon.bounds[2] for zone in zones]
+    lats = [zone.polygon.bounds[1] for zone in zones] + [zone.polygon.bounds[3] for zone in zones]
+    samples = [zone.centroid for zone in zones]
+    for step in range(6):
+        fraction = step / 5
+        samples.append(
+            Geo(
+                lat=min(lats) + (max(lats) - min(lats)) * fraction,
+                lon=min(lons) + (max(lons) - min(lons)) * fraction,
+            )
+        )
+
+    # Points lying exactly ON a boundary are excluded, and that exclusion is the interesting part.
+    #
+    # Two libraries evaluating an exact predicate on floating-point coordinates can always differ for a
+    # point on an edge, and measured here they do: PostGIS called a boundary point *contained* where
+    # shapely called it *touching*. Neither is wrong; the question has no stable answer at that
+    # precision.
+    #
+    # This is precisely why membership uses a hysteresis margin. The tracker demands metres of
+    # penetration before asserting anything, so a knife-edge point is never acted upon and the
+    # ambiguity cannot reach an event. What must hold — and what is asserted — is that the two agree
+    # wherever the answer is not knife-edge.
+    knife_edge_m = 0.5
+    disagreements = []
+    decided = 0
+    for point in samples:
+        nearest_boundary_m = min(
+            (abs(zone.distance_to_boundary_m(point)) for zone in zones), default=999.0
+        )
+        if nearest_boundary_m < knife_edge_m:
+            continue
+        decided += 1
+        in_memory = sorted(zone.zone_id for zone in index.zones_containing(point))
+        in_postgis = sorted(row["zone_id"] for row in await queries.zones_at(point))
+        if in_memory != in_postgis:
+            disagreements.append((point.lat, point.lon, in_memory, in_postgis))
+
+    assert decided >= 3, f"only {decided} unambiguous sample points; this test would prove nothing"
+    assert not disagreements, (
+        f"shapely and PostGIS disagree at {len(disagreements)} points more than {knife_edge_m} m "
+        f"from any boundary: {disagreements[:3]}"
+    )

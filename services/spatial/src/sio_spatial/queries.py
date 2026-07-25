@@ -88,7 +88,11 @@ class SpatialQueries:
         limit: int = 200,
     ) -> list[dict[str, Any]]:
         """Entities within a radius, nearest first. The "trucks within 500 m" query."""
-        clauses = ["e.tenant_id = %s", "e.geo IS NOT NULL", "ST_DWithin(e.geo, %s::geography, %s)"]
+        clauses = [
+            "e.tenant_id = %s",
+            "e.geom IS NOT NULL",
+            "ST_DWithin(e.geom, %s::geography, %s)",
+        ]
         params: list[Any] = [self.tenant_id, _point(geo), radius_m]
         if entity_type:
             clauses.append("e.type = %s")
@@ -100,8 +104,8 @@ class SpatialQueries:
         rows = await self.pool.fetch(
             f"""
             SELECT e.entity_id, e.type, e.label, e.is_static, e.last_seen,
-                   ST_Y(e.geo::geometry) AS lat, ST_X(e.geo::geometry) AS lon,
-                   ST_Distance(e.geo, %s::geography) AS distance_m
+                   ST_Y(e.geom::geometry) AS lat, ST_X(e.geom::geometry) AS lon,
+                   ST_Distance(e.geom, %s::geography) AS distance_m
               FROM entities e
              WHERE {" AND ".join(clauses)}
              ORDER BY distance_m ASC
@@ -131,7 +135,7 @@ class SpatialQueries:
         every candidate — the difference between a bounded query and a full scan once a site has
         millions of rows.
         """
-        clauses = ["tenant_id = %s", "geo IS NOT NULL"]
+        clauses = ["tenant_id = %s", "geom IS NOT NULL"]
         params: list[Any] = [self.tenant_id]
         if entity_type:
             clauses.append("type = %s")
@@ -139,11 +143,11 @@ class SpatialQueries:
         rows = await self.pool.fetch(
             f"""
             SELECT entity_id, type, label, is_static,
-                   ST_Y(geo::geometry) AS lat, ST_X(geo::geometry) AS lon,
-                   ST_Distance(geo, %s::geography) AS distance_m
+                   ST_Y(geom::geometry) AS lat, ST_X(geom::geometry) AS lon,
+                   ST_Distance(geom, %s::geography) AS distance_m
               FROM entities
              WHERE {" AND ".join(clauses)}
-             ORDER BY geo::geometry <-> %s::geometry
+             ORDER BY geom::geometry <-> %s::geometry
              LIMIT %s
             """,
             (_point(geo), *params, _point(geo), limit),
@@ -170,8 +174,8 @@ class SpatialQueries:
         clauses = [
             "e.tenant_id = %s",
             "z.zone_id = %s",
-            "e.geo IS NOT NULL",
-            "ST_Contains(z.geom::geometry, e.geo::geometry)",
+            "e.geom IS NOT NULL",
+            "ST_Contains(z.geom::geometry, e.geom::geometry)",
         ]
         params: list[Any] = [self.tenant_id, zone_id]
         if active_within_s is not None:
@@ -251,7 +255,7 @@ class SpatialQueries:
         """Cameras whose field of view overlaps a zone. The "cameras covering Gate B" query."""
         rows = await self.pool.fetch(
             """
-            SELECT s.source_id, s.name,
+            SELECT s.source_id, s.label,
                    ST_Area(ST_Intersection(z.geom::geometry, s.fov::geometry)::geography) AS overlap_m2,
                    ST_Area(z.geom) AS zone_m2
               FROM sources s JOIN zones z ON z.tenant_id = s.tenant_id
@@ -264,7 +268,7 @@ class SpatialQueries:
         return [
             {
                 "source_id": row["source_id"],
-                "name": row["name"],
+                "name": row["label"],
                 "overlap_m2": round(float(row["overlap_m2"]), 1),
                 "fraction_of_zone": round(
                     float(row["overlap_m2"]) / max(1.0, float(row["zone_m2"])), 3
@@ -329,9 +333,9 @@ class SpatialQueries:
         rows = await self.pool.fetch(
             """
             SELECT entity_id, type,
-                   ST_Y(geo::geometry) AS lat, ST_X(geo::geometry) AS lon
+                   ST_Y(geom::geometry) AS lat, ST_X(geom::geometry) AS lon
               FROM entities
-             WHERE tenant_id = %s AND geo IS NOT NULL AND NOT is_static
+             WHERE tenant_id = %s AND geom IS NOT NULL AND NOT is_static
                AND last_seen >= now() - make_interval(secs => %s)
              LIMIT %s
             """,
