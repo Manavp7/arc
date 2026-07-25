@@ -162,7 +162,7 @@ class TargetForecast:
                 for point in points
             ]
 
-        explanation = ExplanationBuilder(summary=self._summary())
+        explanation = ExplanationBuilder(summary=self._summary(points))
         explanation.add_model(self.result.model_name, note=spec.description or None)
         for note in self.result.notes:
             explanation.add_note(note)
@@ -209,11 +209,18 @@ class TargetForecast:
             explanation=explanation.build(),
         )
 
-    def _summary(self) -> str:
-        if not self.points:
+    def _summary(self, points: list[ForecastPoint] | None = None) -> str:
+        """Describe the forecast, from the SAME points the forecast carries.
+
+        It previously read the unclamped points, so an occupancy summary said "-0.167 to 2.17" while the
+        data beside it said "0 to 2.17". A summary that contradicts its own numbers costs more trust than
+        it saves effort — and it is the part a human actually reads.
+        """
+        points = points if points is not None else self.points
+        if not points:
             return f"No {self.spec.target} forecast: insufficient history"
         last = self.series.values[-1]
-        end = self.points[-1]
+        end = points[-1]
         minutes = self.spec.bucket_s * self.spec.horizon_buckets / 60
         direction = "steady"
         if end.value > last * 1.15 + 0.01:

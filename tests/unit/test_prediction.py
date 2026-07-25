@@ -602,3 +602,28 @@ def test_the_battery_spec_declares_its_range() -> None:
     # A temperature has no such bound: a negative value is simply cold, and clamping would be a lie.
     assert SPECS["temperature"].max_value is None
     assert not SPECS["temperature"].non_negative
+
+
+def test_the_summary_never_contradicts_the_points_beside_it() -> None:
+    """The summary read the UNCLAMPED points, so an occupancy forecast said "-0.167 to 2.17" in prose
+    while the data beside it said "0 to 2.17". A summary that contradicts its own numbers costs more
+    trust than it saves effort, and it is the part a human actually reads.
+    """
+    import random
+    import re
+
+    rng = random.Random(41)
+    # A low, noisy count series: the kind whose interval reaches below zero.
+    values = [float(max(0, round(1 + rng.gauss(0, 0.8)))) for _ in range(40)]
+    target = build(SPECS["occupancy"], series_of(values, name="occupancy:dock_9"), zone_id="dock_9")
+    forecast = target.to_forecast("acme", made_at=START)
+    assert forecast.points
+
+    numbers = [
+        float(match) for match in re.findall(r"-?\d+\.?\d*", forecast.explanation.summary or "")
+    ]
+    assert all(number >= 0 for number in numbers), (
+        f"the summary quotes an impossible value: {forecast.explanation.summary}"
+    )
+    for point in forecast.points:
+        assert point.lo is None or point.lo >= 0
