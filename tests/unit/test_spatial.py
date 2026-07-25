@@ -540,8 +540,9 @@ async def test_an_expired_membership_publishes_an_inferred_exit() -> None:
     perimeter accumulated 54 entries and ZERO exits, every edge stayed open forever, and the prediction
     service reported 41 entities on a dock apron that holds a handful, then forecast it rising.
     """
-    from sio_schemas import Entity, EntityType
     from sio_spatial.service import SpatialService
+
+    from sio_schemas import Entity, EntityType
 
     service = SpatialService()
     service.index.replace([a_zone("perimeter", side_m=400)])
