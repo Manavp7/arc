@@ -28,6 +28,14 @@ class Topic(StrEnum):
     ALERTS = "alerts"
     ACTIONS = "actions"
     AUDIT = "audit"
+    SIMULATIONS = "simulations"
+    """What-if projections (PRD M11).
+
+    Its own stream rather than sharing `EVENTS`, because a projection is not an event: an event asserts that
+    something happened, and everything downstream of `EVENTS` — the alerts inbox, the playbook triggers, the
+    audit narrative — is built on that assertion. A projection saying a fire WOULD reach dock 3 must not be
+    able to raise an alert saying one HAS.
+    """
 
     @classmethod
     def raw_topics(cls) -> tuple[Topic, ...]:

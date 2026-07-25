@@ -146,6 +146,31 @@ class SimulationService(SioService):
                 detail=f"unknown scenario {scenario_name!r}; available: {', '.join(sorted(SCENARIOS))}",
             )
 
+        # A required parameter that was not supplied is refused, not defaulted.
+        #
+        # Every scenario declares its required parameters, and every scenario also has a fallback default —
+        # which is how a projection can silently answer the wrong question. Observed: the copilot asked
+        # `fire_spread` with `zone_id='null'`, the null was stripped as it should be, and the scenario fell
+        # back to "fuel_store". The question happened to be about the fuel store, so the answer was right by
+        # luck. Asked about dock_3, it would have projected a fire in the fuel store and reported it as dock_3.
+        #
+        # Naming the missing parameter turns a confident wrong answer into a retry the caller can act on,
+        # which matters most for the caller that cannot reason about it — a small model.
+        missing = [
+            name
+            for name in scenario.parameters.get("required", [])
+            if params.get(name) in (None, "")
+        ]
+        if missing:
+            zones = ", ".join(zone for zone in await self._zone_ids())
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{scenario_name} needs {', '.join(missing)}. "
+                    + (f"The zones on this site are: {zones}." if "zone_id" in missing else "")
+                ),
+            )
+
         world = await self.snapshot()
         run = SimulationRun(
             tenant_id=self.settings.tenant_id,
@@ -204,7 +229,7 @@ class SimulationService(SioService):
         del self._runs[:-RECENT_RUNS]
         await self._persist(run)
         # Published so the decision engine can act on a projection. A what-if nobody acts on is a chart.
-        await self.publish(Topic.SIMULATION, run)
+        await self.publish(Topic.SIMULATIONS, run)
         self.log.info(
             "simulation.completed",
             scenario=scenario_name,
@@ -213,6 +238,19 @@ class SimulationService(SioService):
             confidence=projection.confidence,
         )
         return run
+
+    async def _zone_ids(self) -> list[str]:
+        """Zone ids, for naming them in a refusal.
+
+        A refusal that does not list the real zones leaves the caller to guess again — the same reasoning as
+        the copilot's zone resolver, and the same caller.
+        """
+        try:
+            response = await self.client.get(f"{self.api_url}/api/spatial/zones")
+            response.raise_for_status()
+            return [str(zone.get("zone_id")) for zone in response.json()][:12]
+        except httpx.HTTPError:
+            return []
 
     async def _persist(self, run: SimulationRun) -> None:
         try:

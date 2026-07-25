@@ -399,3 +399,134 @@ def test_fire_spread_is_the_only_scenario_with_spatial_dynamics() -> None:
     assert issubclass(FireSpread, Scenario)
     # And the wind parameter is what makes it spatial rather than a radius.
     assert "wind_bearing_deg" in FireSpread.parameters["properties"]
+
+
+# --- the service, not only the scenarios --------------------------------------------------------
+async def test_running_a_scenario_through_the_service_publishes_and_persists(
+    settings, memory_bus, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The test that was missing, and the bug it would have caught.
+
+    `just check` was green while `POST /simulations` returned 500 on every request:
+    `Topic.SIMULATION` does not exist — the enum has `SIMULATIONS` — and nothing exercised the publish. The
+    scenario tests cover the arithmetic; the *service* path was untested, which is exactly the shape of the
+    copilot outage earlier in this build (a proxy layer with no tests, where every mistake presents as a 500
+    nobody sees until they click the button).
+
+    So this runs a real scenario through `SimulationService.run_scenario` with a stubbed world and a memory
+    bus, and asserts the whole path: projection, explanation, persistence attempt, and publication.
+    """
+    from sio_simulation.service import SimulationService
+
+    from sio_schemas import RunStatus, Topic
+
+    service = SimulationService(settings, bus=memory_bus)
+
+    async def fake_snapshot() -> WorldSnapshot:
+        return a_world()
+
+    # Only the world read is stubbed. Everything after it — the scenario, the explanation, the publish — is
+    # the real code path, because that is where the bug was.
+    monkeypatch.setattr(service, "snapshot", fake_snapshot)
+    monkeypatch.setattr(service.pool, "execute", _swallow)
+
+    run = await service.run_scenario("fire_spread", {"zone_id": "fuel_store", "duration_s": 1800})
+
+    assert run.status == RunStatus.COMPLETED, run.error
+    assert run.kpi_deltas, "no quantified impact"
+    assert run.impacted_entities, "no affected entities"
+    assert run.seeded_from_ts is not None, "a projection must say which world it started from"
+    assert run.explanation.summary
+    # The assumptions travel in the explanation, not only the payload.
+    assert any("assumes:" in note for note in run.explanation.notes)
+    assert any("nothing on the live site was changed" in note for note in run.explanation.notes)
+
+    assert _published(memory_bus, Topic.SIMULATIONS) == 1, (
+        "the projection was not published, so nothing downstream can act on it"
+    )
+
+
+async def test_projections_publish_to_their_own_topic_not_to_events(
+    settings, memory_bus, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A projection is not an event, and the separation is load-bearing.
+
+    An event asserts that something happened, and everything downstream of `EVENTS` — the alerts inbox, the
+    playbook triggers — is built on that assertion. A projection saying a fire WOULD reach dock 3 must not be
+    able to raise an alert saying one HAS.
+    """
+    from sio_simulation.service import SimulationService
+
+    from sio_schemas import Topic
+
+    service = SimulationService(settings, bus=memory_bus)
+
+    async def fake_snapshot() -> WorldSnapshot:
+        return a_world()
+
+    monkeypatch.setattr(service, "snapshot", fake_snapshot)
+    monkeypatch.setattr(service.pool, "execute", _swallow)
+    await service.run_scenario("gate_closure", {"zone_id": "gate_a"})
+
+    assert _published(memory_bus, Topic.EVENTS) == 0, (
+        "a projection published to the events stream, where something downstream will treat it as fact"
+    )
+    assert _published(memory_bus, Topic.ALERTS) == 0
+    assert _published(memory_bus, Topic.SIMULATIONS) == 1
+
+
+async def test_an_unknown_scenario_is_a_400_naming_the_real_ones(settings, memory_bus) -> None:
+    """So a caller — often a language model — can retry rather than guess again."""
+    from fastapi import HTTPException
+    from sio_simulation.service import SimulationService
+
+    service = SimulationService(settings, bus=memory_bus)
+    with pytest.raises(HTTPException) as raised:
+        await service.run_scenario("flooding", {})
+    assert raised.value.status_code == 400
+    assert "flood_level" in raised.value.detail, "the refusal must name the scenarios that exist"
+
+
+async def test_a_failing_scenario_is_recorded_rather_than_raised(
+    settings, memory_bus, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A scenario that throws must produce a FAILED run, not a stack trace to the caller.
+
+    The run is the record that the question was asked, and losing it means an operator cannot tell a broken
+    scenario from one they never ran.
+    """
+    from sio_simulation.service import SimulationService
+
+    from sio_schemas import RunStatus
+
+    service = SimulationService(settings, bus=memory_bus)
+
+    async def fake_snapshot() -> WorldSnapshot:
+        return a_world()
+
+    def explode(world, params):
+        raise ValueError("deliberate")
+
+    monkeypatch.setattr(service, "snapshot", fake_snapshot)
+    monkeypatch.setattr(service.pool, "execute", _swallow)
+    monkeypatch.setattr(SCENARIOS["gate_closure"], "project", explode)
+
+    run = await service.run_scenario("gate_closure", {"zone_id": "gate_a"})
+    assert run.status == RunStatus.FAILED
+    assert "ValueError" in (run.error or ""), "the error must name its type, not be an empty string"
+    assert run.finished_ts is not None
+
+
+def _published(bus, topic) -> int:
+    """How many messages reached a topic.
+
+    Reaches into `MemoryBus._streams` because the bus port has no read-back method — deliberately, since
+    production code should consume rather than inspect. Kept in one helper so the reach-in is in one place
+    rather than scattered across every test that needs it.
+    """
+    return len(bus._streams.get(str(topic), []))
+
+
+async def _swallow(*args, **kwargs) -> int:
+    """Stands in for a Postgres write. Persistence is covered by the infra ring."""
+    return 0
