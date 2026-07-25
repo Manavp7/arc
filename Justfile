@@ -233,3 +233,11 @@ config:
 policies:
     @mkdir -p infra/opa/policies
     {{uv}} python -c "from sio_core.authz import rego_from_policy; from pathlib import Path; Path('infra/opa/policies/sio.rego').write_text(rego_from_policy()); print('wrote infra/opa/policies/sio.rego')"
+
+# Start Keycloak and import the SIO realm (optional; the default dev issuer needs nothing).
+keycloak:
+    bash scripts/keycloak_bootstrap.sh
+
+# Start OPA with the generated policy (optional; the embedded engine evaluates the same rules).
+opa: policies
+    bash scripts/opa_bootstrap.sh

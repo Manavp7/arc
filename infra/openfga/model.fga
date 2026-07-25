@@ -1,0 +1,49 @@
+# OpenFGA relationship model (PRD M18).
+#
+# MODELLED, NOT WIRED. `docs/GOVERNANCE.md` says so in its "what is not protected" list, and that honesty is
+# the point: a model file present in the repository invites the assumption that it is enforced, and it is not.
+#
+# It exists because the relationship questions it expresses cannot be answered by RBAC or ABAC at all, and
+# writing them down is the first step to enforcing them:
+#
+#   "may this user view camera Y?"  ->  because camera Y is assigned to mission Z, and they are on mission Z
+#
+# That is a question about a graph of relationships, not about a role or an attribute, and approximating it
+# with roles produces exactly the over-granting it exists to avoid — a "camera_viewer" role that grants every
+# camera because enumerating the right ones is impractical.
+
+model
+  schema 1.1
+
+type user
+
+type tenant
+  relations
+    define member: [user]
+    define admin: [user]
+
+type mission
+  relations
+    define tenant: [tenant]
+    define commander: [user]
+    define assignee: [user]
+    # Viewing a mission is open to anyone assigned to it, its commander, or a tenant admin. Tenant
+    # membership alone is deliberately not enough: a mission is need-to-know.
+    define can_view: assignee or commander or admin from tenant
+
+type camera
+  relations
+    define tenant: [tenant]
+    define assigned_to: [mission]
+    define zone: [zone]
+    # The relationship question RBAC cannot express: a camera is viewable because of the mission it serves.
+    define can_view: can_view from assigned_to or can_view from zone or admin from tenant
+    # Unblurred footage is a separate relation, never implied by can_view. Being permitted to see a camera is
+    # not being permitted to see faces through it.
+    define can_view_raw: [user] or admin from tenant
+
+type zone
+  relations
+    define tenant: [tenant]
+    define permitted: [user]
+    define can_view: permitted or admin from tenant
