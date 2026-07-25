@@ -119,7 +119,7 @@ docs/              PRD, architecture, deployment, governance, GPU swap, models, 
 | 4.7 | **Ship checkpoint** — `just demo`, `docs/DEMO.md`, quickstart re-verified, e2e smoke | **done** |
 | 5 | Governance enforced: authn/authz, PII redaction, immutable audit, multi-tenancy | **done** |
 | 6 | Simulation (M11), analytics (M19), mission control (M17) and the developer platform (M22: SDKs, webhooks, plugins, no-code builder) | **done** |
-| 7 | Real connectors (RTSP/STAC/MAVLink/MQTT), 3D twin, GPU/production overlay | — |
+| 7 | Real connectors (RTSP/STAC/MAVLink/MQTT/SQL/traffic), the 3D twin, and `SIO_PROFILE=gpu` | **done** |
 | 8 | Evaluation harnesses (mAP/HOTA/copilot), performance benchmarks, docs | — |
 
 ## Talking to it from your own code
@@ -155,6 +155,16 @@ Each is behind an optional extra and looks its dependency up at `start()`, so a 
 misconfiguration says `uv pip install 'sio-ingest[rtsp]'` rather than `ModuleNotFoundError`. The SQL connector is
 read-only, enforced before it opens a connection. See [docs/CONNECTORS.md](docs/CONNECTORS.md), which documents
 every option and — more usefully — why each default is what it is.
+
+## Seeing what a camera actually covers
+
+The **twin** tab is a Cesium view of the site. A 3D view of a flat yard is mostly a worse 2D map — what it adds
+is that **a camera's field of view is a volume and the map can only draw its shadow**, so two cameras that
+overlap at head height but not at ground level look identical on the map and obviously different here.
+
+It is lazy-loaded: 4.5MB of Cesium arrives when you open the tab and never otherwise, so the entry bundle stays
+at 275kB. See [docs/GPU_SWAP.md](docs/GPU_SWAP.md) for the production overlay — `SIO_PROFILE=gpu` flips every
+seam at once, and the suite passes under it.
 
 ## Running an operation
 

@@ -195,7 +195,7 @@ export default function TwinView() {
           {/* Said on screen, not buried in a docstring. A frustum drawn from an assumed height is a drawing,
               not a measurement, and somebody judging whether a camera clears a container stack has to know
               which part of the picture is data. */}
-          Frustum apex assumes a {ASSUMED_CAMERA_HEIGHT_M} m mast — the source
+          Frustum apex assumes an {ASSUMED_CAMERA_HEIGHT_M} m mast — the source
           table records position and ground coverage, not height.
         </span>
         {note && <span className="twin-note twin-warn">{note}</span>}

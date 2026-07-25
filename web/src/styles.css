@@ -3125,6 +3125,12 @@ code {
    photography: simultaneously unmissable and unreadable, which is the worst of both. A plate and a height cap
    make it legible and bounded. */
 .twin-canvas .cesium-widget-credits {
+  /* `display: block` is the load-bearing declaration. Cesium's own widgets.css sets `display: inline`, and
+     neither `max-height` nor `overflow-y` applies to a non-replaced inline element — so the cap and the scroll
+     were both inert, the container rendered 93px tall (13% of the canvas) instead of the 51px asked for, and
+     the backing plate painted per line box with ragged edges rather than as one rectangle. The styling looked
+     applied and was not. */
+  display: block;
   max-height: 3.2rem;
   overflow-y: auto;
   padding: 0.2rem 0.4rem;
@@ -3139,8 +3145,10 @@ code {
   color: var(--accent);
 }
 
-/* The recentre button, matching the shared form kit's ghost styling. */
+/* The recentre button, matching the shared form kit's ghost styling. `margin-left: auto` pushes it to the end
+   of the row instead of letting `.twin-note`'s `flex: 1 1 16rem` strand it on a line of its own. */
 .twin-controls button.ghost {
+  margin-left: auto;
   padding: 0.2rem 0.5rem;
   border: 1px solid var(--border);
   border-radius: 4px;
