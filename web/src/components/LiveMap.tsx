@@ -184,6 +184,8 @@ function entityLayers(
   selectedId: string | null,
   onSelect: (id: string) => void,
 ) {
+  // Returns [dots, labels]. The caller draws the labels LAST, above the event rings, because a ring
+  // crossing a label is the same readability failure the rings were introduced to fix.
   const movers = entities.filter((entity) => !entity.is_static);
   const fixtures = entities.filter((entity) => entity.is_static);
 
@@ -240,19 +242,52 @@ function entityLayers(
   ];
 }
 
+/** Severities that earn a mark on the map. Everything else belongs in the feed and the timeline. */
+const MAP_WORTHY: ReadonlySet<string> = new Set(["medium", "high", "critical"]);
+/** How long an event keeps its marker. Older than this and it is history, not a live situation. */
+const EVENT_MARKER_TTL_MS = 120_000;
+
 function eventLayer(events: SioEvent[]) {
-  const positioned = events.filter((event) => event.geo != null).slice(0, 60);
+  // Phase 3 turned this layer into a problem worth solving properly.
+  //
+  // Zone entries and exits fire constantly, they carry the position of the entity that caused them,
+  // and they were drawn as filled discs up to 24 px across. The result was a pale blob sitting on top
+  // of every truck on the site, hiding the entity AND its label — a map that reported activity by
+  // obscuring the thing the activity happened to.
+  //
+  // Three changes, in order of how much they mattered:
+  //   1. Only medium-and-above severity is drawn. An informational zone crossing is timeline material;
+  //      putting every one on the map is how a map stops being readable.
+  //   2. Rings, not discs, so whatever is underneath stays visible. The event is an annotation on an
+  //      entity, and an annotation that covers its subject has failed.
+  //   3. Markers fade out over two minutes, because a mark that looks identical at five minutes old
+  //      teaches an operator to ignore all of them.
+  const now = Date.now();
+  const positioned = events
+    .filter((event) => event.geo != null && MAP_WORTHY.has(event.severity))
+    .filter((event) => now - new Date(event.ts).getTime() < EVENT_MARKER_TTL_MS)
+    .slice(0, 40);
+
+  const age = (event: SioEvent) =>
+    Math.min(1, Math.max(0, (now - new Date(event.ts).getTime()) / EVENT_MARKER_TTL_MS));
+
   return new ScatterplotLayer<SioEvent>({
     id: "events",
     data: positioned,
     getPosition: (event) => [event.geo!.lon, event.geo!.lat],
-    getFillColor: (event) => SEVERITY_COLOURS[event.severity] ?? SEVERITY_COLOURS["info"]!,
-    getRadius: 8,
-    radiusMinPixels: 6,
-    radiusMaxPixels: 24,
+    filled: false,
     stroked: true,
-    getLineColor: [255, 255, 255, 120],
-    lineWidthMinPixels: 1,
+    getLineColor: (event) => {
+      const colour = SEVERITY_COLOURS[event.severity] ?? SEVERITY_COLOURS["info"]!;
+      return [colour[0]!, colour[1]!, colour[2]!, Math.round(230 * (1 - age(event)))];
+    },
+    getLineWidth: 2,
+    lineWidthMinPixels: 2,
+    lineWidthMaxPixels: 3,
+    getRadius: 9,
+    radiusMinPixels: 9,
+    radiusMaxPixels: 18,
+    updateTriggers: { getLineColor: [now] },
     pickable: true,
   });
 }
@@ -330,14 +365,13 @@ export function LiveMap() {
     return deconflictLabels(entities, selectedId, (position) => map.project(position));
   }, [entities, selectedId, cameraVersion]);
 
-  const layers = useMemo(
-    () => [
-      zoneLayer(zones),
-      ...entityLayers(entities, labelled, selectedId, selectEntity),
-      eventLayer(events),
-    ],
-    [zones, entities, labelled, events, selectedId, selectEntity],
-  );
+  const layers = useMemo(() => {
+    const entityStack = entityLayers(entities, labelled, selectedId, selectEntity);
+    const labels = entityStack.pop();
+    // Zones, then entities, then event rings annotating them, then text on top of everything. Text
+    // last is not cosmetic: it is the only layer a human reads rather than glances at.
+    return [zoneLayer(zones), ...entityStack, eventLayer(events), labels];
+  }, [zones, entities, labelled, events, selectedId, selectEntity]);
 
   useEffect(() => {
     overlayRef.current?.setProps({ layers });
