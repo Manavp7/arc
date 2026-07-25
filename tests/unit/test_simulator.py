@@ -12,12 +12,14 @@ while producing no docking, no dwell data, and six labels stacked on one pixel.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from sio_ingest.sim.agents import Drone, Forklift, Truck, TruckState, Worker
 from sio_ingest.sim.simulator import YardSimulator
 from sio_ingest.site import default_yard, load_site, to_geo, to_local
 
-from sio_schemas import Topic
+from sio_schemas import Modality, Topic
 
 DT = 0.25  # the default 4 Hz tick
 
@@ -428,3 +430,92 @@ def test_site_entities_include_the_fixed_cast() -> None:
 
 def test_load_site_matches_the_default_yard() -> None:
     assert load_site().name == default_yard().name
+
+
+# ------------------------------------------------------- clock drift (regression)
+async def test_the_simulation_clock_tracks_wall_time_even_when_ticks_are_slow() -> None:
+    """Simulated time must not fall behind wall time.
+
+    The first version stepped a fixed dt and then slept a full dt, so every iteration consumed
+    `dt + processing time` of wall clock while advancing the simulation by only dt. Measured on a
+    running stack, every payload timestamp was 27 SECONDS in the past — which downstream looked like
+    20-second event detection latency and was really the clock losing. Worse, rendering gets slower as
+    more agents come into view, so the drift grew with load: invisible in a short test, obvious only
+    after the demo had been running a while.
+    """
+    import time
+
+    from sio_ingest.connectors.base import ConnectorConfig
+    from sio_ingest.connectors.simulator import SimulatorConnector
+
+    connector = SimulatorConnector(
+        ConnectorConfig(
+            source_id="sim",
+            kind="simulator",
+            modality=Modality.GPS,
+            rate_hz=20.0,
+            options={"trucks": 2, "forklifts": 1, "people": 2, "drones": 0, "frame_fps": 0.0},
+        )
+    )
+
+    started = time.monotonic()
+    stream = connector.observations()
+    # Consume for a fixed slice of wall time, with deliberate work in the loop so ticks are slow.
+    while time.monotonic() - started < 1.2:
+        try:
+            await anext(stream)  # type: ignore[arg-type]
+        except StopAsyncIteration:  # pragma: no cover - the stream is infinite
+            break
+        await asyncio.sleep(0.005)  # stand in for rendering and publishing
+    await stream.aclose()  # type: ignore[attr-defined]
+
+    wall = time.monotonic() - started
+    simulated = connector.simulator.elapsed_s
+    assert simulated == pytest.approx(wall, abs=0.35), (
+        f"simulated {simulated:.2f}s against {wall:.2f}s of wall clock: the clock is drifting"
+    )
+    assert abs(connector.clock_drift_s) < 0.35
+
+
+async def test_a_long_stall_is_capped_rather_than_teleporting_agents() -> None:
+    """After a suspended VM or a debugger pause, a 60-second step would move every agent across the
+    site. Discarding the excess is the lesser evil, and it is counted rather than hidden."""
+    from sio_ingest.connectors.base import ConnectorConfig
+    from sio_ingest.connectors.simulator import SimulatorConnector
+
+    connector = SimulatorConnector(
+        ConnectorConfig(
+            source_id="sim",
+            kind="simulator",
+            modality=Modality.GPS,
+            rate_hz=10.0,
+            options={"trucks": 1, "people": 0, "drones": 0},
+        )
+    )
+    simulator = connector.simulator
+    before = simulator.elapsed_s
+    simulator.step(min(60.0, SimulatorConnector.MAX_STEP_S))
+    assert simulator.elapsed_s - before <= SimulatorConnector.MAX_STEP_S
+
+
+async def test_the_connector_reports_drift_in_its_health() -> None:
+    """It was invisible for two phases, which is the argument for reporting it."""
+    from sio_ingest.connectors.base import ConnectorConfig
+    from sio_ingest.connectors.simulator import SimulatorConnector
+
+    connector = SimulatorConnector(
+        ConnectorConfig(
+            source_id="sim",
+            kind="simulator",
+            modality=Modality.GPS,
+            rate_hz=4.0,
+            options={"trucks": 1, "people": 0, "drones": 0},
+        )
+    )
+    assert "drift" in await connector.health()
+
+    # Force the clock behind: wall time advances, simulated time does not.
+    connector.simulator.wall_started_at -= 30.0
+    degraded = await connector.health()
+    assert degraded.startswith("degraded"), degraded
+    assert "clock behind" in degraded
