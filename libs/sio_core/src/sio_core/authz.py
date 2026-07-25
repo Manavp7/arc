@@ -256,6 +256,29 @@ POLICY: tuple[Rule, ...] = (
         description="GraphQL queries over the world model; read parity with the REST surface",
     ),
     Rule(
+        "mission.read",
+        roles=("viewer", "operator", "analyst", "commander", "admin"),
+        description="Reading missions, their objectives, progress and comms log",
+    ),
+    Rule(
+        "mission.write",
+        roles=("operator", "commander", "admin"),
+        description=(
+            "Creating missions, adding objectives, and appending to the comms log. Wider than most write "
+            "rules because a mission is the one object a human owns — an operator running an operation "
+            "should not need a commander to write it down"
+        ),
+    ),
+    Rule(
+        "mission.assign",
+        roles=("commander", "admin"),
+        description=(
+            "Committing a resource to a mission, and moving a mission through its lifecycle. Narrower than "
+            "mission.write: assigning a drone decides where a physical thing goes, and starting a mission "
+            "arms the objectives that will dispatch it"
+        ),
+    ),
+    Rule(
         "integration.write",
         roles=("integrator", "admin"),
         description=(

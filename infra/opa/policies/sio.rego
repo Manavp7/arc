@@ -4,7 +4,7 @@
 #
 # Hand-editing this file would recreate the exact problem it exists to prevent: two
 # implementations of one policy, drifting, until dev allows what production denies.
-# Generated 2026-07-25 from 29 rules.
+# Generated 2026-07-25 from 32 rules.
 
 package sio.authz
 
@@ -55,6 +55,9 @@ known_action if input.action == "events.read"
 known_action if input.action == "alerts.read"
 known_action if input.action == "copilot.ask"
 known_action if startswith(input.action, "graphql.")
+known_action if input.action == "mission.read"
+known_action if input.action == "mission.write"
+known_action if input.action == "mission.assign"
 known_action if input.action == "integration.write"
 known_action if input.action == "integration.read"
 known_action if input.action == "model.write"
@@ -588,6 +591,111 @@ allow if {
 	tenant_matches
 }
 
+# Reading missions, their objectives, progress and comms log
+allow if {
+	authenticated
+	input.action == "mission.read"
+	not startswith(input.action, "admin.")
+	input.action != "policy.write"
+	input.action != "tenant.create"
+	input.action != "decision.approve"
+	input.action != "decision.reject"
+	input.action != "workflow.execute"
+	input.action != "simulation.inject"
+	input.action != "simulation.write"
+	input.action != "pii.view"
+	input.action != "media.raw"
+	input.action != "media.read"
+	input.action != "alerts.write"
+	input.action != "decisions.write"
+	input.action != "agents.write"
+	input.action != "workflow.write"
+	input.action != "timeline.write"
+	input.action != "forecasts.write"
+	input.action != "events.write"
+	input.action != "analytics.read"
+	input.action != "model.read"
+	input.action != "entities.read"
+	input.action != "events.read"
+	input.action != "alerts.read"
+	input.action != "copilot.ask"
+	not startswith(input.action, "graphql.")
+	some role in ["viewer", "operator", "analyst", "commander", "admin"]
+	role in input.principal.roles
+	tenant_matches
+}
+
+# Creating missions, adding objectives, and appending to the comms log. Wider than most write rules because a mission is the one object a human owns — an operator running an operation should not need a commander to write it down
+allow if {
+	authenticated
+	input.action == "mission.write"
+	not startswith(input.action, "admin.")
+	input.action != "policy.write"
+	input.action != "tenant.create"
+	input.action != "decision.approve"
+	input.action != "decision.reject"
+	input.action != "workflow.execute"
+	input.action != "simulation.inject"
+	input.action != "simulation.write"
+	input.action != "pii.view"
+	input.action != "media.raw"
+	input.action != "media.read"
+	input.action != "alerts.write"
+	input.action != "decisions.write"
+	input.action != "agents.write"
+	input.action != "workflow.write"
+	input.action != "timeline.write"
+	input.action != "forecasts.write"
+	input.action != "events.write"
+	input.action != "analytics.read"
+	input.action != "model.read"
+	input.action != "entities.read"
+	input.action != "events.read"
+	input.action != "alerts.read"
+	input.action != "copilot.ask"
+	not startswith(input.action, "graphql.")
+	input.action != "mission.read"
+	some role in ["operator", "commander", "admin"]
+	role in input.principal.roles
+	tenant_matches
+}
+
+# Committing a resource to a mission, and moving a mission through its lifecycle. Narrower than mission.write: assigning a drone decides where a physical thing goes, and starting a mission arms the objectives that will dispatch it
+allow if {
+	authenticated
+	input.action == "mission.assign"
+	not startswith(input.action, "admin.")
+	input.action != "policy.write"
+	input.action != "tenant.create"
+	input.action != "decision.approve"
+	input.action != "decision.reject"
+	input.action != "workflow.execute"
+	input.action != "simulation.inject"
+	input.action != "simulation.write"
+	input.action != "pii.view"
+	input.action != "media.raw"
+	input.action != "media.read"
+	input.action != "alerts.write"
+	input.action != "decisions.write"
+	input.action != "agents.write"
+	input.action != "workflow.write"
+	input.action != "timeline.write"
+	input.action != "forecasts.write"
+	input.action != "events.write"
+	input.action != "analytics.read"
+	input.action != "model.read"
+	input.action != "entities.read"
+	input.action != "events.read"
+	input.action != "alerts.read"
+	input.action != "copilot.ask"
+	not startswith(input.action, "graphql.")
+	input.action != "mission.read"
+	input.action != "mission.write"
+	some role in ["commander", "admin"]
+	role in input.principal.roles
+	tenant_matches
+}
+
 # Registering connectors and webhooks. Narrow on purpose: creating a webhook points this platform's data at an external URL, which is a data-egress decision rather than an operational one
 allow if {
 	authenticated
@@ -617,6 +725,9 @@ allow if {
 	input.action != "alerts.read"
 	input.action != "copilot.ask"
 	not startswith(input.action, "graphql.")
+	input.action != "mission.read"
+	input.action != "mission.write"
+	input.action != "mission.assign"
 	some role in ["integrator", "admin"]
 	role in input.principal.roles
 	tenant_matches
@@ -651,6 +762,9 @@ allow if {
 	input.action != "alerts.read"
 	input.action != "copilot.ask"
 	not startswith(input.action, "graphql.")
+	input.action != "mission.read"
+	input.action != "mission.write"
+	input.action != "mission.assign"
 	input.action != "integration.write"
 	some role in ["integrator", "admin", "commander"]
 	role in input.principal.roles
@@ -686,6 +800,9 @@ allow if {
 	input.action != "alerts.read"
 	input.action != "copilot.ask"
 	not startswith(input.action, "graphql.")
+	input.action != "mission.read"
+	input.action != "mission.write"
+	input.action != "mission.assign"
 	input.action != "integration.write"
 	input.action != "integration.read"
 	some role in ["ml_engineer", "admin"]
@@ -722,6 +839,9 @@ allow if {
 	input.action != "alerts.read"
 	input.action != "copilot.ask"
 	not startswith(input.action, "graphql.")
+	input.action != "mission.read"
+	input.action != "mission.write"
+	input.action != "mission.assign"
 	input.action != "integration.write"
 	input.action != "integration.read"
 	input.action != "model.write"

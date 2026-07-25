@@ -32,6 +32,7 @@ dependencies = [
     "sio-simulation",
     "sio-analytics",
     "sio-webhooks",
+    "sio-missions",
 ]
 
 [tool.uv]
@@ -63,6 +64,7 @@ sio-governance = { workspace = true }
 sio-simulation = { workspace = true }
 sio-analytics = { workspace = true }
 sio-webhooks = { workspace = true }
+sio-missions = { workspace = true }
 
 [dependency-groups]
 dev = [

@@ -21,6 +21,7 @@ members = [
     "sio-governance",
     "sio-ingest",
     "sio-mcp",
+    "sio-missions",
     "sio-perception",
     "sio-prediction",
     "sio-schemas",
@@ -3366,6 +3367,7 @@ dependencies = [
     { name = "sio-governance" },
     { name = "sio-ingest" },
     { name = "sio-mcp" },
+    { name = "sio-missions" },
     { name = "sio-perception" },
     { name = "sio-prediction" },
     { name = "sio-schemas" },
@@ -3402,6 +3404,7 @@ requires-dist = [
     { name = "sio-governance", editable = "services/governance" },
     { name = "sio-ingest", editable = "services/ingest" },
     { name = "sio-mcp", editable = "services/mcp" },
+    { name = "sio-missions", editable = "services/missions" },
     { name = "sio-perception", editable = "services/perception" },
     { name = "sio-prediction", editable = "services/prediction" },
     { name = "sio-schemas", editable = "libs/sio_schemas" },
@@ -3707,6 +3710,21 @@ requires-dist = [
     { name = "sio-core", editable = "libs/sio_core" },
     { name = "sio-schemas", editable = "libs/sio_schemas" },
     { name = "uvicorn", specifier = ">=0.30" },
+]
+
+[[package]]
+name = "sio-missions"
+version = "0.1.0"
+source = { editable = "services/missions" }
+dependencies = [
+    { name = "sio-core" },
+    { name = "sio-schemas" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "sio-core", editable = "libs/sio_core" },
+    { name = "sio-schemas", editable = "libs/sio_schemas" },
 ]
 
 [[package]]

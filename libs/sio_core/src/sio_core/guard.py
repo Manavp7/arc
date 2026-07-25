@@ -51,6 +51,7 @@ log = get_logger("sio.guard")
 #: to extend, and a forgotten entry is an unenforced endpoint that looks enforced — the worst of both.
 RESOURCE_PREFIXES: tuple[tuple[str, str], ...] = (
     # Longest first: `/api/spatial` must be tested before `/api`.
+    ("/api/missions", "mission"),
     ("/api/webhooks", "integration"),
     ("/api/analytics", "analytics"),
     ("/api/simulations", "simulation"),
@@ -78,6 +79,9 @@ RESOURCE_PREFIXES: tuple[tuple[str, str], ...] = (
     # not by using the console, which is the better order.
     # Service-local read surfaces. Each is a diagnostic view over data the platform already exposes
     # through the API, so each is governed as a read of the same noun rather than getting a noun of its own.
+    # A mission is the one object a HUMAN owns, so its gate is wider than the machine-first surfaces: an
+    # operator may run one. Committing a resource is narrower — see `mission.assign`.
+    ("/missions", "mission"),
     # Webhooks are integration surface: creating one sends this platform's data to an external URL, which is
     # the `integrator` role's job and nobody else's.
     ("/webhooks", "integration"),
@@ -137,6 +141,11 @@ ACTION_SUFFIXES: tuple[tuple[str, str], ...] = (
     ("/inject", "simulation.inject"),
     ("/inject/fire", "simulation.inject"),
     ("/inject/power_failure", "simulation.inject"),
+    # Moving a mission through its lifecycle and committing a resource to it both need a commander. Starting a
+    # mission arms objectives that dispatch physical things, and assigning a drone decides where one goes —
+    # neither is the same kind of act as writing the mission down.
+    ("/state", "mission.assign"),
+    ("/resources", "mission.assign"),
 )
 
 _READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})

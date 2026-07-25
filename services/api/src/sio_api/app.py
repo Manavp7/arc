@@ -610,6 +610,138 @@ class ApiService(SioService):
                 request=request,
             )
 
+        # --- missions (M17) --------------------------------------------------------------------
+        # Forwarded rather than reimplemented. The gateway's job is authentication, tenancy and one place to
+        # find everything; duplicating mission logic here would give the platform two answers to "what is this
+        # mission's progress?", and they would diverge.
+        @api.get("/missions", tags=["missions"])
+        async def missions(
+            request: Request, state: str | None = None, limit: int = Query(50, le=200)
+        ) -> Any:
+            return await _forward(
+                "missions",
+                self.settings.missions_port,
+                "/missions",
+                params={"state": state, "limit": limit},
+                request=request,
+            )
+
+        @api.post("/missions", tags=["missions"])
+        async def create_mission(request: Request, body: dict[str, Any]) -> Any:
+            return await _forward(
+                "missions",
+                self.settings.missions_port,
+                "/missions",
+                method="POST",
+                body=body,
+                request=request,
+            )
+
+        @api.get("/missions/{mission_id}", tags=["missions"])
+        async def mission(request: Request, mission_id: str) -> Any:
+            return await _forward(
+                "missions",
+                self.settings.missions_port,
+                f"/missions/{mission_id}",
+                request=request,
+            )
+
+        @api.post("/missions/{mission_id}/state", tags=["missions"])
+        async def mission_state(
+            request: Request,
+            mission_id: str,
+            to: str,
+            by: str | None = None,
+            force: bool = False,
+        ) -> Any:
+            return await _forward(
+                "missions",
+                self.settings.missions_port,
+                f"/missions/{mission_id}/state",
+                params={"to": to, "by": by, "force": force},
+                method="POST",
+                request=request,
+            )
+
+        @api.post("/missions/{mission_id}/resources", tags=["missions"])
+        async def assign_resource(
+            request: Request,
+            mission_id: str,
+            resource_id: str,
+            by: str | None = None,
+            role: str | None = None,
+        ) -> Any:
+            return await _forward(
+                "missions",
+                self.settings.missions_port,
+                f"/missions/{mission_id}/resources",
+                params={"resource_id": resource_id, "by": by, "role": role},
+                method="POST",
+                request=request,
+            )
+
+        @api.delete("/missions/{mission_id}/resources/{resource_id}", tags=["missions"])
+        async def release_resource(
+            request: Request, mission_id: str, resource_id: str, by: str | None = None
+        ) -> Any:
+            return await _forward(
+                "missions",
+                self.settings.missions_port,
+                f"/missions/{mission_id}/resources/{resource_id}",
+                params={"by": by},
+                method="DELETE",
+                request=request,
+            )
+
+        @api.post("/missions/{mission_id}/objectives", tags=["missions"])
+        async def add_objective(request: Request, mission_id: str, body: dict[str, Any]) -> Any:
+            return await _forward(
+                "missions",
+                self.settings.missions_port,
+                f"/missions/{mission_id}/objectives",
+                method="POST",
+                body=body,
+                request=request,
+            )
+
+        @api.post("/missions/{mission_id}/objectives/{objective_id}", tags=["missions"])
+        async def complete_objective(
+            request: Request,
+            mission_id: str,
+            objective_id: str,
+            done: bool = True,
+            by: str | None = None,
+        ) -> Any:
+            return await _forward(
+                "missions",
+                self.settings.missions_port,
+                f"/missions/{mission_id}/objectives/{objective_id}",
+                params={"done": done, "by": by},
+                method="POST",
+                request=request,
+            )
+
+        @api.post("/missions/{mission_id}/comms", tags=["missions"])
+        async def add_comm(request: Request, mission_id: str, body: dict[str, Any]) -> Any:
+            return await _forward(
+                "missions",
+                self.settings.missions_port,
+                f"/missions/{mission_id}/comms",
+                method="POST",
+                body=body,
+                request=request,
+            )
+
+        @api.get("/missions/{mission_id}/replay", tags=["missions"])
+        async def mission_replay(request: Request, mission_id: str) -> Any:
+            """The mission's replay window, ready for `POST /api/replay`."""
+            return await _forward(
+                "missions",
+                self.settings.missions_port,
+                f"/missions/{mission_id}/replay",
+                request=request,
+            )
+
         @api.get("/workflow/vocabulary", tags=["workflow"])
         async def workflow_vocabulary(request: Request) -> Any:
             """What the no-code builder may offer. Forwarded so the editor cannot drift from the engine."""
