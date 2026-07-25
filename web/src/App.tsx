@@ -25,6 +25,7 @@ import { ExplanationDrawer, fromEvent, type Explainable } from "./components/Exp
 import { ForecastPanel } from "./components/ForecastPanel";
 import { LiveMap } from "./components/LiveMap";
 import { MissionsPanel } from "./components/MissionsPanel";
+import { WorkflowBuilderPanel } from "./components/WorkflowBuilderPanel";
 import { Timeline } from "./components/Timeline";
 import { api } from "./lib/api";
 import { connectStream } from "./lib/stream";
@@ -38,7 +39,8 @@ type RailTab =
   | "copilot"
   | "missions"
   | "forecast"
-  | "analytics";
+  | "analytics"
+  | "builder";
 
 /**
  * How recently an entity must have been observed to appear in the live view.
@@ -327,6 +329,7 @@ export default function App() {
                 "missions",
                 "forecast",
                 "analytics",
+                "builder",
               ] as RailTab[]
             ).map(
               (name) => (
@@ -356,6 +359,7 @@ export default function App() {
               {tab === "missions" && <MissionsPanel />}
               {tab === "forecast" && <ForecastPanel />}
               {tab === "analytics" && <AnalyticsPanel />}
+              {tab === "builder" && <WorkflowBuilderPanel />}
             </ErrorBoundary>
           </div>
         </aside>

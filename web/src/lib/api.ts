@@ -255,6 +255,55 @@ export const api = {
   analyticsReport: (hours = 24) =>
     request<{ markdown: string }>(`/analytics/report${query({ hours })}`),
 
+  /**
+   * The no-code builder's vocabulary: what the engine can actually run.
+   *
+   * Fetched rather than hard-coded, because a hard-coded activity list is a UI offering steps the engine will
+   * reject — and the failure arrives on save, after the author thought they were finished.
+   */
+  workflowVocabulary: () =>
+    request<{
+      activities: string[];
+      operators: string[];
+      severities: string[];
+      fields: string[];
+      note: string;
+    }>("/workflow/vocabulary"),
+
+  /**
+   * Validate a draft without saving it.
+   *
+   * Server-side on purpose. Re-implementing the rules in TypeScript would produce two validators that disagree,
+   * and the browser's would be the one people trust.
+   */
+  validateWorkflow: (document: unknown) =>
+    request<{
+      valid: boolean;
+      problems: Array<{ where: string; message: string; fix: string | null }>;
+      execution_order?: string[];
+      compensation_order?: string[];
+    }>("/workflow/authored/validate", {
+      method: "POST",
+      body: JSON.stringify(document),
+    }),
+
+  authoredWorkflows: () =>
+    request<{
+      workflows: unknown[];
+      rejected: Array<{ where: string; message: string; fix: string | null }>;
+    }>("/workflow/authored"),
+
+  saveWorkflow: (name: string, document: unknown) =>
+    request<{ saved: string; path: string; execution_order: string[]; armed: boolean }>(
+      `/workflow/authored/${encodeURIComponent(name)}`,
+      { method: "PUT", body: JSON.stringify(document) },
+    ),
+
+  deleteWorkflow: (name: string) =>
+    request<{ deleted: string }>(`/workflow/authored/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    }),
+
   workflowRuns: (limit = 20) =>
     request<{
       runs: number;

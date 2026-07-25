@@ -610,6 +610,52 @@ class ApiService(SioService):
                 request=request,
             )
 
+        @api.get("/workflow/vocabulary", tags=["workflow"])
+        async def workflow_vocabulary(request: Request) -> Any:
+            """What the no-code builder may offer. Forwarded so the editor cannot drift from the engine."""
+            return await _forward(
+                "workflow", self.settings.workflow_port, "/workflow/vocabulary", request=request
+            )
+
+        @api.post("/workflow/authored/validate", tags=["workflow"])
+        async def workflow_validate(request: Request, body: dict[str, Any]) -> Any:
+            """Validate a draft. Called on every edit, so it must be cheap and it must not be cached."""
+            return await _forward(
+                "workflow",
+                self.settings.workflow_port,
+                "/workflow/authored/validate",
+                method="POST",
+                body=body,
+                request=request,
+            )
+
+        @api.get("/workflow/authored", tags=["workflow"])
+        async def workflow_authored(request: Request) -> Any:
+            return await _forward(
+                "workflow", self.settings.workflow_port, "/workflow/authored", request=request
+            )
+
+        @api.put("/workflow/authored/{name}", tags=["workflow"])
+        async def workflow_save(request: Request, name: str, body: dict[str, Any]) -> Any:
+            return await _forward(
+                "workflow",
+                self.settings.workflow_port,
+                f"/workflow/authored/{name}",
+                method="PUT",
+                body=body,
+                request=request,
+            )
+
+        @api.delete("/workflow/authored/{name}", tags=["workflow"])
+        async def workflow_delete(request: Request, name: str) -> Any:
+            return await _forward(
+                "workflow",
+                self.settings.workflow_port,
+                f"/workflow/authored/{name}",
+                method="DELETE",
+                request=request,
+            )
+
         @api.get("/workflow/playbooks", tags=["workflow"])
         async def workflow_playbooks(request: Request) -> Any:
             return await _forward("workflow", self.settings.workflow_port, "/workflow/playbooks")

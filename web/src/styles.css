@@ -181,19 +181,24 @@ code {
 }
 
 .tabs {
-  /* Six tabs, and they must fit. `flex: 1` alone let the row exceed the rail: the last tab was clipped
-     46px off-screen and gave the entire PAGE a horizontal scrollbar, so clicking it scrolled the app
-     sideways. `min-width: 0` is the part that matters — a flex item will not shrink below its content
-     width without it, however small its flex-basis. */
+  /* `flex: 1` alone let the row exceed the rail: the last tab was clipped 46px off-screen and gave the entire
+     PAGE a horizontal scrollbar, so clicking it scrolled the app sideways. `min-width: 0` is the part that
+     matters — a flex item will not shrink below its content width without it, however small its flex-basis.
+
+     WRAPPING, as of the eighth tab. With eight in one row each gets 45px, and a 10px uppercase label needs
+     47px, so SEVEN of the eight ellipsised: ALERT…, DECISI…, COPIL…, MISSI…, FOREC…, ANALY…, BUILD…. Only
+     "events" fitted. A tab strip where the labels are guesses is worse than one that is two rows tall — and
+     the height change it causes is a one-off at load, not a shift while the operator is reading. */
   display: flex;
+  flex-wrap: wrap;
   border-bottom: 1px solid var(--border);
-  overflow: hidden;
 }
 
 .tab {
-  flex: 1 1 0;
+  /* A basis of 25% gives four per row, so each label has ~89px and none of them truncates. */
+  flex: 1 1 22%;
   min-width: 0;
-  padding: 10px 2px;
+  padding: 9px 2px;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.02em;
@@ -2209,4 +2214,500 @@ code {
 .heatmap-toggle-active {
   border-color: var(--accent);
   color: var(--text);
+}
+/* ---------------------------------------------------------------- workflow builder
+   A form, not a canvas. A drag-and-drop node graph is what "no-code builder" evokes and it would be the wrong
+   thing to build first: the hard part of authoring a workflow is not arranging boxes, it is knowing which
+   activities exist and why the one you wrote will not run.
+
+   The first version of this block was HALF WRITTEN, and a review caught it: the structural rules (step cards,
+   verdict panels, problem lists) all landed, while six class names the panel actually uses — `.primary`,
+   `.ghost`, `.muted`, `.status`, `.hint`, `.panel-header` — had no rules at all. Because the global reset
+   strips `button` to bare text, EVERY button in the panel rendered as a sentence: "Save and arm" did not look
+   clickable, and its disabled state was byte-identical to its enabled one, so a user would click a dead
+   primary CTA repeatedly and get nothing. A missing CSS rule fails silently, which makes it the same class of
+   bug as a missing API field — it looks like a design choice. */
+.workflow-builder {
+  /* Not `overflow-y: auto`: this element is never height-constrained, so that rule was dead code and the real
+     scrolling happens on the ancestor `.rail-body`. Padding at the top instead, because scrolled content was
+     being sliced flush against the tab strip with no gutter. */
+  padding: 0.6rem 0 2.5rem;
+}
+
+.workflow-builder .panel-header {
+  margin-bottom: 0.2rem;
+}
+
+.workflow-builder .panel-header h2 {
+  /* The browser default is 21px bold, which made this by a wide margin the loudest typography in a rail that
+     otherwise runs at 10–13px. */
+  margin: 0 0 0.3rem;
+  font-size: 0.86rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+
+.workflow-builder .hint {
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.builder-section {
+  border-top: 1px solid var(--border);
+  padding: 0.8rem 0;
+}
+
+.builder-section h3 {
+  margin: 0 0 0.6rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.builder-section > label,
+.builder-row > label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+}
+
+.builder-section input[type="text"],
+.builder-section input:not([type]),
+.builder-section input[type="number"],
+.builder-section select {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 0.22rem;
+  padding: 0.34rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 0.78rem;
+}
+
+.builder-section input:focus,
+.builder-section select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.builder-section small {
+  display: block;
+  margin-top: 0.22rem;
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.builder-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.builder-row > label {
+  flex: 1 1 6rem;
+  min-width: 0;
+  margin-bottom: 0.35rem;
+}
+
+/* Three controls do not fit in a 340px rail, and forcing them to was a regression: equal bases left ~68px of
+   usable text inside a select, so `notify_security` rendered as `notify_securit▾`. Six of the eight activity
+   names overflowed. The activity is the single most important fact in a step card, and a value you cannot read
+   back after choosing it is worse than one that wraps.
+
+   So: a narrow id beside a wide activity, and the compensation on its own full-width line. */
+.step-card .builder-row > label.step-id-field {
+  /* Its own full-width line. 5.5rem clipped `notify`-length ids' neighbours, 7rem still clipped
+     `close_and_record` by 6px, and chasing the basis is a losing game: ids are author-chosen, so there is no
+     width that is definitely enough. A full-width row is, and it costs 30px of height in a panel that scrolls. */
+  flex: 1 1 100%;
+}
+
+.step-card .builder-row > label.step-activity-field {
+  flex: 1 1 8rem;
+}
+
+/* Shares the row with the activity now that the id has its own line. Both get ~150px, which is 55px more than
+   the longest option either offers — so nothing truncates and a step card is 60px shorter than three stacked
+   full-width fields. */
+.step-card .builder-row > label.step-undo-field {
+  flex: 1 1 8rem;
+}
+
+.trigger-types {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.45rem 0.55rem 0.3rem;
+  margin: 0 0 0.55rem;
+}
+
+.trigger-types legend {
+  padding: 0 0.3rem;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+
+.builder-section .checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 0 0.6rem 0.3rem 0;
+  font-size: 0.72rem;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.builder-section .checkbox input[type="checkbox"] {
+  display: inline-block;
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.step-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  padding: 0.55rem 0.6rem 0.4rem;
+  margin-bottom: 0.55rem;
+  background: var(--bg-elev);
+}
+
+/* Section 2's three controls formed a three-line stack, because `width: 100%` on the inputs fought
+   `flex-wrap`. Explicit bases, and a label on each — the first version had only placeholders, so the row read
+   as three anonymous boxes. */
+.condition-row {
+  align-items: flex-end;
+  margin-bottom: 0.55rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px dashed var(--border);
+}
+
+.condition-row > label:first-child {
+  flex: 2 1 7rem;
+}
+
+.condition-row > label:nth-child(2) {
+  flex: 0 0 5rem;
+}
+
+/* Full width, on its own line. Its own placeholder advertises `fuel_store, dock_1`, which needs 105px in a
+   103px box — so the case the field exists for was the case it could not show. */
+.condition-row > label:nth-child(3) {
+  flex: 1 1 100%;
+}
+
+.condition-row .problems {
+  flex: 1 1 100%;
+}
+
+.after-picker {
+  flex: 1 1 100%;
+}
+
+/* The label text and the first checkbox collided ("After☑notify"), and a `<label>` containing nested
+   `<label>`s is invalid HTML — clicking the word "After" toggled the first checkbox. Now a `<fieldset>`. */
+.after-picker legend,
+.after-picker > .after-legend {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+}
+
+.after-picker.trigger-types {
+  padding: 0.4rem 0.55rem 0.2rem;
+}
+
+.step-flags {
+  flex: 1 1 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.step-flags .checkbox {
+  /* `align-items: flex-start` so the box sits on the FIRST line of a label that wraps to three, rather than
+     floating beside the middle of the sentence. */
+  align-items: flex-start;
+  flex: 1 1 12rem;
+  line-height: 1.4;
+}
+
+.step-flags .checkbox input[type="checkbox"] {
+  margin-top: 0.12rem;
+}
+
+/* Problems sit next to the field they describe, with the fix visible rather than behind a tooltip — the fix is
+   the half of the message that saves time. */
+.problems {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  font-size: 0.72rem;
+}
+
+.problems li {
+  padding: 0.3rem 0.45rem;
+  margin-bottom: 0.25rem;
+  border-left: 2px solid var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--text);
+  line-height: 1.45;
+}
+
+.problems code {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--danger);
+}
+
+.problem-fix {
+  margin-top: 0.18rem;
+  color: var(--text-dim);
+}
+
+/* A sticky one-LINE bar, not a sticky panel.
+   The verdict SECTION grows with the problem list, and pinning it was a mistake worth recording: a routine
+   mid-edit state with five problems produced a 500px bar filling 56% of the rail, covering the very step cards
+   its messages described — and scrolling could not uncover them, because the bar was pinned. It also made the
+   bottom ~150px of the form unclickable, `elementFromPoint` returning the bar instead of the control.
+
+   One line cannot grow. The CTA stays reachable, the form stays visible, and the full problem list lives in the
+   section above where it can be as long as it needs to be.
+
+   `bottom: -10px` rather than 0 because `.rail-body` has 10px of padding and sticky positioning sticks to the
+   PADDING box — at `bottom: 0` a 10px strip of scrolling content showed through underneath, which read as a
+   stray line drifting below the button. */
+.verdict-bar {
+  position: sticky;
+  bottom: -10px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin: 0.6rem -10px -10px;
+  padding: 0.5rem 10px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--accent);
+  box-shadow: 0 -6px 12px -6px rgb(0 0 0 / 55%);
+  font-size: 0.74rem;
+}
+
+/* The never-wrap guarantee belongs on ALL variants, not just the green one. The first version put it only on
+   `.verdict-bar-ok`, so the invariant that keeps this bar one line was enforced for the message that happened to
+   be short and not for the refusal text, which can be a paragraph. */
+.verdict-bar-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.verdict-bar-ok {
+  color: var(--ok);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+}
+
+.verdict-bar-bad {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* Dim, for the empty state and for "Saving…". An untouched form is not an error, and greeting somebody with the
+   danger colour before they have done anything is how a colour stops meaning anything. */
+.verdict-bar-busy {
+  color: var(--text-dim);
+}
+
+.verdict-bar button.primary {
+  /* No top margin here: the bar centres it. */
+  margin-top: 0;
+  flex-shrink: 0;
+}
+
+.verdict-ok,
+.verdict-bad {
+  padding: 0.5rem 0.6rem;
+  border-radius: 3px;
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.verdict-ok {
+  border-left: 3px solid var(--ok);
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
+}
+
+.verdict-bad {
+  border-left: 3px solid var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.verdict-ok p,
+.verdict-bad p {
+  margin: 0.3rem 0 0;
+}
+
+.verdict-ok code {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  color: var(--warn);
+}
+
+/* Buttons. Every one of these was bare body text before, because the global reset strips `button` and this
+   panel's classes had no rules. */
+.workflow-builder button.primary {
+  margin-top: 0.7rem;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.workflow-builder button.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+.workflow-builder button.primary:disabled {
+  /* Visibly dead. The first version's disabled state was byte-identical to its enabled one — same colour,
+     opacity 1, still `cursor: pointer` — so a user would click a dead CTA repeatedly and get nothing back. */
+  border-color: var(--border);
+  background: none;
+  color: var(--text-dim);
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.workflow-builder button.ghost {
+  padding: 0.24rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: none;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.workflow-builder button.ghost:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* Destructive actions read as destructive. `delete` was the only irreversible control in the panel and was
+   pixel-identical to `edit` sitting next to it. */
+.workflow-builder button.ghost.danger:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.workflow-builder .status {
+  margin: 0.5rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+/* Coloured by OUTCOME. The first version painted every message in the success green, including the six that
+   are failures — "could not load the vocabulary", "refused", "could not delete". An error dressed as a success
+   is worse than an unstyled one, because the colour is what people read before the words. */
+.workflow-builder .status-ok {
+  color: var(--ok);
+}
+
+.workflow-builder .status-bad {
+  color: var(--danger);
+}
+
+.workflow-builder .status-busy {
+  color: var(--text-dim);
+}
+
+.workflow-builder .status code {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  /* Inherits the status green rather than the verdict amber: same typeface, but the colour still says which
+     message you are reading. */
+  color: inherit;
+}
+
+.workflow-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.workflow-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.76rem;
+}
+
+.workflow-list li > div:last-child {
+  display: flex;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+
+.workflow-list strong {
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* `.muted` rendered at full `--text` brightness, identical to the bold name beside it, so the Armed workflows
+   list had no visual hierarchy at all. */
+.workflow-builder .muted {
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  font-weight: 400;
+}
+
+.workflow-list p.muted {
+  margin: 0.25rem 0 0;
+  line-height: 1.4;
+  /* Italic, so the prose description is distinguishable from the trigger summary above it. Both were
+     `.muted` at the same size, so they read as one two-sentence dim block rather than two kinds of fact. */
+  font-style: italic;
+}
+
+/* Own line, so a wrap can never leave a leading `·` at the start of a line looking like a bullet. */
+.workflow-list .workflow-meta {
+  display: block;
+  margin-top: 0.15rem;
+}
+
+.workflow-builder .footnote {
+  margin-top: 1rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.68rem;
+  font-style: italic;
+  line-height: 1.45;
+  color: var(--text-dim);
 }
