@@ -23,6 +23,12 @@ from sio_schemas import Forecast, ForecastPoint
 from .forecasters import Backtest, ForecastResult, backtest, forecast_series
 from .series import GapPolicy, Series
 
+#: Fraction of a known physical range at which an interval stops carrying information.
+#:
+#: 0.8 rather than 1.0 because the degeneracy is gradual: a 90 % interval covering 80 % of everything a
+#: battery can hold is already useless for deciding whether to recall a drone.
+UNINFORMATIVE_FRACTION = 0.8
+
 log = get_logger("sio.prediction.targets")
 
 
@@ -173,12 +179,20 @@ class TargetForecast:
         )
         if self.backtest_result is not None:
             coverage = self.backtest_result.coverage
+            # 100% coverage of a nominal 90% interval is not a good score. It means the interval is far
+            # wider than it needs to be, and reading it as accuracy is exactly backwards — the panel was
+            # presenting "contained the truth 100% of the time" as a virtue directly above a band spanning
+            # a battery's entire range.
+            over_wide = coverage >= 0.99 and self.backtest_result.level <= 0.95
             explanation.add_note(
                 f"on held-out data the {self.backtest_result.level:.0%} interval contained the truth "
                 f"{coverage:.0%} of the time over {self.backtest_result.folds} folds "
                 f"(MAE {self.backtest_result.mae:.3g})"
                 + (
-                    ""
+                    " — which is MORE than asked for, meaning the interval is wider than it needs to be, "
+                    "not that the forecast is accurate"
+                    if over_wide
+                    else ""
                     if self.backtest_result.calibrated
                     else " — NOT calibrated, treat with caution"
                 )
@@ -209,6 +223,41 @@ class TargetForecast:
             explanation=explanation.build(),
         )
 
+    def _interval_is_uninformative(self, point: ForecastPoint) -> bool:
+        """Whether the interval has widened until it says nothing.
+
+        Judged against the physical range when one is known — a battery is 0-100, so a band of 0-100 has
+        exactly zero information content — and otherwise against the spread of the history, because an
+        interval several times wider than everything ever observed is not a prediction either.
+        """
+        if point.lo is None or point.hi is None:
+            return False
+        width = point.hi - point.lo
+        if self.spec.max_value is not None:
+            floor = 0.0 if self.spec.non_negative else min(self.series.values, default=0.0)
+            domain = self.spec.max_value - floor
+            if domain > 0 and width >= domain * UNINFORMATIVE_FRACTION:
+                return True
+        observed = self.series.values
+        if len(observed) >= 4:
+            spread = max(observed) - min(observed)
+            level = abs(observed[-1])
+            # The spread rule applies only when the spread MEANS something.
+            #
+            # This is the second time the same mistake has appeared in this codebase, so it is worth naming:
+            # a threshold computed as a multiple of a near-zero quantity is not a threshold. The first
+            # instance made a two-events-where-there-are-normally-none anomaly into a two-million-sigma
+            # event; this one flagged a perfectly reasonable ±4 interval as uninformative because a steady
+            # battery had varied by 0.2 over the whole window, and 4 is more than ten times 0.2.
+            #
+            # So a flat series is judged on its physical range (above) and not on its own lack of variation.
+            meaningful = spread > max(level * 0.02, 1e-6)
+            # Ten times the observed range. Generous on purpose: a genuinely uncertain forecast should be
+            # allowed to be wide, and only the degenerate case is called out.
+            if meaningful and width > spread * 10:
+                return True
+        return False
+
     def _summary(self, points: list[ForecastPoint] | None = None) -> str:
         """Describe the forecast, from the SAME points the forecast carries.
 
@@ -228,6 +277,20 @@ class TargetForecast:
         elif end.value < last * 0.85 - 0.01:
             direction = "falling"
         where = f" in {self.zone_id}" if self.zone_id else ""
+        if self._interval_is_uninformative(end):
+            # A band covering the whole plausible range is not a forecast, it is a restatement of the
+            # variable's definition. Observed in the running system: "battery steady: 88.1 now, 88.1
+            # predicted in 20 min (0 to 100 at 90%)" — the central estimate was good to about 2 and the
+            # interval printed beside it spanned every value a battery can hold.
+            #
+            # Saying so is the only honest option. Quietly narrowing the band would be inventing
+            # confidence, and printing it without comment invites a decision the data cannot support.
+            return (
+                f"{self.spec.target}{where} {direction}: {last:.3g} now, {end.value:.3g} predicted in "
+                f"{minutes:.0f} min — but the {self.result.interval_level:.0%} interval spans "
+                f"{end.lo:.3g} to {end.hi:.3g}, effectively the whole range, so treat the direction "
+                f"rather than the number"
+            )
         return (
             f"{self.spec.target}{where} {direction}: {last:.3g} now, "
             f"{end.value:.3g} predicted in {minutes:.0f} min "

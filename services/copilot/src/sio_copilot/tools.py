@@ -438,6 +438,11 @@ class ToolBelt:
         if error:
             return ToolResult(name="list_entities", ok=False, error=error, source=self.api_url)
         rows = data or []
+        requested = min(int(arguments.get("limit", 50)), 100)
+        # A count that hit its own limit is a floor, not a total. Saying "28 entities are on site" when the
+        # query stopped at 28 is a confident false statement, and the model will repeat it verbatim — it has
+        # no way to know the list was truncated unless told.
+        capped = len(rows) >= requested
         return ToolResult(
             name="list_entities",
             ok=True,
@@ -445,6 +450,8 @@ class ToolBelt:
             evidence=[row.get("entity_id", "") for row in rows[:10]],
             brief={
                 "count": len(rows),
+                "count_is_at_least": capped,
+                "counting": "moving entities seen in the last 5 minutes, excluding fixed infrastructure",
                 "by_type": _counted(row.get("type") for row in rows),
                 "examples": [row.get("label") or row.get("entity_id") for row in rows[:5]],
             },

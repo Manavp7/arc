@@ -195,8 +195,22 @@ export default function App() {
   const setZones = useSioStore((state) => state.setZones);
   const alerts = useSioStore((state) => state.alerts);
   const unresolvedAlerts = useMemo(() => openAlerts(alerts), [alerts]);
-  const liveCount = useSioStore((state) => state.entities.size);
-  const historyCount = useSioStore((state) => state.historyEntities.size);
+  // Movers only, matching what the copilot counts.
+  //
+  // These disagreed: the header said "58 entities" (everything, including cameras, gates and docks) while
+  // the copilot answered "28 entities on site" for the same moment, because it excludes fixed
+  // infrastructure. Two parts of one product giving different answers to "how many things are here" is
+  // corrosive out of all proportion to the size of the bug — the user cannot tell which to believe, so
+  // they believe neither.
+  //
+  // The copilot's definition is the right one: a camera is not ON the site, it IS the site.
+  const liveCount = useSioStore(
+    (state) => [...state.entities.values()].filter((entity) => !entity.is_static).length,
+  );
+  // Same definition during replay, so the number does not change meaning when scrubbing.
+  const historyCount = useSioStore(
+    (state) => [...state.historyEntities.values()].filter((entity) => !entity.is_static).length,
+  );
   const scrubbing = useSioStore((state) => state.replayAt !== null);
   const entityCount = scrubbing ? historyCount : liveCount;
 
@@ -255,7 +269,9 @@ export default function App() {
           SIO <span>Spatial Intelligence OS</span>
         </h1>
         <div className="topbar-right">
-          <span className="stat">{entityCount} entities</span>
+          <span className="stat" title="Moving entities seen in the last 5 minutes — fixed infrastructure is not counted">
+            {entityCount} entities
+          </span>
           <span className="stat">{unresolvedAlerts.length} open alerts</span>
           <ConnectionBadge />
         </div>

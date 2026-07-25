@@ -686,3 +686,108 @@ def test_a_straight_runner_gets_a_tighter_cone_than_one_mid_turn() -> None:
     turning = predict_trajectory("b", Kinematics(**common, turn_rate_deg_s=8.0), horizon_s=40.0)
     assert straight.final_sigma_m < turning.final_sigma_m
     assert straight.confidence() > turning.confidence()
+
+
+def _battery_forecast(*, lo: float, hi: float, coverage: float = 0.9) -> TargetForecast:
+    """A battery forecast with a chosen interval width, for testing how it is described."""
+    from datetime import UTC, datetime, timedelta
+
+    from sio_prediction.forecasters import Backtest, ForecastPoint, ForecastResult
+    from sio_prediction.series import Series
+    from sio_prediction.targets import SPECS, TargetForecast
+
+    spec = SPECS["battery"]
+    start = datetime(2026, 7, 25, 8, 0, tzinfo=UTC)
+    # A steady, believable history: the central estimate is easy, only the interval is in question.
+    values = [88.0 + 0.1 * (index % 3) for index in range(60)]
+    series = Series(
+        name="battery",
+        start=start,
+        bucket_s=30.0,
+        values=tuple(values),
+    )
+    points = [
+        ForecastPoint(ts=start + timedelta(seconds=30 * (60 + step)), value=88.1, lo=lo, hi=hi)
+        for step in range(40)
+    ]
+    return TargetForecast(
+        spec=spec,
+        series=series,
+        result=ForecastResult(points=points, model_name="autoets", interval_level=0.9),
+        backtest_result=Backtest(
+            series="battery",
+            model_name="autoets",
+            level=0.9,
+            folds=4,
+            coverage=coverage,
+            mae=2.25,
+            mean_interval_width=hi - lo,
+            notes=[],
+        ),
+        entity_id="gps-drone-0018",
+    )
+
+
+# --- intervals that say nothing -----------------------------------------------------------------
+def test_an_interval_covering_the_whole_range_admits_it() -> None:
+    """The forecast the running system produced, verbatim:
+
+        battery steady: 88.1 now, 88.1 predicted in 20 min (0 to 100 at 90%)
+
+    The central estimate was good to about 2 (measured MAE 2.25) and the interval printed beside it spanned
+    every value a battery can physically hold. A band like that is not a forecast, it is a restatement of
+    the variable's definition — and presenting it without comment invites a decision the data cannot
+    support.
+
+    Quietly narrowing it would be inventing confidence, so the summary says so instead.
+    """
+    from sio_prediction.targets import UNINFORMATIVE_FRACTION
+
+    assert 0 < UNINFORMATIVE_FRACTION <= 1.0
+    forecast = _battery_forecast(lo=0.0, hi=100.0)
+    summary = forecast._summary()
+    assert "whole range" in summary
+    assert "treat the direction rather than the number" in summary
+
+
+def test_a_useful_interval_is_reported_normally() -> None:
+    """The fix must not label every forecast uninformative."""
+    forecast = _battery_forecast(lo=84.0, hi=92.0)
+    summary = forecast._summary()
+    assert "whole range" not in summary
+    assert "88.1" in summary
+
+
+def test_coverage_above_the_nominal_level_is_reported_as_a_problem() -> None:
+    """100% coverage of a nominal 90% interval is not a good score.
+
+    It means the interval is far wider than it needs to be, and the panel was presenting "contained the
+    truth 100% of the time" as a virtue directly above a band spanning a battery's entire range.
+    """
+    from datetime import UTC, datetime
+
+    forecast = _battery_forecast(lo=0.0, hi=100.0, coverage=1.0)
+    notes = forecast.to_forecast(
+        tenant_id="acme", made_at=datetime(2026, 7, 25, 8, 30, tzinfo=UTC)
+    ).explanation.notes
+    coverage_note = next(note for note in notes if "contained the truth" in note)
+    assert "MORE than asked for" in coverage_note
+    assert "wider than it needs to be" in coverage_note
+
+
+def test_a_flat_series_is_not_called_uninformative_for_being_flat() -> None:
+    """The same degenerate-denominator mistake, caught a second time.
+
+    A threshold computed as a multiple of a near-zero quantity is not a threshold. The first instance of
+    this made "two events where there are normally none" into a two-million-sigma anomaly; this one flagged
+    a perfectly reasonable ±4 battery interval as uninformative, because a steady battery had varied by 0.2
+    across the whole window and 4 is more than ten times 0.2.
+
+    A flat series is judged on its physical range, not on its own lack of variation.
+    """
+    forecast = _battery_forecast(lo=84.0, hi=92.0)
+    assert not forecast._interval_is_uninformative(forecast.points[-1])
+    # And the degenerate case is still caught.
+    assert _battery_forecast(lo=0.0, hi=100.0)._interval_is_uninformative(
+        _battery_forecast(lo=0.0, hi=100.0).points[-1]
+    )
