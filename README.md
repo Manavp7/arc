@@ -113,11 +113,29 @@ docs/              PRD, architecture, deployment, governance, GPU swap, models, 
 | 1 | Skeleton that boots: ingest simulator → api → live map | **done** |
 | 2 | Perception → tracking → fusion → world model + semantic search | **done** |
 | 3 | Spatial engine, events + anomalies, forecasting, timeline replay | **done** |
-| 4 | Copilot + MCP, workflows, decisions, agents, alerts → **demo ships here** | all but alerts + UI panels **done** |
+| 4 | Copilot + MCP, workflows, decisions, agents, alerts, the console panels | **done** |
+| 4.7 | **Ship checkpoint** — `just demo`, `docs/DEMO.md`, quickstart re-verified, e2e smoke | **done** |
 | 5 | Governance enforced: authn/authz, PII redaction, audit, multi-tenancy | — |
 | 6 | Simulation, mission control, analytics, developer platform (SDKs/webhooks/plugins) | — |
 | 7 | Real connectors (RTSP/STAC/MAVLink/MQTT), 3D twin, GPU/production overlay | — |
 | 8 | Evaluation harnesses (mAP/HOTA/copilot), performance benchmarks, docs | — |
+
+## Known limitations
+
+Stated deliberately, because a reader who discovers these for themselves reasonably assumes they were
+missed. Each is a choice with a reason.
+
+| | |
+|---|---|
+| **The yard is simulated.** | Real connectors (RTSP, MQTT, MAVLink, STAC) sit behind the same ports, but the demo drives a physics simulation so the incident is reproducible and the perception path still runs on genuinely rendered frames. |
+| **Playbook steps are dry-run by default.** | They record what they *would* have done. A workflow engine that can only be exercised by actually closing a gate is one nobody exercises. `SIO_WORKFLOW_DRY_RUN=false` to arm it. |
+| **Fire detection is a colour-and-motion heuristic.** | It runs on the real rendered camera frames, so the detection is genuine; the detector is simple. A trained model drops in behind the same port. |
+| **The copilot is a 3 B local model.** | 95 % tool selection and 81 % argument accuracy on this repo's own 25-question fixture (`docs/MODELS.md` has the numbers and the four models that lost). Restraint — not calling a tool for "hello" — is handled in code, because the best candidate still queried the database to answer a greeting one in three times. |
+| **Keycloak and OPA are optional.** | The dev default is a signed local JWT and a permissive policy, both tested. Production wiring is documented, not demonstrated. Phase 5 enforces it. |
+| **Single tenant in the demo.** | Every table and query is tenant-scoped; the demo runs one. |
+| **Forecast intervals can be too wide to act on.** | The prediction service says so rather than narrowing them, which would be inventing confidence. A summary reading "effectively the whole range" is the system being honest, not broken. |
+| **No list virtualisation in the console.** | The event feed and alert inbox render a capped window and state the total. Fine at demo scale, a real cost at ten thousand rows. |
+| **macOS is the supported target.** | Linux (Ubuntu 24.04+) is verified in CI. Windows is not addressed. |
 
 ## Licence
 
