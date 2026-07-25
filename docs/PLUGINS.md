@@ -95,8 +95,9 @@ make. The contract lives in `sio_core.connector` precisely so you do not have to
 from sio_core.connector import Connector, ConnectorConfig
 from sio_schemas import Geo, Modality, Observation, utc_now
 
+
 class TideGaugeConnector(Connector):
-    kind = "tide_gauge"          # what a deployment writes in .sio/plugins.json
+    kind = "tide_gauge"  # what a deployment writes in .sio/plugins.json
     modality = Modality.IOT
 
     async def observations(self):
@@ -108,7 +109,7 @@ class TideGaugeConnector(Connector):
                 ts=utc_now(),
                 geo=Geo(lat=self.lat, lon=self.lon),
                 confidence=0.95,
-                payload={"water_level_m": 2.4},   # reachable as payload.water_level_m
+                payload={"water_level_m": 2.4},  # reachable as payload.water_level_m
             )
             await asyncio.sleep(self.interval_s)
 ```
@@ -159,8 +160,8 @@ def tide_flood_warning() -> dict:
         "id": "tide_flood_warning",
         "emits": "anomaly_detected",
         "severity": "high",
-        "kinds": ("observation",),                                   # see pitfall 1
-        "when": [{"field": "payload.water_level_m", "op": ">=", "value": 1.5}],   # see pitfall 2
+        "kinds": ("observation",),  # see pitfall 1
+        "when": [{"field": "payload.water_level_m", "op": ">=", "value": 1.5}],  # see pitfall 2
         "cooldown_seconds": 1200.0,
         "cooldown_key": ("source_id",),
         "explanation": "The gauge reported a level above the warning threshold.",
