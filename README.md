@@ -57,6 +57,7 @@ Cleaning up: `just stop` (processes) and `just clean` (all local state under `.s
 
 | Layer | Modules |
 |---|---|
+| **Analytics** | dwell/throughput/utilisation with their distribution *shape* named, an explainable risk index, H3 heatmaps aggregated server-side for privacy, Markdown reports, provisioned Grafana dashboards |
 | **What-if** | counterfactual projections seeded from the live world: gate closure, dock breakdown, fire spread with wind, flooding, drone battery, route severance |
 | **Copilot & agents** | natural-language interface over the world model, MCP server, autonomous agents with human-on-the-loop approval |
 | **Reasoning & action** | event/CEP engine + anomaly detection, forecasting, what-if simulation, OR-Tools decisions, durable Temporal playbooks, alert intelligence |
@@ -117,7 +118,7 @@ docs/              PRD, architecture, deployment, governance, GPU swap, models, 
 | 4 | Copilot + MCP, workflows, decisions, agents, alerts, the console panels | **done** |
 | 4.7 | **Ship checkpoint** — `just demo`, `docs/DEMO.md`, quickstart re-verified, e2e smoke | **done** |
 | 5 | Governance enforced: authn/authz, PII redaction, immutable audit, multi-tenancy | **done** |
-| 6 | Simulation (M11) **done**; mission control, analytics, developer platform | **in progress** |
+| 6 | Simulation (M11) and analytics (M19) **done**; mission control, developer platform | **in progress** |
 | 7 | Real connectors (RTSP/STAC/MAVLink/MQTT), 3D twin, GPU/production overlay | — |
 | 8 | Evaluation harnesses (mAP/HOTA/copilot), performance benchmarks, docs | — |
 

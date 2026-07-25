@@ -83,6 +83,20 @@ class ProcessSpec:
         return None
 
 
+def service_exists(name: str) -> bool:
+    """Whether a service's package is actually present.
+
+    The process table lists services from the whole roadmap, including ones a later phase will add. Launching
+    a module that does not exist wastes the supervisor's three restart attempts on a `ModuleNotFoundError`,
+    reports the tier as unhealthy, and buries the real startup output under three tracebacks — every single
+    boot.
+
+    Checked against the filesystem rather than by import, because importing a service pulls in its whole
+    dependency graph and this runs before anything is up.
+    """
+    return (REPO_ROOT / "services" / name / "src" / f"sio_{name}").is_dir()
+
+
 def python_service(
     name: str, port: int, tier: int, *, optional: bool = True, args: Sequence[str] = ()
 ) -> ProcessSpec:
@@ -146,6 +160,30 @@ def build_process_table(profile: str, ports: dict[str, int], web_port: int) -> l
         # the bus but not written. Starting it early narrows the window in which a denial goes unrecorded.
     ]
     ingest = python_service("ingest", ports.get("ingest", 8101), 3)
+
+    # Drop services whose package does not exist yet.
+    #
+    # `missions` sits in this table for a phase that has not been built, and every boot spent three restart
+    # attempts on it before giving up — which also made the tier report unhealthy and pushed the real startup
+    # output off the screen. Filtering here means the table can name the whole roadmap without the supervisor
+    # pretending to run it.
+    def present(specs: list[ProcessSpec]) -> list[ProcessSpec]:
+        keep, absent = [], []
+        for spec in specs:
+            if spec.name == "web" or service_exists(spec.name):
+                keep.append(spec)
+            else:
+                absent.append(spec.name)
+        if absent:
+            print(
+                f"  note: not yet built, so not started: {', '.join(sorted(absent))}",
+                flush=True,
+            )
+        return keep
+
+    world_tier = present(world_tier)
+    pipeline_tier = present(pipeline_tier)
+    reasoning_tier = present(reasoning_tier)
 
     if profile == "core":
         return [api, *world_tier[:1], ingest, web]
