@@ -15,12 +15,20 @@ benchmarks informed the candidate list, but they measure a general task and this
 |---|---|---|
 | **selection** | chose the right tool | a wrong tool is a wrong answer, delivered confidently |
 | **arguments** | required arguments present and correct | a right tool with a wrong zone answers a different question |
-| **restraint** | declined to call a tool when none was needed | an eager model poisons every interaction, not just one |
+| **restraint** | declined to call a tool when none was needed | reported, but no longer bet on: see below |
 | **latency** | p50 and p95 per question | the budget is under ten seconds end to end |
 
 Arguments are scored only over cases whose tool was chosen correctly, so one mistake is not
 counted twice. Latency is a gate rather than a term in the score: past ten seconds a model is
 disqualified whatever its accuracy.
+
+**Restraint is measured but weighted lightly (5 %), because the product no longer depends on it.**
+The best candidate still queries the database to answer "Hello" one time in three, and the score
+moved with the prompt rather than being a stable property of the model. So restraint is decided in
+code instead (`agent.conversational_reply`): a greeting is trivially recognisable, and there is no
+version of "hello" whose correct answer involves the world model. Delegating that judgement meant
+accepting a one-in-three chance of an absurd answer to the easiest possible question, on the axis
+where being wrong most damages trust.
 
 Fixture: 25 questions from `services/copilot/src/sio_copilot/evalset.py`, drawn from
 UC1-UC5 plus three restraint cases.
@@ -29,20 +37,17 @@ UC1-UC5 plus three restraint cases.
 
 | model | selection | arguments | restraint | p50 | p95 | overall | usable |
 |---|---|---|---|---|---|---|---|
-| `granite4:3b` | 91% | 85% | 100% | 3,431 ms | 7,516 ms | 0.915 | yes |
-| `qwen3:1.7b` | 86% | 58% | 100% | 2,201 ms | 8,478 ms | 0.834 | no |
-| `qwen2.5:3b` | 73% | 75% | 100% | 2,964 ms | 9,068 ms | 0.786 | no |
-| `llama3.2:3b` | 86% | 84% | 33% | 2,854 ms | 8,628 ms | 0.753 | no |
-| `qwen3:0.6b` | 68% | 67% | 100% | 1,135 ms | 4,290 ms | 0.742 | no |
-| `qwen2.5:1.5b` | 64% | 57% | 100% | 1,524 ms | 5,639 ms | 0.696 | no |
+| `llama3.2:3b` | 95% | 81% | 67% | 2,905 ms | 5,697 ms | 0.904 | yes |
+| `granite4:3b` | 91% | 90% | 67% | 3,879 ms | 7,753 ms | 0.895 | yes |
+| `qwen2.5:3b` | 91% | 80% | 100% | 3,099 ms | 7,057 ms | 0.886 | yes |
 
 ## Decision
 
-**`granite4:3b` is pinned** in `.env.example` as `SIO_LLM_MODEL`.
+**`llama3.2:3b` is pinned** in `.env.example` as `SIO_LLM_MODEL`.
 
-It selects the right tool for 91% of the action cases, fills arguments
-correctly 85% of the time, and stays quiet on 100% of the
-restraint cases, with a p95 of 7,516 ms.
+It selects the right tool for 95% of the action cases, fills arguments
+correctly 81% of the time, and stays quiet on 67% of the
+restraint cases, with a p95 of 5,697 ms.
 
 An exact tag is pinned, never `:latest`. A floating tag means the model can change under a
 deployment without anything in the repository changing, and the first symptom is a copilot that
@@ -52,33 +57,33 @@ has started choosing the wrong tool.
 
 | case | expected | chose | ok | args | ms |
 |---|---|---|---|---|---|
-| `count_trucks` | list_entities | list_entities | yes | yes | 13,062 |
-| `count_people` | list_entities | list_entities | yes | yes | 4,022 |
-| `whats_on_site` | list_entities | list_entities | yes | yes | 2,947 |
-| `anything_unusual` | timeline_replay | list_entities | yes | yes | 2,719 |
-| `fire_check` | semantic_search | semantic_search | yes | yes | 2,830 |
-| `temperature_now` | timeseries_query | timeseries_query | yes | yes | 2,947 |
-| `what_to_do_fire` | propose_decision | run_simulation | NO | no | 3,289 |
-| `simulate_fire` | run_simulation | run_simulation | yes | yes | 3,314 |
-| `camera_last_saw` | graph_query | graph_query | yes | yes | 4,030 |
-| `cameras_covering_gate` | spatial_query | spatial_query | yes | yes | 5,292 |
-| `blind_spots` | spatial_query | spatial_query | yes | no | 6,812 |
-| `describe_entity` | describe_entity | describe_entity | yes | yes | 7,516 |
-| `show_footage` | semantic_search | semantic_search | yes | no | 3,321 |
-| `forecast_occupancy` | timeseries_query | timeseries_query | yes | yes | 4,690 |
-| `drone_battery` | timeseries_query | list_entities | NO | no | 3,431 |
-| `congestion` | timeseries_query | timeseries_query | yes | yes | 3,828 |
-| `ten_minutes_ago` | timeline_replay | timeline_replay | yes | yes | 2,974 |
-| `what_happened` | timeline_replay | timeline_replay | yes | yes | 4,999 |
-| `whats_in_dock3` | spatial_query | list_entities | yes | no | 4,386 |
-| `trucks_within_500m` | spatial_query | spatial_query | yes | yes | 6,296 |
-| `forklifts` | list_entities | list_entities | yes | yes | 2,253 |
-| `speeding` | timeline_replay | list_entities | yes | yes | 2,693 |
-| `greeting` | (none) | (none) | yes | yes | 1,169 |
-| `capabilities` | (none) | (none) | yes | yes | 4,954 |
-| `thanks` | (none) | (none) | yes | yes | 1,789 |
+| `count_trucks` | list_entities | list_entities | yes | yes | 3,104 |
+| `count_people` | list_entities | list_entities | yes | yes | 3,237 |
+| `whats_on_site` | list_entities | list_entities | yes | yes | 3,216 |
+| `anything_unusual` | timeline_replay | list_entities | yes | yes | 2,663 |
+| `fire_check` | semantic_search | semantic_search | yes | no | 2,121 |
+| `temperature_now` | timeseries_query | timeseries_query | yes | yes | 2,617 |
+| `what_to_do_fire` | propose_decision | propose_decision | yes | yes | 5,261 |
+| `simulate_fire` | run_simulation | run_simulation | yes | yes | 3,122 |
+| `camera_last_saw` | graph_query | graph_query | yes | yes | 3,626 |
+| `cameras_covering_gate` | spatial_query | spatial_query | yes | yes | 5,697 |
+| `blind_spots` | spatial_query | spatial_query | yes | yes | 5,478 |
+| `describe_entity` | describe_entity | describe_entity | yes | yes | 1,969 |
+| `show_footage` | semantic_search | semantic_search | yes | no | 2,571 |
+| `forecast_occupancy` | timeseries_query | timeseries_query | yes | no | 4,948 |
+| `drone_battery` | timeseries_query | describe_entity | NO | no | 2,556 |
+| `congestion` | timeseries_query | timeseries_query | yes | yes | 10,410 |
+| `ten_minutes_ago` | timeline_replay | timeline_replay | yes | yes | 2,837 |
+| `what_happened` | timeline_replay | timeline_replay | yes | yes | 2,905 |
+| `whats_in_dock3` | spatial_query | list_entities | yes | no | 3,740 |
+| `trucks_within_500m` | spatial_query | spatial_query | yes | yes | 4,923 |
+| `forklifts` | list_entities | list_entities | yes | yes | 2,072 |
+| `speeding` | timeline_replay | list_entities | yes | yes | 2,825 |
+| `greeting` | (none) | list_entities | NO | no | 2,790 |
+| `capabilities` | (none) | (none) | yes | yes | 1,217 |
+| `thanks` | (none) | (none) | yes | yes | 1,656 |
 
 ### Where it fails
 
-- `what_to_do_fire`: chose run_simulation
-- `drone_battery`: chose list_entities
+- `drone_battery`: chose describe_entity
+- `greeting`: called list_entities when no tool was needed

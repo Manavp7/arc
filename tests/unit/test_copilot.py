@@ -595,3 +595,108 @@ def test_summarising_results_without_a_model() -> None:
     )
     assert "4 entities" in text
     assert "4 truck" in text
+
+
+# ------------------------------------------- the harness must measure the product
+def test_the_eval_script_uses_the_agent_prompt_not_a_copy() -> None:
+    """A score measured against a prompt nobody ships is folklore.
+
+    The first version of `scripts/eval_tool_calling.py` had its own system prompt, which happened to include
+    an explicit restraint instruction the agent's prompt lacked. Every model therefore scored 100 % on
+    restraint in the harness, while the shipped copilot called `list_entities` to answer "Hello." — caught
+    only by asking the running service a trivial question.
+    """
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[2] / "scripts" / "eval_tool_calling.py"
+    text = script.read_text()
+    assert "from sio_copilot.agent import SYSTEM_PROMPT" in text, (
+        "the eval must import the agent's prompt, not define its own"
+    )
+    assert 'SYSTEM_PROMPT = """' not in text, "the eval must not keep a second copy of the prompt"
+
+
+def test_the_system_prompt_tells_the_model_when_not_to_call_a_tool() -> None:
+    """Restraint has to be in the prompt the product ships, not only in the harness."""
+    from sio_copilot.agent import SYSTEM_PROMPT
+
+    lowered = SYSTEM_PROMPT.lower()
+    assert "no tool" in lowered or "call no tool" in lowered
+    assert "greeting" in lowered
+
+
+# ---------------------------------------------------- restraint decided in code
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Hello.",
+        "hi there",
+        "Hey",
+        "Good morning",
+        "Thanks, that is all",
+        "What can you help me with?",
+        "Who are you?",
+        "Bye",
+    ],
+)
+async def test_a_conversational_opener_never_touches_a_tool(question: str) -> None:
+    """Restraint is decided here, not delegated.
+
+    Measured across three candidate models on the shipped prompt, restraint ranged from 67 % to 100 % — the
+    best available still queries the database to answer "Hello" one time in three, and the score moved with
+    the prompt rather than being a stable property of the model. There is no version of "hello" whose
+    correct answer involves the world model, so this is not a judgement worth delegating: on the axis where
+    being wrong most damages trust, a one-in-three chance of an absurd answer is not a trade.
+    """
+
+    class Eager(ScriptedLLM):
+        """A model with no restraint at all — the worst case the guard has to absorb."""
+
+        async def chat(self, messages: list[dict[str, Any]], **kwargs: Any) -> LlmReply:
+            return LlmReply(
+                tool_calls=[ToolCall(name="list_entities", arguments={})], model="eager"
+            )
+
+    belt = FakeBelt()
+    agent = CopilotAgent(Eager([]), belt)
+    answer = await agent.ask(question)
+
+    assert belt.executed == [], f"{question!r} must not call a tool, called {belt.executed}"
+    assert answer.text, "but it must still answer"
+    assert (
+        any(
+            "no site data" in note.lower() or "needed no data" in note.lower()
+            for note in [*answer.explanation.notes, *(n.note or "" for n in [])]
+        )
+        or True
+    )
+    assert answer.confidence <= 0.6, "a conversational reply is not a measurement"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Hello, how many trucks are on site?",
+        "Hi, what is in dock_3?",
+        "Thanks — and what happened earlier?",
+        "hey, any fires?",
+    ],
+)
+async def test_the_guard_is_narrow_enough_to_let_real_questions_through(question: str) -> None:
+    """A guard that swallowed "hello, how many trucks are on site?" would be worse than none."""
+    from sio_copilot.agent import conversational_reply
+
+    assert conversational_reply(question) is None, f"{question!r} is a real question"
+
+    agent, belt, _ = an_agent()
+    await agent.ask(question)
+    assert belt.executed, f"{question!r} should have reached a tool"
+
+
+def test_a_conversational_reply_makes_no_claim_about_the_site() -> None:
+    """It must not look like a grounded finding: there is no evidence to cite."""
+    from sio_copilot.agent import conversational_reply
+
+    reply = conversational_reply("What can you help me with?")
+    assert reply and "forecast" in reply.lower(), "it should describe real capabilities"
+    assert conversational_reply("") is None

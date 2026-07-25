@@ -61,14 +61,13 @@ CANDIDATES = (
     "qwen3:0.6b",
 )
 
-SYSTEM_PROMPT = """You are the operations copilot for a logistics yard monitored by cameras, GPS trackers \
-and IoT sensors.
-
-Rules:
-- Answer using the tools. Never guess a number.
-- Call ONE tool at a time.
-- If the question needs no data — a greeting, or a question about your own capabilities — answer directly \
-and call NO tool."""
+# THE PROMPT THE PRODUCT USES, imported rather than copied.
+#
+# The first version of this script had its own prompt, which happened to contain an explicit restraint
+# instruction the agent's prompt lacked. Every model therefore scored 100 % on restraint here, while the
+# shipped copilot called `list_entities` to answer "Hello." A score measured against a prompt nobody ships
+# is folklore. Importing it means the harness cannot drift from the product, and a unit test asserts it.
+from sio_copilot.agent import SYSTEM_PROMPT  # noqa: E402
 
 
 @dataclass
@@ -133,23 +132,36 @@ class ModelScore:
 
     @property
     def overall(self) -> float:
-        """One number for ranking, weighted by what breaks a product.
+        """One number for ranking, weighted by what the PRODUCT depends on.
 
-        Selection dominates because a wrong tool is a wrong answer. Restraint is weighted almost as
-        heavily as arguments because an eager model poisons every interaction, not just one. Latency is a
-        gate rather than a term: past ten seconds the model is disqualified regardless of accuracy, which
-        is a cliff, not a gradient.
+        Selection dominates, because a wrong tool is a wrong answer and no amount of code around the model
+        can recover from it. Arguments matter next: a right tool with a wrong zone answers a different
+        question, fluently.
+
+        **Restraint is weighted lightly, and that is a deliberate change.** It used to carry a fifth of the
+        score, until measurement showed the best candidate still queries the database to answer "Hello" one
+        time in three — and that the score moved with the prompt rather than being a stable property of the
+        model. Restraint is now decided in code (`agent.conversational_reply`), because a greeting is
+        trivially recognisable and there is no version of "hello" whose right answer involves the world
+        model. It is still reported, because a model with poor restraint is a model to be careful with, but
+        the product no longer bets on it.
+
+        Latency is a gate rather than a term: past ten seconds a model is disqualified whatever its
+        accuracy. That is a cliff, not a gradient.
         """
         if self.error:
             return 0.0
-        score = 0.6 * self.selection + 0.2 * self.arguments + 0.2 * self.restraint
+        score = 0.7 * self.selection + 0.25 * self.arguments + 0.05 * self.restraint
         if self.p95_ms > 10_000:
             score *= 0.5
         return round(score, 4)
 
     @property
     def usable(self) -> bool:
-        """Meets the PRD's bar: >= 90 % selection and a p95 inside the latency budget."""
+        """Meets the PRD's bar: >= 90 % selection and a p95 inside the latency budget.
+
+        Restraint is not in the bar, because the product no longer depends on it — see `overall`.
+        """
         return self.selection >= 0.9 and self.p95_ms <= 10_000 and not self.error
 
     def row(self) -> dict[str, Any]:
@@ -262,12 +274,20 @@ def render_docs(scores: list[ModelScore], *, fixture_size: int) -> str:
         "|---|---|---|",
         "| **selection** | chose the right tool | a wrong tool is a wrong answer, delivered confidently |",
         "| **arguments** | required arguments present and correct | a right tool with a wrong zone answers a different question |",
-        "| **restraint** | declined to call a tool when none was needed | an eager model poisons every interaction, not just one |",
+        "| **restraint** | declined to call a tool when none was needed | reported, but no longer bet on: see below |",
         "| **latency** | p50 and p95 per question | the budget is under ten seconds end to end |",
         "",
         "Arguments are scored only over cases whose tool was chosen correctly, so one mistake is not",
         "counted twice. Latency is a gate rather than a term in the score: past ten seconds a model is",
         "disqualified whatever its accuracy.",
+        "",
+        "**Restraint is measured but weighted lightly (5 %), because the product no longer depends on it.**",
+        'The best candidate still queries the database to answer "Hello" one time in three, and the score',
+        "moved with the prompt rather than being a stable property of the model. So restraint is decided in",
+        "code instead (`agent.conversational_reply`): a greeting is trivially recognisable, and there is no",
+        'version of "hello" whose correct answer involves the world model. Delegating that judgement meant',
+        "accepting a one-in-three chance of an absurd answer to the easiest possible question, on the axis",
+        "where being wrong most damages trust.",
         "",
         f"Fixture: {fixture_size} questions from `services/copilot/src/sio_copilot/evalset.py`, drawn from",
         "UC1-UC5 plus three restraint cases.",

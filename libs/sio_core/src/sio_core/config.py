@@ -262,12 +262,16 @@ class Settings(BaseSettings):
 
     # --- llm / copilot ------------------------------------------------------
     ollama_url: str = "http://127.0.0.1:11434"
-    llm_model: str = "granite4:3b"
+    llm_model: str = "llama3.2:3b"
     """Pinned by measurement, not by reputation — see `docs/MODELS.md`.
 
-    On this repository's own 25-question fixture over its nine tools: 91 % tool selection, 85 % argument
-    accuracy, 100 % restraint, p95 7.5 s. It was not the model published benchmarks pointed at, which is
-    the argument for running the eval: a general benchmark measures a general task.
+    On this repository's own 25-question fixture over its nine tools, using the prompt the product actually
+    ships: 95 % tool selection, 81 % argument accuracy, p95 5.7 s — the best available on tool selection,
+    which is the one axis no amount of surrounding code can recover from.
+
+    Its restraint is only 67 %, and that is deliberately not disqualifying: restraint is decided in code
+    (`agent.conversational_reply`) rather than delegated, because a greeting is trivially recognisable and
+    the best candidate still queried the database to answer "Hello" one time in three.
 
     An EXACT tag, never `:latest`. A floating tag means the model can change under a deployment without
     anything in the repository changing, and the first symptom is a copilot quietly choosing wrong."""

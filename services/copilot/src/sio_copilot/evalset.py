@@ -445,7 +445,14 @@ def scripted_routes() -> list[Route]:
         # one nobody trusts with a real question.
         Route(
             intent="greeting",
-            patterns=(r"^hello", r"^hi\b", r"^hey", r"good (morning|afternoon|evening)"),
+            # ANCHORED AND COMPLETE. "^hello" alone matched "Hello, how many trucks are on site?" and
+            # answered it as a greeting — the same trap the production restraint guard avoids by requiring
+            # the absence of site vocabulary. A fixture that mis-routes is worse than no fixture, because
+            # it passes.
+            patterns=(
+                r"^\s*(hello|hi|hey|yo|howdy)[\s.!]*$",
+                r"^\s*good (morning|afternoon|evening)[\s.!]*$",
+            ),
             answer="Hello. Ask me about what is on site, what happened earlier, or what is forecast.",
         ),
         Route(
@@ -459,7 +466,12 @@ def scripted_routes() -> list[Route]:
         ),
         Route(
             intent="thanks",
-            patterns=(r"thanks", r"thank you", r"that is all", r"that's all"),
+            # Also anchored: "thanks — and what happened earlier?" is a question with a courtesy attached.
+            patterns=(
+                r"^\s*(thanks|thank you|cheers)[\s.!,]*$",
+                r"^\s*(thanks|thank you)[\s,]*that('s| is) (all|it|everything)[\s.!]*$",
+                r"^\s*that('s| is) (all|it|everything)[\s.!]*$",
+            ),
             answer="Any time.",
         ),
         # Broadest last.

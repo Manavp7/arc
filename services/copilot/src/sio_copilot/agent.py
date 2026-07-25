@@ -41,9 +41,20 @@ and IoT sensors.
 Rules:
 - Answer using the tools. Never guess a number: if a tool did not return it, say you do not know.
 - Call ONE tool at a time, then read the result before deciding whether you need another.
+- If the question needs no site data - a greeting, a thank-you, or a question about your own \
+capabilities - answer directly and call NO tool.
 - When you have enough information, answer in two or three sentences, quoting the actual values.
 - Be specific about time: say "in the last 5 minutes" rather than "recently".
 - If a tool failed, say which one and answer with what you do have."""
+"""The prompt the product actually uses.
+
+`scripts/eval_tool_calling.py` imports THIS constant rather than keeping its own copy, and that is not
+tidiness — it is the difference between a measurement and a fiction. The first version of the eval had its
+own prompt containing an explicit restraint instruction that the agent's prompt lacked, so every model
+scored 100 % on restraint in the harness and the shipped copilot called `list_entities` to answer
+"Hello." A score measured against a prompt nobody ships is folklore, and a test now asserts the two
+cannot drift apart.
+"""
 
 SYNTHESIS_PROMPT = """Answer the user's question using only the tool results above.
 
@@ -284,6 +295,89 @@ def route_by_keyword(question: str) -> KeywordRoute | None:
     return None
 
 
+# ---------------------------------------------------------------- restraint guard
+#
+# Conversational openers, handled deterministically BEFORE the model is offered any tools.
+#
+# Measured across three candidates on the shipped prompt, restraint ranged from 67 % to 100 % — that is,
+# the best small model still calls a database query to answer "Hello" one time in three, and the eval
+# showed the score moving with the prompt rather than being a stable property of the model.
+#
+# Restraint is a property this code can simply DECIDE. A greeting is trivially recognisable, and there is
+# no version of "hello" whose correct answer involves querying the world model. Leaving it to the model
+# means accepting a one-in-three chance of an absurd answer to the easiest possible question, on the axis
+# where a wrong answer most damages trust: if the copilot queries the database to say hello, nobody
+# believes it about a fire.
+#
+# Deliberately narrow. It matches only openers with no site vocabulary in them, so "hello, how many trucks
+# are on site?" goes to the model where it belongs.
+CONVERSATIONAL = (
+    r"^\s*(hi|hey|hello|yo|howdy)\b",
+    r"^\s*good (morning|afternoon|evening)\b",
+    r"^\s*(thanks|thank you|cheers|ta)\b",
+    r"^\s*that('s| is) (all|it|everything)\b",
+    r"^\s*(bye|goodbye|see you)\b",
+    r"what can you (do|help)",
+    r"who are you\b",
+    r"what (are|is) your (capabilities|purpose)",
+)
+
+#: Words that mean the question is about the site, so it is never conversational however it opens.
+SITE_VOCABULARY = (
+    "truck",
+    "person",
+    "people",
+    "worker",
+    "forklift",
+    "drone",
+    "vehicle",
+    "entity",
+    "entities",
+    "camera",
+    "zone",
+    "dock",
+    "gate",
+    "yard",
+    "apron",
+    "lane",
+    "warehouse",
+    "site",
+    "temperature",
+    "battery",
+    "fire",
+    "smoke",
+    "event",
+    "alert",
+    "happened",
+    "coverage",
+    "blind",
+    "busy",
+    "many",
+)
+
+CAPABILITIES_ANSWER = (
+    "I can tell you what is on site now, reconstruct any past moment, search recorded camera frames, "
+    "answer spatial questions such as camera coverage and blind spots, report forecasts with their "
+    "intervals, and record a proposed action for you to approve."
+)
+
+
+def conversational_reply(question: str) -> str | None:
+    """A direct answer for an opener that needs no data, or None to let the model decide."""
+    lowered = question.lower().strip()
+    if not lowered:
+        return None
+    if any(word in lowered for word in SITE_VOCABULARY):
+        return None
+    if not any(re.search(pattern, lowered) for pattern in CONVERSATIONAL):
+        return None
+    if re.search(r"what can you (do|help)|who are you|capabilities|purpose", lowered):
+        return CAPABILITIES_ANSWER
+    if re.search(r"thanks|thank you|cheers|\bta\b|that.s (all|it)|bye|goodbye|see you", lowered):
+        return "Any time."
+    return "Hello. Ask me what is on site, what happened earlier, or what is forecast."
+
+
 # ------------------------------------------------------------------------ agent
 class CopilotAgent:
     """Runs one question to an answer."""
@@ -302,6 +396,7 @@ class CopilotAgent:
         self.allow_fallback = allow_fallback
         self.answered = 0
         self.fallbacks = 0
+        self.conversational = 0
 
     async def ask(self, question: str) -> Answer:
         started = time.perf_counter()
@@ -309,6 +404,22 @@ class CopilotAgent:
         # Side-effecting tools check the question themselves. A tool description is guidance a model may
         # ignore; a check in the tool is a control.
         self.belt.question = question
+
+        direct = conversational_reply(question)
+        if direct is not None:
+            # Decided here, not by the model. See the note on CONVERSATIONAL: the best candidate still
+            # queries the database for "Hello" one time in three, and this is not a judgement worth
+            # delegating.
+            trace.add(
+                Step(
+                    index=0,
+                    kind="synthesise",
+                    detail="answered conversationally; no site data was needed",
+                )
+            )
+            self.conversational += 1
+            return self._direct(question, direct, trace, started)
+
         tools = self.belt.by_name()
         specs = [tool.spec for tool in tools.values()]
 
