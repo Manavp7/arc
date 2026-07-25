@@ -13,6 +13,7 @@ from sio_core import MessageContext, PgPool, SioService, get_pg_pool
 from sio_schemas import (
     BusMessage,
     Entity,
+    EntityType,
     Geo,
     Modality,
     Observation,
@@ -27,6 +28,7 @@ from .fuse import (
     SENSOR_SIGMA_M,
     Observation2D,
     SensorFusion,
+    entity_type_for,
     observation_from_gps,
     observation_from_rfid,
 )
@@ -185,6 +187,18 @@ class FusionService(SioService):
         latest = track.latest
         if projector is None or latest is None or latest.bbox is None:
             self._unprojectable += 1
+            return
+
+        if entity_type_for(track.class_name) is EntityType.DRONE:
+            # A monocular camera cannot localise an airborne object. Ground projection assumes the
+            # box's bottom edge touches the ground, so a drone at 35 m altitude is placed at whatever
+            # ground point lies along that ray — tens of metres from where it actually is.
+            #
+            # Live, that fabricated a phantom "Drone EXHGXV" on the map beside the real, GPS-tracked
+            # one. No entity is a better answer than a confident one in the wrong place, so the
+            # camera contributes nothing to an airborne object's position and the count is reported
+            # rather than silently dropped. (Stereo, a second camera's ray, or radar would fix this.)
+            self._airborne_declined += 1
             return
 
         fix = projector.project(latest.bbox)

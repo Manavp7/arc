@@ -33,7 +33,7 @@ from sio_fusion.projection import (
     to_local_metres,
 )
 
-from sio_schemas import BBox, EntityType, Geo, Modality, utc_now
+from sio_schemas import BBox, EntityType, Geo, Modality, Track, TrackState, utc_now
 
 ORIGIN = Geo(lat=37.7749, lon=-122.4194)
 
@@ -605,3 +605,49 @@ def test_a_fleet_number_reads_like_a_fleet_number() -> None:
     assert _fleet_number("tag:TAG-ABC-123") == "123"
     assert _fleet_number("gps:tracker") == "tracker", "nothing to strip: leave it alone"
     assert _fleet_number("gps:a-b") == "a-b", "a two-character tail is not a fleet number"
+
+
+def test_a_camera_must_not_place_an_airborne_object_on_the_ground() -> None:
+    """Ground projection assumes the box's bottom edge touches the ground.
+
+    For a drone at 35 m altitude it does not, so the projected position lands at whatever ground point
+    lies along that ray — tens of metres away. Live, that fabricated a phantom "Drone EXHGXV" on the
+    map beside the real GPS-tracked one. No entity is a better answer than a confident one in the wrong
+    place.
+    """
+    from sio_fusion.projection import CameraCalibration, GroundProjector
+    from sio_fusion.service import FusionService
+
+    assert entity_type_for("drone") is EntityType.DRONE
+    assert entity_type_for("airplane") is EntityType.DRONE, "COCO's name for a quadcopter"
+
+    # Drive the real guard with a hand-built service, no database required.
+    service = FusionService.__new__(FusionService)
+    service.fusion = SensorFusion(ORIGIN)
+    service._unprojectable = 0
+    service._airborne_declined = 0
+    service.projectors = {
+        "cam-yard-east": GroundProjector(
+            CameraCalibration(source_id="cam-yard-east", geo=ORIGIN, bearing_deg=0.0)
+        )
+    }
+
+    def track(class_name: str) -> Track:
+        return Track(
+            track_id=f"trk-{class_name}",
+            tenant_id="acme",
+            source_id="cam-yard-east",
+            **{"class": class_name},
+            confidence=0.8,
+            start_ts=utc_now(),
+            last_ts=utc_now(),
+            states=[TrackState(ts=utc_now(), bbox=BBox(x1=600, y1=400, x2=680, y2=520))],
+        )
+
+    service._observe_track(track("drone"))
+    assert service._airborne_declined == 1
+    assert len(service.fusion.entities) == 0, "no phantom drone on the ground"
+
+    service._observe_track(track("truck"))
+    assert service._airborne_declined == 1, "a ground vehicle is still projected"
+    assert len(service.fusion.entities) == 1
