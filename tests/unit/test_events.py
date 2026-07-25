@@ -912,12 +912,12 @@ def test_a_detection_derived_event_can_be_given_the_cameras_zone() -> None:
     from sio_events.service import EventsService
 
     service = EventsService.__new__(EventsService)
-    service._source_zones = {"cam-dock-3-4": "dock_3"}  # noqa: SLF001
+    service._source_zones = {"cam-dock-3-4": "dock_3"}
 
     fact = a_fact("detection", source_id="cam-dock-3-4", **{"class": "fire"}, confidence=0.6)
     assert fact.zone_id is None, "a detection fact has no zone of its own"
     # The resolution the service performs.
-    resolved = service._source_zones.get(fact.source_id)  # noqa: SLF001
+    resolved = service._source_zones.get(fact.source_id)
     assert resolved == "dock_3"
 
 
@@ -925,5 +925,5 @@ def test_a_sensor_with_no_mapped_zone_yields_no_zone_rather_than_a_guess() -> No
     from sio_events.service import EventsService
 
     service = EventsService.__new__(EventsService)
-    service._source_zones = {"cam-dock-3-4": "dock_3"}  # noqa: SLF001
-    assert service._source_zones.get("cam-unknown") is None  # noqa: SLF001
+    service._source_zones = {"cam-dock-3-4": "dock_3"}
+    assert service._source_zones.get("cam-unknown") is None
