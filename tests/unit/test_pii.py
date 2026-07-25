@@ -43,6 +43,23 @@ PHONE_NUMBERS = [
     "+81 3 1234 5678",
 ]
 
+#: The false positives the live system actually produced, and the shapes behind them.
+#:
+#: These were not caught by the invented corpus below — they came from asking the running copilot a question
+#: about entity counts and reading its response, which announced that "1 ip address, 4 phone" had been
+#: redacted. The four "phone numbers" were the ISO timestamps in its own explanation timeline, and the "ip
+#: address" was the loopback URL in a note saying where the answer came from. The redaction had corrupted the
+#: provenance it was attached to.
+LIVE_FALSE_POSITIVES = [
+    "2026-07-25T11:01:50.645644Z",
+    "queried http://127.0.0.1:8000/api/entities",
+    "seen at 10.0.0.14 internally",
+    "window 2026-07-24 to 2026-07-25",
+    "history spans 2026-07-24T19:24:54 to 2026-07-25T09:06:17",
+    "forecast for 2026-7-4",
+    "version 1.2.3",
+]
+
 #: Real strings this platform produces. Not one character may change.
 #:
 #: Taken from actual output — alert reasons, forecast summaries, decision effects, log lines — rather than
@@ -93,8 +110,14 @@ def test_operational_text_is_left_exactly_alone(text: str) -> None:
 
 
 def test_emails_and_cards_and_plates_are_caught() -> None:
+    """A public IP here, not `10.0.0.14`.
+
+    This test originally used a private address and asserted it was redacted, which encoded the behaviour
+    before the false-positive fix. A private or loopback address identifies infrastructure rather than a
+    person, and redacting one out of an explanation destroys provenance without protecting anybody.
+    """
     result = redact_text(
-        "AB12 CDE seen; bob.smith@example.com paid with 4111 1111 1111 1111 from 10.0.0.14"
+        "AB12 CDE seen; bob.smith@example.com paid with 4111 1111 1111 1111 from 203.0.113.42"
     )
     assert "<EMAIL>" in result.text
     assert "<CREDIT_CARD>" in result.text
@@ -102,6 +125,7 @@ def test_emails_and_cards_and_plates_are_caught() -> None:
     assert "<IP_ADDRESS>" in result.text
     assert "bob.smith" not in result.text
     assert "4111" not in result.text
+    assert "203.0.113" not in result.text
 
 
 def test_a_sensitive_field_is_redacted_whatever_its_value() -> None:
@@ -174,3 +198,54 @@ def test_the_active_detector_is_reported_honestly() -> None:
     installs. The regex path always runs; which detector ran is reported so the claim is qualified.
     """
     assert active_detector() in ("regex", "presidio")
+
+
+# --- the false positives the live system produced -----------------------------------------------
+@pytest.mark.parametrize("text", LIVE_FALSE_POSITIVES)
+def test_the_live_false_positives_are_left_alone(text: str) -> None:
+    """Every one of these was redacted by the shipped patterns, in the running system.
+
+    Two invariants fixed them, and both are properties of the world rather than tuned thresholds:
+
+    * **no phone number has fewer than seven digits**, which rules out "2026-07";
+    * **`YYYY-MM-DD` is a date in every locale**, which rules out "2026-07-24" — eight digits, so the floor
+      alone could not.
+
+    And a loopback or private address identifies infrastructure, not a person. Redacting `127.0.0.1` out of a
+    note that says where an answer came from destroys the provenance without protecting anybody.
+    """
+    assert redact_text(text).text == text
+
+
+def test_a_public_ip_is_still_redacted() -> None:
+    """Excluding private ranges must not exclude the addresses that can identify somebody."""
+    result = redact_text("connection from 203.0.113.42")
+    assert "<IP_ADDRESS>" in result.text
+    assert "203.0.113" not in result.text
+
+
+def test_a_short_digit_run_is_never_a_phone_number() -> None:
+    """Seven digits is not a tuning parameter: it is the shortest phone number that exists."""
+    from sio_core.pii import _MINIMUM_DIGITS
+
+    assert _MINIMUM_DIGITS["PHONE"] == 7
+    assert redact_text("bay 12-34").text == "bay 12-34"
+    assert redact_text("ratio 100-200").text == "ratio 100-200"
+
+
+def test_a_notice_is_not_produced_for_an_operational_answer() -> None:
+    """The harm of a false positive is double.
+
+    It corrupts the text — an explanation with its source URL replaced by `<IP_ADDRESS>` no longer says where
+    the answer came from — and it erodes the notice itself. An operator who sees "personal data was removed"
+    on an answer about truck counts learns to ignore the sentence, and then misses the one that matters.
+    """
+    from sio_core.pii import active_detector, redaction_notice
+
+    answer = (
+        "There are 33 moving entities seen in the last 5 minutes: 12 trucks, 12 people, "
+        "3 forklifts and 2 drones. Queried at 2026-07-25T11:01:50Z."
+    )
+    result = redact_text(answer)
+    assert result.text == answer
+    assert redaction_notice(result.found, active_detector()) is None

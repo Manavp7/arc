@@ -121,6 +121,55 @@ async def wait_for(
     return None
 
 
+async def authenticate(client: httpx.AsyncClient, narration: Narration) -> bool:
+    """Obtain a token, and make the demo's own principal explicit.
+
+    Phase 5 made a principal mandatory, and the demo had none — so it crashed with an AttributeError while
+    iterating a 401 body as though it were a list of zones. Worse, the preflight had already printed
+    "api: ok", because /health is deliberately public: it checked the one endpoint that does not need what
+    the rest of the script needs.
+
+    A commander, because the demo narrates the approval gate and an operator cannot see what a commander
+    would. Explicitly NOT pii_scope: the demo should show the redaction that a real operator sees, not the
+    unredacted view.
+    """
+    narration.beat("Authenticating")
+    try:
+        response = await client.post(
+            f"{API}/auth/dev/token",
+            params={
+                "subject": "demo",
+                "roles": "operator,commander",
+                "clearance": 2,
+                "pii_scope": False,
+            },
+            timeout=10.0,
+        )
+        response.raise_for_status()
+        body = response.json()
+    except httpx.HTTPError as exc:
+        narration.fail(f"could not obtain a token: {type(exc).__name__}")
+        print(
+            f"\n{RED}The demo needs a token and the API would not issue one.{OFF}\n"
+            f"  If SIO_AUTH_MODE is not 'dev', the dev issuer is disabled by design.\n"
+            f"  Either set {BOLD}SIO_AUTH_MODE=dev{OFF} or supply a token another way.\n",
+            flush=True,
+        )
+        return False
+
+    # Applied to every subsequent request on this client, so no call site has to remember.
+    client.headers["Authorization"] = f"Bearer {body['access_token']}"
+    narration.ok(
+        f"acting as {body['subject']!r} in tenant {body['tenant']!r} "
+        f"with roles {', '.join(body['roles'])}"
+    )
+    narration.look(
+        "every step below",
+        "runs as that principal, and each authorisation decision is recorded in the audit trail",
+    )
+    return True
+
+
 async def preflight(client: httpx.AsyncClient, narration: Narration) -> bool:
     """Check what the demo needs, and say exactly what to run for anything missing."""
     narration.beat("Preflight — is the platform up?")
@@ -154,6 +203,27 @@ async def preflight(client: httpx.AsyncClient, narration: Narration) -> bool:
             f"  3. {BOLD}just demo{OFF}       # this script, again\n",
             flush=True,
         )
+        return False
+
+    # An AUTHENTICATED call, not just /health.
+    #
+    # /health is public by design, so checking only that passed while every real request 401'd — the
+    # preflight said "api: ok" and the first step then crashed. A preflight has to exercise the thing the
+    # script actually needs.
+    try:
+        probe = await client.get(f"{API}/api/spatial/zones", timeout=10.0)
+        if probe.status_code == 200:
+            narration.ok("authenticated API access")
+        elif probe.status_code in (401, 403):
+            narration.fail(
+                f"the API refused an authenticated request ({probe.status_code}): "
+                f"{probe.text[:120]}"
+            )
+            return False
+        else:
+            narration.warn(f"the API answered {probe.status_code} for /api/spatial/zones")
+    except httpx.HTTPError as exc:
+        narration.fail(f"the API is not answering authenticated requests: {type(exc).__name__}")
         return False
 
     try:
@@ -576,6 +646,8 @@ async def run(headless: bool) -> int:
         f"Timestamps below are elapsed time, so you can follow along.{OFF}"
     )
     async with httpx.AsyncClient() as client:
+        if not await authenticate(client, narration):
+            return 2
         if not await preflight(client, narration):
             return 2
         if not await ensure_site(client, narration):
@@ -625,7 +697,10 @@ def main(argv: list[str] | None = None) -> int:
 
         async def _reset() -> int:
             async with httpx.AsyncClient() as client:
-                return await reset(client, Narration())
+                narration = Narration()
+                if not await authenticate(client, narration):
+                    return 2
+                return await reset(client, narration)
 
         return asyncio.run(_reset())
     return asyncio.run(run(headless=args.headless))

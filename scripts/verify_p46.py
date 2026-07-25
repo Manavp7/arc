@@ -46,6 +46,24 @@ async def main() -> int:
     async with httpx.AsyncClient(timeout=180.0) as client:
         print("\n=== P4.6 verification against the running stack ===\n")
 
+        # A principal. Phase 5 made one mandatory, and without it every check below would report a
+        # regression that is really a 401 — which would be worse than no verification, because it would send
+        # the reader hunting a bug that does not exist.
+        try:
+            issued = await client.post(
+                f"{API}/auth/dev/token",
+                params={"subject": "verify", "roles": "operator,commander,admin", "clearance": 3},
+                timeout=10.0,
+            )
+            issued.raise_for_status()
+            client.headers["Authorization"] = f"Bearer {issued.json()['access_token']}"
+            print("  authenticated as 'verify' (operator, commander, admin)\n")
+        except httpx.HTTPError as exc:
+            print(
+                f"  could not obtain a token: {type(exc).__name__}; is the API up in dev auth mode?\n"
+            )
+            return 2
+
         # 1 -----------------------------------------------------------------------------------
         try:
             response = await client.get(WEB, timeout=8.0)

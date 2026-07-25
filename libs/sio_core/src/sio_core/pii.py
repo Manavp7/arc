@@ -96,13 +96,38 @@ PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
     (
         "IP_ADDRESS",
-        re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
+        # PUBLIC addresses only. A loopback or private address identifies infrastructure, not a person.
+        #
+        # Found live: an explanation note read "queried http://127.0.0.1:8000/api/entities" and the response
+        # announced that an IP address had been redacted. Technically correct and practically absurd — and
+        # the note it corrupted was the one telling the operator where the answer came from.
+        #
+        # 127.x, 10.x, 192.168.x, 172.16-31.x and 0.x are excluded. A public address can identify a person
+        # and is still matched.
+        re.compile(
+            r"\b(?!127\.|10\.|0\.|192\.168\.|169\.254\.|172\.(?:1[6-9]|2\d|3[01])\.)"
+            r"(?:\d{1,3}\.){3}\d{1,3}\b"
+        ),
     ),
     (
         "NATIONAL_ID",
         re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
     ),
 )
+
+#: The fewest digits a match of each kind can legitimately contain.
+#:
+#: Only PHONE needs one, and it needs it badly: an ISO-8601 timestamp is indistinguishable from a phone
+#: number to a pattern that accepts hyphen-separated digit groups. Seven is not a tuning parameter — it is
+#: the shortest phone number that exists anywhere.
+_MINIMUM_DIGITS: dict[str, int] = {"PHONE": 7}
+
+#: Shapes that are dates, never phone numbers.
+#:
+#: The digit floor above stops "2026-07" (six digits) but not "2026-07-24" (eight), and this platform's
+#: payloads are full of both. A shape test is the honest discriminator: `YYYY-MM-DD` is a date in every
+#: locale, and no phone number is written that way.
+_DATE_SHAPE = re.compile(r"\d{4}-\d{1,2}(?:-\d{1,2})?")
 
 #: Field names whose *values* are personal regardless of what they look like.
 #:
@@ -179,10 +204,37 @@ def redact_text(text: str, *, detector: str | None = None) -> Redaction:
     found: dict[str, int] = {}
 
     for kind, pattern in PATTERNS:
-        matches = pattern.findall(result)
-        if matches:
-            result = pattern.sub(PLACEHOLDER.format(kind=kind), result)
-            found[kind] = found.get(kind, 0) + len(matches)
+        keep = _MINIMUM_DIGITS.get(kind)
+        if keep is None:
+            matches = pattern.findall(result)
+            if matches:
+                result = pattern.sub(PLACEHOLDER.format(kind=kind), result)
+                found[kind] = found.get(kind, 0) + len(matches)
+            continue
+
+        # A digit-count floor, applied per match.
+        #
+        # This exists because an ISO-8601 timestamp looks exactly like a phone number to a regex:
+        # `2026-07-25T11:01:50Z` contains "2026-07", which is four digits, a hyphen and two digits. The
+        # copilot duly announced that four phone numbers had been redacted from an answer about entity
+        # counts — and the four "numbers" were the timestamps in its own explanation timeline.
+        #
+        # The floor is a real invariant rather than a patch: no phone number anywhere has fewer than seven
+        # digits. Anything shorter is a date, a version, a score, or an identifier.
+        count = 0
+
+        def replace(match: re.Match[str], kind: str = kind, keep: int = keep) -> str:
+            nonlocal count
+            text = match.group(0)
+            digits = sum(character.isdigit() for character in text)
+            if digits < keep or _DATE_SHAPE.fullmatch(text.strip()):
+                return text
+            count += 1
+            return PLACEHOLDER.format(kind=kind)
+
+        result = pattern.sub(replace, result)
+        if count:
+            found[kind] = found.get(kind, 0) + count
 
     chosen = detector or active_detector()
     if chosen == "presidio" and presidio_available():
