@@ -41,6 +41,35 @@ UC1-UC5 plus three restraint cases.
 | `granite4:3b` | 91% | 90% | 67% | 3,879 ms | 7,753 ms | 0.895 | yes |
 | `qwen2.5:3b` | 91% | 80% | 100% | 3,099 ms | 7,057 ms | 0.886 | yes |
 
+## Measured end-to-end latency
+
+The table above times the *selection* call only. An answer needs two model calls — select a tool, then
+synthesise prose from its result — so end-to-end is roughly double, and it is worth stating under which
+conditions, because the first attempt at this measurement was wrong three separate ways.
+
+`llama3.2:3b`, the pinned model, same question repeated:
+
+| condition | n | median | min | max | under 10 s |
+|---|---|---|---|---|---|
+| idle platform, warm model, warm prompt prefix | 8 | **3,870 ms** | 3,629 ms | 5,192 ms | 8/8 |
+| full platform running (10 services on 8 cores) | 6 | **6,452 ms** | 5,688 ms | 14,070 ms | 5/6 |
+
+So the PRD's budget is met, and the honest caveat is that a saturated host can miss it: the one 14-second
+outlier landed while ONNX inference, CLIP embedding and an AutoETS fit were all competing for the same
+cores. This is contention, not the copilot.
+
+Three things had to be fixed before these numbers meant anything, and each was initially invisible:
+
+1. **The synthesis turn was reading 2,500 characters of tool JSON** — 9.3 s of a 13 s answer. A 3 B model
+   on CPU processes a prompt at a few hundred tokens a second, so prompt size *is* latency. Tools now
+   return a brief view for the model and the full data for the console: two audiences, two payloads.
+2. **The warm-up warmed the wrong thing.** A bare one-token request loads the weights but not the prompt
+   prefix, and the prefix that matters is the system prompt plus nine tool schemas. Warming with the real
+   shape cut the first answer from 16 s to parity with the rest.
+3. **A stale process was serving the measurements.** Two rounds of "it is still slow" were a copilot from
+   before the fix, still holding port 8111 after a supervisor stop that reported "stopped 0 processes".
+   Worth recording: a benchmark that does not verify *what* answered it is measuring something else.
+
 ## Decision
 
 **`llama3.2:3b` is pinned** in `.env.example` as `SIO_LLM_MODEL`.
