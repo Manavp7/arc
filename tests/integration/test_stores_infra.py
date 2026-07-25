@@ -663,15 +663,16 @@ async def test_sensor_readings_are_persisted_as_measurements(pool, cfg) -> None:
     like a table with no data, and neither shows up until something asks — so this executes the write
     path, including the readings that must be *skipped*.
     """
-    from sio_schemas import Modality, Observation
     from sio_worldmodel.service import WorldModelService
+
+    from sio_schemas import Modality, Observation
 
     service = WorldModelService.__new__(WorldModelService)
     service.pool = pool
     service.settings = cfg
-    service._measurement_at = {}  # noqa: SLF001
-    service._measurements_written = 0  # noqa: SLF001
-    service._measurements_skipped = 0  # noqa: SLF001
+    service._measurement_at = {}
+    service._measurements_written = 0
+    service._measurements_skipped = 0
 
     base = utc_now()
 
@@ -692,9 +693,9 @@ async def test_sensor_readings_are_persisted_as_measurements(pool, cfg) -> None:
 
     await service._record_measurement(
         reading("temperature_c", 21.5, unit="celsius", zone_id="warehouse")
-    )  # noqa: SLF001
+    )
     # A GPS fix carrying its own battery level is a legitimate scalar series.
-    await service._record_measurement(  # noqa: SLF001
+    await service._record_measurement(
         Observation(
             tenant_id=TENANT,
             source_id="gps-drone-1",
@@ -704,10 +705,10 @@ async def test_sensor_readings_are_persisted_as_measurements(pool, cfg) -> None:
         )
     )
     # Things that must NOT become measurements.
-    await service._record_measurement(reading(None, None, tag_id="TAG-1"))  # noqa: SLF001 - an RFID read
-    await service._record_measurement(reading("door_state", "open"))  # noqa: SLF001 - categorical
+    await service._record_measurement(reading(None, None, tag_id="TAG-1"))
+    await service._record_measurement(reading("door_state", "open"))
     # Rate-gated: a second temperature reading one second later.
-    await service._record_measurement(reading("temperature_c", 21.6, offset_s=1.0))  # noqa: SLF001
+    await service._record_measurement(reading("temperature_c", 21.6, offset_s=1.0))
 
     rows = await pool.fetch(
         "SELECT source_id, metric, value, unit, zone_id FROM measurements WHERE tenant_id = %s ORDER BY metric",
@@ -722,6 +723,6 @@ async def test_sensor_readings_are_persisted_as_measurements(pool, cfg) -> None:
         "a categorical value is not a series"
     )
     assert len(rows) == 2, f"the RFID read and the rate-gated duplicate must be skipped, got {rows}"
-    assert service._measurements_skipped == 1  # noqa: SLF001
+    assert service._measurements_skipped == 1
 
     await pool.execute("DELETE FROM measurements WHERE tenant_id = %s", (TENANT,))
