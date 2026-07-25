@@ -248,7 +248,9 @@ class AlertsService(SioService):
     async def tick(self) -> None:
         """Escalate what has been waiting too long."""
         rows = await self.pool.fetch(
-            "SELECT payload FROM alerts WHERE tenant_id = %s AND state = 'open' "
+            # Both states, because ageing changes the ranking of escalated alerts too — and because an
+            # escalated row is the one that might need its reason backfilled.
+            "SELECT payload FROM alerts WHERE tenant_id = %s AND state IN ('open', 'escalated') "
             "ORDER BY score DESC LIMIT 200",
             (self.settings.tenant_id,),
         )
@@ -262,6 +264,17 @@ class AlertsService(SioService):
                 ack_ts=alert.ack_ts,
                 now=now,
             )
+            if alert.state == AlertState.ESCALATED and not alert.escalation_reason:
+                # An escalated alert with no recorded reason. Reachable two ways: a row escalated before
+                # this field existed, and any future path that sets the state without the sentence. Either
+                # way the UI would show an escalated alert with nothing saying why, and the information is
+                # recoverable from the timestamps — so recover it rather than displaying a blank.
+                waited = (alert.escalated_ts or alert.last_ts) - alert.ts
+                alert.escalation_reason = (
+                    f"escalated after {waited.total_seconds() / 60:.0f} min without acknowledgement"
+                )
+                await self._persist(alert)
+
             if not escalate:
                 # Rescore anyway, so the inbox order reflects ageing rather than only arrival.
                 fresh = score_alert(
