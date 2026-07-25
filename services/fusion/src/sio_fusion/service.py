@@ -75,6 +75,7 @@ class FusionService(SioService):
         self._published = 0
         self._relationships = 0
         self._unprojectable = 0
+        self._airborne_declined = 0
         self._seen_by: dict[tuple[str, str], str] = {}
         """(entity, camera) → relationship id, so `seen_by` is opened once and closed later."""
 
@@ -163,6 +164,7 @@ class FusionService(SioService):
             "published": str(self._published),
             "relationships": str(self._relationships),
             "unprojectable_tracks": str(self._unprojectable),
+            "airborne_camera_fixes_declined": str(self._airborne_declined),
         }
 
     # ------------------------------------------------------------------ handling
@@ -376,6 +378,7 @@ class FusionService(SioService):
             created=stats["created"],
             expired=stats["expired"],
             unprojectable=self._unprojectable,
+            airborne_declined=self._airborne_declined,
         )
 
     # -------------------------------------------------------------------- routes
@@ -391,6 +394,7 @@ class FusionService(SioService):
                 "published": self._published,
                 "relationships": self._relationships,
                 "unprojectable_tracks": self._unprojectable,
+                "airborne_camera_fixes_declined": self._airborne_declined,
             }
 
         @app.get("/fusion/entities", tags=["fusion"])

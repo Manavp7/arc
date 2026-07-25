@@ -622,10 +622,13 @@ def test_a_camera_must_not_place_an_airborne_object_on_the_ground() -> None:
     assert entity_type_for("airplane") is EntityType.DRONE, "COCO's name for a quadcopter"
 
     # Drive the real guard with a hand-built service, no database required.
-    service = FusionService.__new__(FusionService)
+    # Built through __init__ (with a stub settings object) rather than by hand-setting attributes.
+    # Setting `_airborne_declined = 0` in the test masked the fact that __init__ never initialised it,
+    # and the live service raised AttributeError on every drone track for 21 messages while the test
+    # stayed green. A test that constructs its subject differently from production is testing a
+    # different object.
+    service = FusionService()
     service.fusion = SensorFusion(ORIGIN)
-    service._unprojectable = 0
-    service._airborne_declined = 0
     service.projectors = {
         "cam-yard-east": GroundProjector(
             CameraCalibration(source_id="cam-yard-east", geo=ORIGIN, bearing_deg=0.0)
