@@ -41,6 +41,14 @@ log = get_logger("sio.events.anomaly")
 # reciprocal makes a robust z-score comparable to a familiar one: 3 still means "three sigma".
 MAD_TO_SIGMA = 1.4826
 
+#: The largest z-score worth reporting.
+#:
+#: Well above any threshold, so nothing that should flag stops flagging — this caps the *reported* number,
+#: not the detection. Twelve sigma is already "this has never happened before"; past that the figure is an
+#: artefact of a degenerate denominator rather than a measurement, and printing it costs the reader's trust
+#: in every other number on the page.
+MAX_REPORTABLE_Z = 12.0
+
 
 @dataclass
 class FeatureVector:
@@ -144,10 +152,7 @@ class RobustZScoreDetector:
         # Squash the largest deviation into (0, 1). Reporting a raw z would make one wild feature
         # produce a "score" of 40, and a score with no ceiling cannot be compared or ranked.
         score = 1.0 - math.exp(-abs(deviations[0][3]) / 6.0) if deviations else 0.0
-        reasons = [
-            f"{name} was {observed:.3g}, baseline {baseline:.3g} ({z:+.1f} robust sigma)"
-            for name, observed, baseline, z in deviations[:4]
-        ]
+        reasons = [self._describe_deviation(*item) for item in deviations[:4]]
         if is_anomaly:
             self.stats["flagged"] += 1
         return AnomalyVerdict(
@@ -160,6 +165,19 @@ class RobustZScoreDetector:
             samples=samples,
             detector=self.name,
         )
+
+    def _describe_deviation(self, name: str, observed: float, baseline: float, z: float) -> str:
+        """Say what changed, in language that survives a degenerate baseline.
+
+        When the baseline window has no variation at all there is no sigma to quote, and quoting one anyway
+        is how "+1997141.7 robust sigma" reached an operator's screen. "where there is normally none" is
+        both shorter and true.
+        """
+        if abs(z) >= MAX_REPORTABLE_Z:
+            if baseline == 0:
+                return f"{name} was {observed:.3g}, where there is normally none"
+            return f"{name} was {observed:.3g} against a baseline of {baseline:.3g} — far outside anything seen"
+        return f"{name} was {observed:.3g}, baseline {baseline:.3g} ({z:+.1f} robust sigma)"
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -309,12 +327,33 @@ def _median_absolute_deviation(values: deque[float], median: float) -> float:
 
 
 def _robust_z(value: float, median: float, mad: float) -> float:
-    """Robust z-score, with a floor on the spread.
+    """Robust z-score, floored on the spread and capped on the result.
 
-    A window of identical values has a MAD of zero, and dividing by it would make any change whatsoever
-    infinitely anomalous — a sensor reporting exactly 20.0 for an hour and then 20.1 is not an incident.
-    The floor is a hundredth of the magnitude, so it scales with the quantity instead of assuming units.
+    Two separate protections, because the first is not enough on its own and I found that out by reading
+    what the alert actually said:
+
+        severe_events_per_min was 2, baseline 0 (+1997141.7 robust sigma)
+
+    A window of identical values has a MAD of zero, and the original floor was a hundredth of the
+    magnitude — which is a sensible idea that degenerates completely when the magnitude is zero. For a
+    count feature that has been 0 all window, the floor collapsed to 1e-6 and two events became a
+    two-million-sigma event.
+
+    **The cap matters more than the floor.** "Two events where there are normally none" is a genuine
+    anomaly and worth flagging; it is not measurable in sigmas, because a window with no variation supplies
+    no sigma to measure in. Any number past about ten conveys nothing that ten does not, and a number like
+    1997141.7 does active harm: it is so obviously wrong that it invites the reader to distrust every other
+    figure on the panel, including the correct ones.
+
+    So the floor now scales with whichever of the baseline and the observation is larger — giving the
+    zero-baseline case a denominator with some relation to the data — and the result is capped at
+    `MAX_REPORTABLE_Z`, comfortably above any threshold, so flagging is unaffected and only the reported
+    magnitude is made honest.
     """
     spread = mad * MAD_TO_SIGMA
-    floor = max(1e-6, abs(median) * 0.01)
-    return (value - median) / max(spread, floor)
+    # Scaled against the larger of baseline and observation. When the baseline is zero the observation is
+    # the only information about scale there is, and ignoring it is what produced the absurd figure.
+    scale = max(abs(median), abs(value))
+    floor = max(1e-6, scale * 0.01)
+    z = (value - median) / max(spread, floor)
+    return math.copysign(min(abs(z), MAX_REPORTABLE_Z), z)
