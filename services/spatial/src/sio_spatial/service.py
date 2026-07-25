@@ -64,6 +64,7 @@ class SpatialService(SioService):
         self._edges_opened = 0
         self._edges_closed = 0
         self._entities_seen = 0
+        self._expired = 0
 
     async def setup(self) -> None:
         await self.pool.open()
@@ -110,6 +111,7 @@ class SpatialService(SioService):
             "events_published": str(self._events_published),
             "edges_open": str(len(self._open_edges)),
             "edges_closed": str(self._edges_closed),
+            "memberships_expired": str(self._expired),
         }
 
     # ------------------------------------------------------------------ handling
@@ -236,6 +238,66 @@ class SpatialService(SioService):
             self._edges_closed += 1
             await self._emit(Topic.ENTITIES, closed, ctx)
 
+    async def _publish_expiry(self, change: MembershipChange) -> None:
+        """Record an exit inferred from silence, and close its edge.
+
+        Deliberately a distinct path from an observed exit, because it is a distinct fact. Nothing saw
+        this entity leave; it simply stopped being reported, and the honest record says so and timestamps
+        the departure at the last moment anything was actually known.
+        """
+        zone = self.index.get(change.zone_id)
+        explanation = ExplanationBuilder(
+            summary=f"{change.entity_id} is no longer tracked in {change.zone_name}"
+        )
+        explanation.add_rule("spatial.membership_expired", note="exit inferred from silence")
+        explanation.add_note(
+            f"nothing has reported this entity for {self.settings.spatial_max_silence_s:.0f}s, so its "
+            f"membership of {change.zone_name} was closed"
+        )
+        explanation.add_note(
+            "the exit is timestamped at the last confirmed sighting, not now: that is the last moment "
+            "anything was actually known"
+        )
+        explanation.add_note(
+            "it may have left, or its tracker may have failed — the two are indistinguishable from here"
+        )
+        event = Event(
+            tenant_id=self.settings.tenant_id,
+            type=EventType.ZONE_EXITED,
+            severity=Severity.INFO,
+            entities=[change.entity_id],
+            zone_id=change.zone_id,
+            ts=change.ts,
+            detected_ts=utc_now(),
+            # Lower than an observed exit, because it is an inference rather than an observation.
+            confidence=0.6,
+            explanation=explanation.build(),
+            rule_id="spatial.membership_expired",
+            attributes={
+                "zone_name": change.zone_name,
+                "zone_kind": zone.kind if zone else "area",
+                "restricted": change.restricted,
+                "dwell_s": round(change.dwell_s, 1),
+                "inferred": True,
+            },
+        )
+        await self._emit(Topic.EVENTS, event, None)
+        self._events_published += 1
+        self._expired += 1
+
+        relationship = self._open_edges.pop((change.entity_id, change.zone_id), None)
+        if relationship is None:
+            return
+        closed = relationship.model_copy(update={"ts_valid_to": change.ts})
+        self._edges_closed += 1
+        await self._emit(Topic.ENTITIES, closed, None)
+        self.log.info(
+            "spatial.membership_expired",
+            entity=change.entity_id,
+            zone=change.zone_id,
+            dwell_s=round(change.dwell_s, 1),
+        )
+
     async def _emit(self, topic: str, payload: Any, ctx: MessageContext | None) -> None:
         if ctx is not None:
             await ctx.publish(topic, payload)
@@ -246,10 +308,16 @@ class SpatialService(SioService):
         if time.monotonic() - self._zones_loaded_at > self.ZONE_REFRESH_S:
             await self._refresh_zones()
         for change in self.tracker.expire_stale(utc_now(), self.settings.spatial_max_silence_s):
-            self.log.info(
-                "spatial.membership_expired", entity=change.entity_id, zone=change.zone_id
-            )
-            self._open_edges.pop((change.entity_id, change.zone_id), None)
+            # Publish it. The first version computed the exit and threw it away — logging a line and
+            # popping the edge without telling anyone.
+            #
+            # The consequence was invisible here and severe two services downstream. Large enclosing
+            # zones are only ever *left* by expiry: an entity inside the site is inside the perimeter and
+            # the yard until it stops being observed. So the perimeter accumulated 54 entries and ZERO
+            # exits, every one of its edges stayed open forever, and the prediction service — which
+            # reconstructs occupancy from those edges — reported 41 entities on a dock apron that holds a
+            # handful, then forecast it rising.
+            await self._publish_expiry(change)
         occupancy = self.tracker.occupancy()
         self.log.info(
             "spatial.stats",

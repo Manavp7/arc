@@ -188,40 +188,62 @@ class PredictionService(SioService):
             [target.to_forecast(self.settings.tenant_id, made_at=made_at)] if target.points else []
         )
 
+    MAX_OPEN_VISIT_S = 1800.0
+    """How long an unclosed visit is assumed to have lasted.
+
+    Occupancy is reconstructed from bitemporal visit INTERVALS, and an interval with no end is always
+    possible: a process killed mid-visit leaves one, and so does an entity still present right now. Left
+    uncapped, every such visit counts forever and occupancy only rises. Capping is the conservative
+    reading — better to under-report a zone than to report a permanently full one.
+    """
+
     async def _zone_forecasts(self, made_at: datetime) -> list[Forecast]:
-        """Occupancy per zone, and the congestion statement that follows from it."""
+        """Occupancy per zone, reconstructed from visit intervals rather than from event pairs.
+
+        The first version replayed `zone_entered` / `zone_exited` events and maintained a set. That is
+        fragile in exactly the way this data is unreliable: it needs every entry to be MATCHED by an
+        exit, and any missing exit inflates the count permanently. Live, the site perimeter had 54
+        entries and zero exits — large enclosing zones are only ever left by expiry — so occupancy
+        reported 41 entities on a dock apron that holds a handful, and then forecast it rising.
+
+        Bitemporal edges make it a question about intervals instead: occupancy at time T is the number of
+        visits whose validity interval covers T. Missing ends are capped rather than trusted, so one
+        unclosed visit costs one bucket-worth of overcount instead of all of them.
+        """
         spec = SPECS["occupancy"]
         forecasts: list[Forecast] = []
         rows = await self.pool.fetch(
             """
-            -- `entities` is an ARRAY on this table, not a scalar column. A zone event always names
-            -- exactly one entity, so the first element is the entity; selecting `entity_id` (which does
-            -- not exist) failed every forecasting cycle with a 500.
-            SELECT zone_id, ts, type, entities[1] AS entity_id FROM events
-             WHERE tenant_id = %s AND type IN ('zone_entered', 'zone_exited')
-               AND ts >= now() - make_interval(secs => %s)
-             ORDER BY ts
+            SELECT to_id AS zone_id, from_id AS entity_id, ts_valid_from, ts_valid_to
+              FROM relationships
+             WHERE tenant_id = %s AND type = 'entered'
+               AND ts_valid_from >= now() - make_interval(secs => %s)
+             ORDER BY ts_valid_from
             """,
-            (self.settings.tenant_id, spec.lookback_s),
+            (self.settings.tenant_id, spec.lookback_s * 2),
         )
-        by_zone: dict[str, list[tuple[datetime, float]]] = {}
-        running: dict[str, set[str]] = {}
+        visits: dict[str, list[tuple[datetime, datetime]]] = {}
         for row in rows:
             zone = str(row["zone_id"] or "")
             if not zone:
                 continue
-            occupants = running.setdefault(zone, set())
-            entity = str(row["entity_id"] or "")
-            # Replay entries AND EXITS. The first version added on every event regardless of type, so the
-            # series was a cumulative count of distinct visitors rather than occupancy — live it claimed
-            # 46 entities on a dock apron that holds a handful, and the forecast dutifully extrapolated
-            # it upward. Sampling `entities.zone_id` instead would only ever show the present, and a
-            # forecast needs the past.
-            if str(row["type"]) == "zone_entered":
-                occupants.add(entity)
-            else:
-                occupants.discard(entity)
-            by_zone.setdefault(zone, []).append((row["ts"], float(len(occupants))))
+            start = row["ts_valid_from"]
+            end = row["ts_valid_to"] or min(
+                made_at, start + timedelta(seconds=self.MAX_OPEN_VISIT_S)
+            )
+            visits.setdefault(zone, []).append((start, end))
+
+        by_zone: dict[str, list[tuple[datetime, float]]] = {}
+        for zone, intervals in visits.items():
+            earliest = min(start for start, _ in intervals)
+            buckets = int((made_at - earliest).total_seconds() // spec.bucket_s)
+            for index in range(max(0, buckets)):
+                at = earliest + timedelta(seconds=spec.bucket_s * index)
+                # Count the visits covering this instant. Sampling at the bucket start rather than
+                # integrating over it: occupancy is a level, and its value at an instant is what an
+                # operator would have seen looking at the map.
+                present = sum(1 for start, end in intervals if start <= at <= end)
+                by_zone.setdefault(zone, []).append((at, float(present)))
 
         for zone_id, samples in by_zone.items():
             series = bucketise(

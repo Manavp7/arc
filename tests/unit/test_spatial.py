@@ -529,3 +529,57 @@ async def test_entering_a_restricted_zone_raises_the_severity() -> None:
     assert str(event.type) == "unauthorized_entry"
     assert event.severity == Severity.HIGH
     assert any("restricted" in note for note in event.explanation.notes)
+
+
+async def test_an_expired_membership_publishes_an_inferred_exit() -> None:
+    """An expiry that is computed and discarded is worse than one never computed.
+
+    The first version logged a line, popped the edge and told nobody. The consequence was invisible in
+    this service and severe two services downstream: large enclosing zones are only ever LEFT by expiry —
+    an entity inside the site is inside the perimeter and the yard until it stops being observed — so the
+    perimeter accumulated 54 entries and ZERO exits, every edge stayed open forever, and the prediction
+    service reported 41 entities on a dock apron that holds a handful, then forecast it rising.
+    """
+    from sio_schemas import Entity, EntityType
+    from sio_spatial.service import SpatialService
+
+    service = SpatialService()
+    service.index.replace([a_zone("perimeter", side_m=400)])
+    service.tracker = MembershipTracker(service.index, enter_confirm_s=1.0)
+    ctx = RecordingContext()
+    start = utc_now()
+
+    entity = Entity(entity_id="ent_gone", tenant_id="default", type=EntityType.TRUCK)
+    service.tracker.observe("ent_gone", ORIGIN, start)
+    for change in service.tracker.observe("ent_gone", ORIGIN, start + timedelta(seconds=2)):
+        await service._publish_change(change, entity, ctx)  # type: ignore[arg-type]
+    assert len(service._open_edges) == 1
+
+    # Nothing reports it again, and the membership expires.
+    expired = service.tracker.expire_stale(start + timedelta(seconds=600), max_silence_s=120.0)
+    assert [change.kind for change in expired] == ["exited"]
+
+    published_before = len(ctx.published)
+    service.publish = ctx.publish  # type: ignore[assignment,method-assign]
+    for change in expired:
+        await service._publish_expiry(change)
+
+    new = ctx.published[published_before:]
+    events = [payload for topic, payload in new if topic == "events"]
+    edges = [payload for topic, payload in new if topic == "entities"]
+    assert len(events) == 1, "the exit must be published, not merely logged"
+    assert len(edges) == 1, "and the visit interval must be closed"
+    assert edges[0].ts_valid_to is not None
+    assert service._open_edges == {}
+
+    event = events[0]
+    assert str(event.type) == "zone_exited"
+    assert event.attributes["inferred"] is True
+    assert event.confidence < 0.9, "an inference deserves less confidence than an observation"
+    assert any(
+        "stopped being reported" in note or "no longer" in note or "silence" in note
+        for note in [*event.explanation.notes, event.explanation.summary or ""]
+    )
+    assert any("indistinguishable" in note for note in event.explanation.notes), (
+        "it may have left or its tracker may have failed, and the record should say so"
+    )
