@@ -122,6 +122,25 @@ docs/              PRD, architecture, deployment, governance, GPU swap, models, 
 | 7 | Real connectors (RTSP/STAC/MAVLink/MQTT), 3D twin, GPU/production overlay | — |
 | 8 | Evaluation harnesses (mAP/HOTA/copilot), performance benchmarks, docs | — |
 
+## Talking to it from your own code
+
+```python
+from sio_sdk import SioClient
+
+async with SioClient() as sio:
+    for entity in await sio.entities(limit=10):
+        print(entity.label, entity.state.zone_id)
+
+    print(await sio.ask("What is on site right now?"))
+```
+
+Typed returns, token renewal, an SSE `subscribe()` that reconnects, and errors that carry the reason the API
+gave. `just sdk-demo` runs the quickstart; [docs/SDK.md](docs/SDK.md) explains what it absorbs and why.
+
+Outbound, `services/webhooks` posts signed deliveries to your endpoint with retries and a delivery log — see
+[services/webhooks/README.md](services/webhooks/README.md), which covers why a body-only signature can be
+replayed for ever.
+
 ## Extending it without changing it
 
 Four extension points, discovered through Python entry points — connectors, rules, copilot tools and agents.

@@ -250,6 +250,10 @@ grafana:
 #
 # `--no-deps` because sio-core and sio-schemas are already in this environment. The example deliberately has no
 # `[tool.uv.sources]` workspace refs: a plugin that only builds inside the repository it extends proves nothing
+# Run the SDK quickstart against a running platform (docs/SDK.md)
+sdk-demo:
+    @uv run python examples/sdk_quickstart.py
+
 # about extensibility, so it declares plain dependencies exactly as a third party's package would.
 plugin-demo:
     uv pip install -e examples/plugin_demo --no-deps

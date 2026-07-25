@@ -572,6 +572,46 @@ class ApiService(SioService):
         async def agent_cycles(request: Request) -> Any:
             return await _forward("agents", self.settings.agents_port, "/agents/cycles")
 
+        @api.post("/simulations", tags=["simulation"])
+        async def run_simulation(request: Request, body: dict[str, Any]) -> Any:
+            """Project a what-if. Changes nothing on the live site.
+
+            Missing until the SDK quickstart tried to call it — the guard prefix for `/api/simulations` existed,
+            so the route was *governed*, and there was no route to govern. An external client had no way to reach
+            the simulation service at all.
+            """
+            return await _forward(
+                "simulation",
+                self.settings.simulation_port,
+                "/simulations",
+                method="POST",
+                body=body,
+                # A projection reads the whole world and runs a scenario over it; on a busy site that is
+                # seconds.
+                http_timeout_s=90.0,
+                request=request,
+            )
+
+        @api.get("/simulations", tags=["simulation"])
+        async def list_simulations(request: Request, limit: int = Query(20, le=200)) -> Any:
+            return await _forward(
+                "simulation",
+                self.settings.simulation_port,
+                "/simulations",
+                params={"limit": limit},
+                request=request,
+            )
+
+        @api.get("/simulations/scenarios", tags=["simulation"])
+        async def simulation_scenarios(request: Request) -> Any:
+            """The scenarios and their parameters, so a client can offer them without hard-coding a list."""
+            return await _forward(
+                "simulation",
+                self.settings.simulation_port,
+                "/simulations/scenarios",
+                request=request,
+            )
+
         @api.get("/analytics/summary", tags=["analytics"])
         async def analytics_summary(request: Request, hours: int = Query(24, ge=1, le=720)) -> Any:
             return await _forward(
