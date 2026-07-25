@@ -118,7 +118,7 @@ docs/              PRD, architecture, deployment, governance, GPU swap, models, 
 | 4 | Copilot + MCP, workflows, decisions, agents, alerts, the console panels | **done** |
 | 4.7 | **Ship checkpoint** — `just demo`, `docs/DEMO.md`, quickstart re-verified, e2e smoke | **done** |
 | 5 | Governance enforced: authn/authz, PII redaction, immutable audit, multi-tenancy | **done** |
-| 6 | Simulation (M11), analytics (M19) and the developer platform (M22: SDKs, webhooks, plugins, no-code builder) **done**; mission control (M17) outstanding | **in progress** |
+| 6 | Simulation (M11), analytics (M19), mission control (M17) and the developer platform (M22: SDKs, webhooks, plugins, no-code builder) | **done** |
 | 7 | Real connectors (RTSP/STAC/MAVLink/MQTT), 3D twin, GPU/production overlay | — |
 | 8 | Evaluation harnesses (mAP/HOTA/copilot), performance benchmarks, docs | — |
 
@@ -140,6 +140,29 @@ gave. `just sdk-demo` runs the quickstart; [docs/SDK.md](docs/SDK.md) explains w
 Outbound, `services/webhooks` posts signed deliveries to your endpoint with retries and a delivery log — see
 [services/webhooks/README.md](services/webhooks/README.md), which covers why a body-only signature can be
 replayed for ever.
+
+## Running an operation
+
+The **missions** tab is Mission Control: create a mission, commit resources to it, watch it, replay it.
+
+The part that makes it belong in a spatial platform rather than a task tracker is that **objectives complete
+themselves**. Give an objective a zone and it is met when an *assigned* resource is observed there:
+
+```
+Objective met: Reach the north lane — observed Worker 15 in lane_north
+```
+
+Only assigned resources count, because a forklift wandering through does not satisfy "get eyes on the fuel
+store" — and a busy yard that completes objectives by accident looks like success. An objective with no zone
+stays a human judgement, and says so.
+
+A resource can be committed to one mission at a time, enforced by a partial unique index rather than a service
+check: dispatching the same drone to two fires is exactly what slips through a read-then-write under
+concurrency. The comms log is append-only at the database level, because an entry is testimony and testimony
+that can be edited afterwards is worth nothing in the review that follows a bad outcome. And a finished mission
+is a *record* — its objectives stop being editable, and it stops claiming to be "waiting on" anything.
+
+See [services/missions/README.md](services/missions/README.md).
 
 ## Composing it without writing code
 
