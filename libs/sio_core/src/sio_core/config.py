@@ -238,6 +238,13 @@ class Settings(BaseSettings):
     which is what an operator can act on. A forest gives a score and needs SHAP or a permutation study
     to explain it."""
 
+    measurement_min_interval_s: float = 15.0
+    """Minimum gap between persisted readings for one (source, metric).
+
+    Set from the finest bucket any forecast uses. GPS trackers report at 1 Hz, so without a gate ten
+    devices would write 36,000 battery rows an hour to produce buckets identical to those from 15-second
+    sampling."""
+
     # --- prediction ---------------------------------------------------------
     forecast_horizon_s: float = 1800.0
     forecast_interval_s: float = 60.0

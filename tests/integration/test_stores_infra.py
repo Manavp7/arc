@@ -653,3 +653,75 @@ async def test_every_worldmodel_write_runs_against_postgres(pool, cfg) -> None: 
     await pool.execute(
         "DELETE FROM tracks WHERE tenant_id = %s AND track_id = ANY(%s)", (TENANT, written)
     )
+
+
+async def test_sensor_readings_are_persisted_as_measurements(pool, cfg) -> None:  # type: ignore[no-untyped-def]
+    """The measurements table had no writer at all.
+
+    It existed from the first migration and nothing wrote it, which only became visible once the
+    prediction service needed an hour of history to forecast from. A table with no writer looks exactly
+    like a table with no data, and neither shows up until something asks — so this executes the write
+    path, including the readings that must be *skipped*.
+    """
+    from sio_schemas import Modality, Observation
+    from sio_worldmodel.service import WorldModelService
+
+    service = WorldModelService.__new__(WorldModelService)
+    service.pool = pool
+    service.settings = cfg
+    service._measurement_at = {}  # noqa: SLF001
+    service._measurements_written = 0  # noqa: SLF001
+    service._measurements_skipped = 0  # noqa: SLF001
+
+    base = utc_now()
+
+    def reading(
+        metric: str | None, value: object, *, offset_s: float = 0.0, **extra: object
+    ) -> Observation:
+        payload: dict[str, object] = dict(extra)
+        if metric is not None:
+            payload["metric"] = metric
+            payload["value"] = value
+        return Observation(
+            tenant_id=TENANT,
+            source_id="iot-test-1",
+            modality=Modality.IOT,
+            ts=base + timedelta(seconds=offset_s),
+            payload=payload,
+        )
+
+    await service._record_measurement(
+        reading("temperature_c", 21.5, unit="celsius", zone_id="warehouse")
+    )  # noqa: SLF001
+    # A GPS fix carrying its own battery level is a legitimate scalar series.
+    await service._record_measurement(  # noqa: SLF001
+        Observation(
+            tenant_id=TENANT,
+            source_id="gps-drone-1",
+            modality=Modality.GPS,
+            ts=base,
+            payload={"battery_pct": 62.5, "entity_type": "drone"},
+        )
+    )
+    # Things that must NOT become measurements.
+    await service._record_measurement(reading(None, None, tag_id="TAG-1"))  # noqa: SLF001 - an RFID read
+    await service._record_measurement(reading("door_state", "open"))  # noqa: SLF001 - categorical
+    # Rate-gated: a second temperature reading one second later.
+    await service._record_measurement(reading("temperature_c", 21.6, offset_s=1.0))  # noqa: SLF001
+
+    rows = await pool.fetch(
+        "SELECT source_id, metric, value, unit, zone_id FROM measurements WHERE tenant_id = %s ORDER BY metric",
+        (TENANT,),
+    )
+    persisted = {(row["source_id"], row["metric"]): row for row in rows}
+    assert ("iot-test-1", "temperature_c") in persisted
+    assert ("gps-drone-1", "battery_pct") in persisted
+    assert persisted[("iot-test-1", "temperature_c")]["value"] == pytest.approx(21.5)
+    assert persisted[("iot-test-1", "temperature_c")]["zone_id"] == "warehouse"
+    assert not any(row["metric"] == "door_state" for row in rows), (
+        "a categorical value is not a series"
+    )
+    assert len(rows) == 2, f"the RFID read and the rate-gated duplicate must be skipped, got {rows}"
+    assert service._measurements_skipped == 1  # noqa: SLF001
+
+    await pool.execute("DELETE FROM measurements WHERE tenant_id = %s", (TENANT,))

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import datetime
 from typing import Any
 
 from fastapi import FastAPI
@@ -32,7 +33,7 @@ class WorldModelService(SioService):
     """
 
     name = "worldmodel"
-    subscribes = (Topic.ENTITIES, Topic.TRACKS, Topic.RAW_FRAMES)
+    subscribes = (Topic.ENTITIES, Topic.TRACKS, Topic.RAW_FRAMES, Topic.RAW_IOT, Topic.RAW_GPS)
     tick_interval_s = 30.0
 
     FRAME_COLLECTION = "frames"
@@ -45,6 +46,9 @@ class WorldModelService(SioService):
         self.vectors = get_vectors(self.settings)
         self.blob = get_blob(self.settings)
         self.embedder = get_embedder(self.settings)
+        self._measurement_at: dict[tuple[str, str], datetime] = {}
+        self._measurements_written = 0
+        self._measurements_skipped = 0
         self._entities_seen = 0
         self._relationships_seen = 0
         self._states_written = 0
@@ -80,6 +84,8 @@ class WorldModelService(SioService):
         return {
             "embedder": self.embedder.name,
             "frames_indexed": str(self._frames_indexed),
+            "measurements_written": str(self._measurements_written),
+            "measurements_rate_limited": str(self._measurements_skipped),
             "frames_skipped": str(self._frames_skipped),
             "mean_embed_ms": f"{sum(self._embed_ms) / len(self._embed_ms):.0f}"
             if self._embed_ms
@@ -96,6 +102,11 @@ class WorldModelService(SioService):
             await self._handle_track(message.decode(Track))
         elif message.kind == "Observation" and message.topic == str(Topic.RAW_FRAMES):
             await self._index_frame(message.decode(Observation), ctx)
+        elif message.kind == "Observation" and message.topic in (
+            str(Topic.RAW_IOT),
+            str(Topic.RAW_GPS),
+        ):
+            await self._record_measurement(message.decode(Observation))
         else:
             # An unknown payload is not an error: a newer producer may publish something this
             # consumer has never heard of, and skipping it is the correct forward-compatible
@@ -196,6 +207,71 @@ class WorldModelService(SioService):
         )
         if latest is not None and track.entity_id:
             self.log.debug("worldmodel.track", track=track.track_id, entity=track.entity_id)
+
+    async def _record_measurement(self, observation: Observation) -> None:
+        """Persist a scalar sensor reading as a time series row.
+
+        The `measurements` table existed from the first migration and **nothing wrote it** — a gap that
+        only became visible once the prediction service needed to read an hour of history. Worth noting
+        as a pattern: a table with no writer looks exactly like a table with no data, and neither shows
+        up until something asks.
+
+        The world model is the right writer because it is already the persistence service: one writer
+        per table, and the bus stays the seam rather than ingest reaching into Postgres.
+        """
+        payload = observation.payload
+        metric = payload.get("metric")
+        value = payload.get("value")
+
+        if metric is None and "battery_pct" in payload:
+            # A GPS tracker reporting its own battery is a legitimate scalar measurement, and it is the
+            # series the drone-battery forecast is built from.
+            metric, value = "battery_pct", payload.get("battery_pct")
+
+        if metric is None or value is None:
+            return  # not a scalar reading: an RFID read, a frame reference, a state string
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return  # a non-numeric "value" is a categorical reading and belongs in events, not here
+
+        if not self._measurement_due(observation.source_id, str(metric), observation.ts):
+            return
+
+        await self.pool.execute(
+            """
+            INSERT INTO measurements (tenant_id, source_id, metric, ts, value, unit, zone_id, entity_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (tenant_id, source_id, metric, ts) DO NOTHING
+            """,
+            (
+                observation.tenant_id,
+                observation.source_id,
+                str(metric),
+                observation.ts,
+                numeric,
+                payload.get("unit"),
+                payload.get("zone_id"),
+                None,
+            ),
+        )
+        self._measurements_written += 1
+
+    def _measurement_due(self, source_id: str, metric: str, ts: datetime) -> bool:
+        """Rate-gate writes per (source, metric).
+
+        GPS trackers report at 1 Hz, so ten devices would write 36,000 battery rows an hour to support a
+        forecast that buckets at 30 seconds. The gate is set from the finest bucket any forecast uses;
+        writing more often would cost storage to produce identical buckets.
+        """
+        interval = self.settings.measurement_min_interval_s
+        key = (source_id, metric)
+        last = self._measurement_at.get(key)
+        if last is not None and (ts - last).total_seconds() < interval:
+            self._measurements_skipped += 1
+            return False
+        self._measurement_at[key] = ts
+        return True
 
     @staticmethod
     def _trajectory_wkt(track: Track) -> str | None:
