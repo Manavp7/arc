@@ -740,3 +740,162 @@ def test_the_engine_reports_what_it_is_doing() -> None:
     assert set(description["by_shape"]) == {"match", "window", "absence"}
     assert description["by_shape"]["absence"] >= 1, "at least one absence rule must ship"
     assert description["errors"] == []
+
+
+# ------------------------------------------- regressions from the live firing counts
+def test_the_shipped_speeding_rule_ignores_a_single_bad_fix() -> None:
+    """The bug that 201 live firings exposed.
+
+    The rule filtered its window to samples already above the limit and then tested their maximum —
+    trivially true of anything that got in. It fired on single noisy fixes while its own explanation
+    claimed it could not, and one event carried the note "aggregated over 1 facts in the window, so a
+    single noisy sample cannot trigger this".
+    """
+    engine = RuleEngine(load_rules(RULES_DIR))
+    start = utc_now()
+
+    # A parked truck with one wild fix among steady slow ones.
+    fired = []
+    for index, speed in enumerate([8.0, 9.0, 45.0, 8.5, 9.5, 8.0, 9.0, 8.0]):
+        fired += [
+            match
+            for match in engine.evaluate(
+                a_fact(
+                    entity_type="truck",
+                    entity_id="ent_parked",
+                    speed_kmh=speed,
+                    ts=start + timedelta(seconds=index),
+                )
+            )
+            if match.rule.id == "speeding"
+        ]
+    assert fired == [], "one 45 km/h fix among slow ones must not be speeding"
+
+
+def test_the_shipped_speeding_rule_still_catches_a_vehicle_that_is_actually_speeding() -> None:
+    """A rule that never fires is as useless as one that always does."""
+    engine = RuleEngine(load_rules(RULES_DIR))
+    start = utc_now()
+    fired = []
+    for index in range(8):
+        fired += [
+            match
+            for match in engine.evaluate(
+                a_fact(
+                    entity_type="truck",
+                    entity_id="ent_fast",
+                    speed_kmh=32.0,
+                    ts=start + timedelta(seconds=index),
+                )
+            )
+            if match.rule.id == "speeding"
+        ]
+    assert len(fired) == 1, "sustained 32 km/h must fire exactly once under the cooldown"
+    assert fired[0].aggregate_value == pytest.approx(32.0)
+
+
+def test_no_shipped_window_rule_has_a_decorative_window() -> None:
+    """A lint for the mistake above, so it cannot come back in another rule.
+
+    If a window aggregates a field that ``when`` has already constrained with the same operator and
+    threshold, the aggregate can only restate what admission already guaranteed — the window is
+    decoration, and the rule fires on single samples while looking robust.
+    """
+    offenders = []
+    for rule in load_rules(RULES_DIR).rules:
+        if rule.window is None or rule.window.aggregate not in ("max", "min"):
+            continue
+        for condition in rule.when:
+            if condition.field_path != rule.window.of:
+                continue
+            same_direction = (
+                rule.window.aggregate == "max"
+                and condition.op in ("gt", "gte")
+                and rule.window.op in ("gt", "gte")
+            ) or (
+                rule.window.aggregate == "min"
+                and condition.op in ("lt", "lte")
+                and rule.window.op in ("lt", "lte")
+            )
+            if same_direction and _numeric_equal(condition.value, rule.window.value):
+                offenders.append(
+                    f"{rule.id}: when {condition.field_path} {condition.op} "
+                    f"{condition.value} makes {rule.window.aggregate} "
+                    f"{rule.window.op} {rule.window.value} a no-op"
+                )
+    assert offenders == [], "; ".join(offenders)
+
+
+def _numeric_equal(left: object, right: object) -> bool:
+    try:
+        return float(left) == float(right)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return left == right
+
+
+def test_min_samples_stops_an_aggregate_firing_on_a_thin_window() -> None:
+    """A general guard, added because the speeding rule needed it twice over.
+
+    Without a sample floor, every mean or max rule is wrong at the START of its window: an outlier
+    arriving as the third sample of an intended ten is aggregated over three and fires.
+    """
+    engine = engine_from(
+        {
+            "id": "thin",
+            "emits": "speeding",
+            "kinds": ["entity"],
+            "window": {
+                "aggregate": "mean",
+                "of": "speed_kmh",
+                "seconds": 60,
+                "group_by": ["entity_id"],
+                "op": "gte",
+                "value": 20,
+                "min_samples": 5,
+            },
+            "cooldown_seconds": 0,
+        }
+    )
+    start = utc_now()
+    for index in range(4):
+        assert (
+            engine.evaluate(
+                a_fact(entity_id="e1", speed_kmh=100.0, ts=start + timedelta(seconds=index))
+            )
+            == []
+        )
+    assert engine.stats["below_min_samples"] == 4
+    matches = engine.evaluate(
+        a_fact(entity_id="e1", speed_kmh=100.0, ts=start + timedelta(seconds=5))
+    )
+    assert len(matches) == 1, "the fifth sample completes the floor"
+
+
+def test_the_median_aggregate_is_robust_to_one_outlier() -> None:
+    """Robust by construction, rather than by hoping the window is long enough to dilute the outlier."""
+    engine = engine_from(
+        {
+            "id": "median_speed",
+            "emits": "speeding",
+            "kinds": ["entity"],
+            "window": {
+                "aggregate": "median",
+                "of": "speed_kmh",
+                "seconds": 60,
+                "group_by": ["entity_id"],
+                "op": "gte",
+                "value": 20,
+                "min_samples": 5,
+            },
+            "cooldown_seconds": 0,
+        }
+    )
+    start = utc_now()
+    fired = []
+    for index, speed in enumerate([8.0, 9.0, 120.0, 8.5, 9.0, 8.0]):
+        fired += engine.evaluate(
+            a_fact(entity_id="e1", speed_kmh=speed, ts=start + timedelta(seconds=index))
+        )
+    assert fired == [], (
+        "a 120 km/h outlier among slow fixes must not move the median past the limit"
+    )

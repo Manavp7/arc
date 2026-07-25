@@ -5,30 +5,38 @@ rules:
     emits: speeding
     severity: medium
     description: >
-      A vehicle over the yard speed limit. Uses the MAXIMUM speed over a short window rather than the
-      instantaneous value, because a single noisy fix can put a parked truck at 40 km/h and a rule that
-      believes one sample will cry wolf until it is switched off.
+      A vehicle whose MEAN speed over ten seconds exceeds the yard limit.
+
+      The first version of this rule filtered the window to samples already above the limit and then
+      tested their maximum, which is trivially true of any sample that got in — so it fired on single
+      noisy fixes while its own explanation claimed it could not. Live, that produced 201 firings, one of
+      them from a window containing exactly one fact.
+
+      Admitting EVERY sample from the vehicle and testing the MEDIAN of at least five of them is what
+      actually delivers the intent. A mean was tried first and was still not enough: a 45 km/h outlier
+      arriving as the third sample gives a mean of 20.7 and fires. The median is robust to one wild fix
+      by construction rather than by hoping the window is long enough to dilute it.
     kinds: [entity]
     when:
       - field: entity_type
         op: in
         value: [truck, vehicle, forklift]
       - field: speed_kmh
-        op: gte
-        value: 20
+        op: exists
     window:
-      aggregate: max
+      aggregate: median
       of: speed_kmh
       seconds: 10
       group_by: [entity_id]
       op: gte
       value: 20
+      min_samples: 5
     cooldown_seconds: 60
     cooldown_key: [entity_id]
     confidence: 0.8
     explanation: >
-      {label} was travelling at {speed_kmh} km/h, over the 20 km/h yard limit. Measured as the peak over
-      ten seconds, so a single bad fix cannot trigger it.
+      {label} was over the 20 km/h yard limit (latest fix {speed_kmh} km/h). Measured as the median of
+      at least five recent fixes, so one wild reading cannot trigger it.
 
   - id: dwell_exceeded
     emits: dwell_exceeded

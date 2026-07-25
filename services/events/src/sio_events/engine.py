@@ -134,6 +134,12 @@ class RuleEngine:
         while window and window[0].ts < cutoff:
             window.popleft()
 
+        if len(window) < rule.window.min_samples:
+            # Not enough evidence yet. Testing an aggregate over two samples and calling it a
+            # ten-second window is how a rule fires on the first outlier it sees.
+            self.stats["below_min_samples"] += 1
+            return None
+
         value = self._aggregate(rule, list(window))
         if value is None or not rule.window_condition().evaluate(value):
             return None
@@ -189,6 +195,10 @@ class RuleEngine:
             "max": max,
             "min": min,
             "mean": statistics.fmean,
+            # The median is here because it is the right statistic for "is this vehicle actually
+            # speeding": robust to a single wild fix by construction, rather than by hoping the window
+            # is long enough to dilute it.
+            "median": statistics.median,
         }[spec.aggregate](values)
 
     # -------------------------------------------------------------------- absence

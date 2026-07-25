@@ -144,10 +144,16 @@ class EventsService(SioService):
             explanation.add_note(reason)
         for ref in match.evidence[:8]:
             explanation.add_evidence(EvidenceKind.OBSERVATION, ref, ts=match.fact.ts)
-        if match.aggregate_value is not None:
+        if match.aggregate_value is not None and rule.window is not None:
+            # State the count and the aggregate, and nothing more.
+            #
+            # This note used to add "so a single noisy sample cannot trigger this", which was an
+            # editorial claim about robustness that depends entirely on which aggregate a rule chose.
+            # It appeared verbatim on an event whose window contained exactly one fact. An explanation
+            # that flatters the rule is worse than a terse one, because it is the part a human trusts.
             explanation.add_note(
-                f"aggregated over {len(match.contributing)} facts in the window, so a single "
-                "noisy sample cannot trigger this"
+                f"{rule.window.aggregate} computed over {len(match.contributing)} fact(s) in a "
+                f"{rule.window.seconds:.0f}s window"
             )
 
         latitude, longitude = match.fact.get("lat"), match.fact.get("lon")

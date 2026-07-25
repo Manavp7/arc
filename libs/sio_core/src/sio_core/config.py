@@ -224,7 +224,13 @@ class Settings(BaseSettings):
     dwell_threshold_s: float = 900.0
     speed_limit_kmh: float = 20.0
     anomaly_contamination: float = 0.02
-    anomaly_warmup: int = 200
+    anomaly_warmup: int = 20
+    """Samples of history before the detector will judge anything.
+
+    Twenty, not the two hundred a forest wants: features are sampled every 30 s, so 200 meant the
+    detector stayed silent for a hundred minutes and was measured doing exactly that — ten samples in,
+    all of them reported as "warming". A robust z-score has a usable baseline from a couple of dozen
+    points; `PyODDetector` raises this internally because a forest genuinely needs more."""
     anomaly_detector: str = "auto"
     """``auto`` (robust z-score), or ``pyod`` for IsolationForest where it is installed.
 

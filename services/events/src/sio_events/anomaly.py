@@ -295,7 +295,9 @@ def build_detector(
 ) -> Detector:
     """Pick a detector. ``auto`` prefers the attributable one and never fails to return something."""
     if kind in ("pyod", "iforest"):
-        detector = PyODDetector(warmup=max(warmup, 50), contamination=contamination)
+        # A forest needs far more history than a per-feature z-score to be worth anything, so it raises
+        # the floor itself rather than trusting a setting tuned for the default detector.
+        detector = PyODDetector(warmup=max(warmup, 200), contamination=contamination)
         if detector._available:
             return detector
         log.warning("anomaly.falling_back", requested=kind, using="robust_zscore")

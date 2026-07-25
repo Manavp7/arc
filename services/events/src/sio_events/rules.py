@@ -43,7 +43,7 @@ log = get_logger("sio.events.rules")
 Operator = Literal[
     "eq", "ne", "gt", "gte", "lt", "lte", "in", "not_in", "contains", "matches", "exists", "missing"
 ]
-Aggregate = Literal["count", "count_distinct", "sum", "max", "min", "mean"]
+Aggregate = Literal["count", "count_distinct", "sum", "max", "min", "mean", "median"]
 
 
 class Condition(BaseModel):
@@ -149,6 +149,12 @@ class WindowSpec(BaseModel):
     """What counts as one subject. Crowd gathering groups by zone; speeding groups by entity."""
     op: Operator = "gte"
     value: Any = 1
+    min_samples: int = Field(default=1, ge=1)
+    """Facts required in the window before the aggregate is tested.
+
+    Without this, every mean and max rule is wrong at the start of a window: a 45 km/h outlier arriving
+    as the third sample of ten gives a mean of 20.7 and fires, which is the exact failure the window was
+    supposed to prevent. Measured, not theorised — the shipped speeding rule did this."""
 
     @field_validator("group_by", mode="before")
     @classmethod
