@@ -328,7 +328,6 @@ class Settings(BaseSettings):
     """
     oidc_discovery_url: str = "http://127.0.0.1:8080/realms/sio/.well-known/openid-configuration"
     oidc_audience: str = "sio-api"
-    opa_url: str = "http://127.0.0.1:8181"
     jwt_secret: str = "dev-only-change-me"
     jwt_issuer: str = "sio-dev"
     jwt_ttl_s: int = 86_400
