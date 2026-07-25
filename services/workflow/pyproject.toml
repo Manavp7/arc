@@ -1,0 +1,28 @@
+[project]
+name = "sio-workflow"
+version = "0.1.0"
+description = "SIO response playbooks: retries, timeouts, compensation, visible progress (PRD M15)"
+requires-python = ">=3.12,<3.14"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "sio-core",
+    "sio-schemas",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+# Temporal buys durability across a process death. The inline runner implements the semantics that matter
+# for a demo (retries, timeouts, compensation, progress), so Temporal is opt-in rather than required to
+# run anything.
+temporal = ["temporalio>=1.9"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sio_workflow"]
+
+[tool.uv.sources]
+sio-core = { workspace = true }
+sio-schemas = { workspace = true }

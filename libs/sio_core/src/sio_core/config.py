@@ -255,6 +255,15 @@ class Settings(BaseSettings):
     nobody verifies is decoration. A 90% interval that contains the truth half the time is not
     conservative, it is wrong."""
 
+    # --- workflow -----------------------------------------------------------
+    workflow_dry_run: bool = True
+    """Whether playbook steps describe what they would do instead of doing it.
+
+    True by default, deliberately. A workflow engine that can only be exercised by actually closing a gate
+    or launching a drone is one nobody exercises, and the demo needs to run a five-step fire response
+    without consequences. Every dry-run step records what it WOULD have done, so the run log is still an
+    honest account."""
+
     # --- alerts -------------------------------------------------------------
     alert_dedup_window_s: float = 120.0
     alert_escalate_after_s: float = 300.0
