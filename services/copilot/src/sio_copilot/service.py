@@ -58,10 +58,8 @@ class CopilotService(SioService):
 
     async def setup(self) -> None:
         reachable = await self.llm.ping()
-        if reachable and hasattr(self.llm, "warm"):
-            # Pay the load cost now rather than making the first question pay it. Measured: 17 s for the
-            # first question against 8.5 s for the next, and the first question is the one a demo asks.
-            warmed = await self.llm.warm()
+        if reachable:
+            warmed = await self._warm()
             self.log.info(
                 "copilot.model_warm", seconds=round(warmed, 2), model=getattr(self.llm, "model", "")
             )
@@ -80,10 +78,35 @@ class CopilotService(SioService):
                 hint=f"start ollama and pull {getattr(self.llm, 'model', '')}",
             )
 
+    async def _warm(self) -> float:
+        """Warm the model with THE REAL PROMPT AND TOOLS, not a bare token.
+
+        The first version sent a one-token completion with no tools. It loaded the weights, and the first
+        real question still took 16 s against 9 s for the next — because Ollama caches the processed prompt
+        PREFIX, and the prefix that matters is the system prompt plus nine tool schemas, about fifteen
+        hundred tokens of JSON. Warming a different prefix warms the wrong thing.
+
+        So the warm-up is a real request, shaped exactly like production's, capped to one output token.
+        """
+        started = time.perf_counter()
+        from .agent import SYSTEM_PROMPT
+
+        try:
+            await self.llm.chat(
+                [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": "ready?"},
+                ],
+                tools=self.belt.specs(),
+                max_tokens=1,
+            )
+        except Exception as exc:  # noqa: BLE001 - a cold model is a slow answer, not an outage
+            self.log.warning("copilot.warm_failed", error=str(exc))
+        return time.perf_counter() - started
+
     async def tick(self) -> None:
-        """Keep the model resident, quietly."""
-        if hasattr(self.llm, "warm"):
-            await self.llm.warm()
+        """Keep the model resident and its prompt prefix cached."""
+        await self._warm()
 
     async def health_checks(self) -> dict[str, str]:
         reachable = await self.llm.ping()
