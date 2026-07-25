@@ -144,6 +144,8 @@ class ToolBelt:
         self.calls = 0
         self.failures = 0
         self.question = ""
+        self._zone_ids: set[str] | None = None
+        """Known zone ids, cached after the first lookup. See `_resolve_zone`."""
         """The question being answered, so a side-effecting tool can check the user actually asked for it.
 
         Set per request by the agent. See `run_simulation`: the tool description says "only when the user
@@ -226,6 +228,49 @@ class ToolBelt:
                 except (TypeError, ValueError):
                     del out[key]
         return out
+
+    async def _resolve_zone(self, arguments: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+        """Normalise a zone name to a real zone id, or say the zone is not known.
+
+        Zone ids are snake_case; a model given the prose name says "fuel store". Passing that through
+        matches nothing, and an empty result then reads as "there is nothing there" — the third time the
+        same shape has bitten this file, after the literal string `'null'` and a real JSON null.
+
+        The pattern is worth stating plainly, because a fourth version of it will appear: **a filter that
+        cannot match anything must never produce a confident negative.** Every route to an empty result has
+        to be distinguishable from an actually-empty world.
+
+        Two steps, in order of how much they assume. Normalising (spaces and hyphens to underscores,
+        lowercased) fixes the common case with no guessing at all. Only if that still names no known zone is
+        the caller told, with the real ids listed so the model can retry — which it usually does correctly.
+        """
+        wanted = arguments.get("zone_id")
+        if not wanted or not isinstance(wanted, str):
+            return arguments, None
+
+        if self._zone_ids is None:
+            zones, error = await self._get(f"{self.api_url}/api/spatial/zones", {})
+            if error or not isinstance(zones, list):
+                # Cannot check, so do not block: passing the value through unchanged is the behaviour that
+                # existed before, and refusing to answer because the zone list is unreachable would be a
+                # worse failure than an unmatched filter.
+                return arguments, None
+            self._zone_ids = {str(zone.get("zone_id")) for zone in zones if zone.get("zone_id")}
+
+        normalised = wanted.strip().lower().replace(" ", "_").replace("-", "_")
+        if normalised in self._zone_ids:
+            return {**arguments, "zone_id": normalised}, None
+
+        # A near match, for a plural or a partial name.
+        near = [zone for zone in sorted(self._zone_ids) if normalised in zone or zone in normalised]
+        if len(near) == 1:
+            return {**arguments, "zone_id": near[0]}, None
+
+        known = ", ".join(sorted(self._zone_ids)[:12])
+        return arguments, (
+            f"There is no zone called {wanted!r} on this site. The zones are: {known}."
+            + (f" Did you mean one of {', '.join(near[:3])}?" if near else "")
+        )
 
     async def _timed(self, name: str, coroutine: Awaitable[ToolResult]) -> ToolResult:
         started = time.perf_counter()
@@ -464,6 +509,20 @@ class ToolBelt:
     # --------------------------------------------------------------- executors
     async def list_entities(self, arguments: dict[str, Any]) -> ToolResult:
         arguments = self._coerce(arguments, limit=int)
+        arguments, zone_problem = await self._resolve_zone(arguments)
+        if zone_problem is not None:
+            # An unresolvable zone must not become an empty entity list. The third instance of this exact
+            # shape: asked "are there any drones in the fuel store?", the model sent
+            # `zone_id='fuel store'` — with a space — which matched no zone, and the copilot answered "No
+            # drone was seen in fuel store in the last 5 minutes." That happened to be true, and would have
+            # been said just as confidently with a drone parked there.
+            return ToolResult(
+                name="list_entities",
+                ok=True,
+                source=f"{self.api_url}/api/spatial/zones",
+                brief={"error": zone_problem, "note": f"Say exactly: {zone_problem}"},
+                data={"error": zone_problem},
+            )
         data, error = await self._get(
             f"{self.api_url}/api/entities",
             {
@@ -965,13 +1024,34 @@ def _entity_brief(
         brief["count_is_at_least"] = True
     if filters:
         brief["filtered_by"] = filters
-    if not rows:
-        brief["note"] = (
-            f"nothing matched the filter {filters}. This says nothing about the rest of the site — "
-            "do not report it as the site being empty; say which filter returned nothing."
-            if filters
-            else "no moving entity has been seen in the last 5 minutes"
+    if not filters.get("zone_id"):
+        # State the scope when no zone was asked for, because the model will otherwise supply one from the
+        # question. Asked "what is on the helipad?", it called `list_entities(entity_type='drone')` with no
+        # zone at all and answered "There are 2 drones on the helipad" — a site-wide count attributed to a
+        # place it never queried.
+        brief["scope"] = (
+            "the WHOLE site, not any particular zone. Do not attribute this count to a location; "
+            "call list_entities again with zone_id to scope it."
         )
+    if not rows:
+        if filters:
+            # PRESCRIPTIVE, not prohibitive. The first version said "do not report it as the site being
+            # empty", and the model half-complied: it named the filter correctly and then added "The site
+            # is empty of moving vehicles in the last 5 minutes" — generalising a zone-scoped query to the
+            # whole site in the very next sentence.
+            #
+            # Small models follow "say this" far more reliably than "do not say that", because a
+            # prohibition still leaves them to invent the alternative. So hand them the sentence.
+            scope = ", ".join(f"{key}={value}" for key, value in sorted(filters.items()))
+            brief["note"] = (
+                f"No match for {scope}. Answer with exactly this and nothing more: "
+                f"'No {filters.get('entity_type', 'entity')} was seen"
+                + (f" in {filters['zone_id']}" if filters.get("zone_id") else "")
+                + " in the last 5 minutes.' This result covers ONLY that filter, so say nothing about "
+                "the rest of the site."
+            )
+        else:
+            brief["note"] = "no moving entity has been seen anywhere on site in the last 5 minutes"
     return brief
 
 

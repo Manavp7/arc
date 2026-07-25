@@ -757,8 +757,28 @@ def test_an_empty_filtered_result_is_not_reported_as_an_empty_site() -> None:
 
     brief = _entity_brief([], {"entity_type": "truck"}, capped=False)
     assert brief["filtered_by"] == {"entity_type": "truck"}
-    assert "says nothing about the rest of the site" in brief["note"]
-    assert "do not report it as the site being empty" in brief["note"]
+    assert "say nothing about the rest of the site" in brief["note"]
+
+
+def test_the_empty_result_note_hands_the_model_the_sentence() -> None:
+    """Prescriptive, not prohibitive — because the prohibition was only half-obeyed.
+
+    The first version said "do not report it as the site being empty". The model named the filter correctly
+    and then, in the very next sentence, added "The site is empty of moving vehicles in the last 5 minutes"
+    — generalising a zone-scoped query to the whole site.
+
+    A prohibition leaves a small model to invent the alternative. Handing it the sentence does not.
+    """
+    from sio_copilot.tools import _entity_brief
+
+    note = _entity_brief([], {"entity_type": "vehicle", "zone_id": "fuel_store"}, capped=False)[
+        "note"
+    ]
+    assert "Answer with exactly this" in note
+    assert "No vehicle was seen in fuel_store in the last 5 minutes." in note
+    assert "ONLY that filter" in note
+    # And an unfiltered empty result is allowed to say the site is quiet, because it is.
+    assert "anywhere on site" in _entity_brief([], {}, capped=False)["note"]
 
 
 def test_a_genuinely_quiet_site_is_described_as_such() -> None:
@@ -777,3 +797,83 @@ def test_a_count_that_hit_its_limit_is_reported_as_a_floor() -> None:
     rows = [{"type": "truck", "label": f"T{index}"} for index in range(50)]
     assert _entity_brief(rows, {}, capped=True)["count_is_at_least"] is True
     assert "count_is_at_least" not in _entity_brief(rows, {}, capped=False)
+
+
+def _a_belt() -> ToolBelt:
+    """A belt pointed at a port nothing listens on, for tests about argument handling.
+
+    Every url is unreachable on purpose: these tests are about what happens to the arguments before a
+    request is made, and a belt that could reach a service would make them depend on one.
+    """
+    from sio_copilot.tools import ToolBelt
+
+    dead = "http://127.0.0.1:1"
+    return ToolBelt(
+        api_url=dead,
+        tenant_id="acme",
+        spatial_url=dead,
+        prediction_url=dead,
+        worldmodel_url=dead,
+        ingest_url=dead,
+    )
+
+
+async def test_a_prose_zone_name_is_normalised_not_silently_unmatched() -> None:
+    """The third instance of one shape: a filter that cannot match producing a confident negative.
+
+    Asked "are there any drones in the fuel store?", the model sent `zone_id='fuel store'` — with a space.
+    Zone ids are snake_case, so nothing matched, and the copilot answered "No drone was seen in fuel store
+    in the last 5 minutes." It happened to be true, and would have been said just as confidently with a
+    drone parked there.
+
+    The rule worth stating, because a fourth version will appear: a filter that cannot match anything must
+    never produce a confident negative. Every route to an empty result has to be distinguishable from an
+    actually-empty world.
+    """
+    belt = _a_belt()
+    belt._zone_ids = {"fuel_store", "dock_3", "lane_north"}
+
+    resolved, problem = await belt._resolve_zone({"zone_id": "fuel store"})
+    assert problem is None
+    assert resolved["zone_id"] == "fuel_store", "a prose name must resolve to the id"
+
+    resolved, problem = await belt._resolve_zone({"zone_id": "Dock-3"})
+    assert problem is None and resolved["zone_id"] == "dock_3"
+
+
+async def test_an_unknown_zone_is_named_rather_than_returning_nothing() -> None:
+    """ "There is no zone called X" is actionable; an empty list is a false negative."""
+    belt = _a_belt()
+    belt._zone_ids = {"fuel_store", "dock_3"}
+
+    _, problem = await belt._resolve_zone({"zone_id": "the roof"})
+    assert problem is not None
+    assert "no zone called" in problem
+    assert "fuel_store" in problem, "the real zone ids must be listed so the model can retry"
+
+
+async def test_an_unreachable_zone_list_does_not_block_the_query() -> None:
+    """Refusing to answer because the zone list is unreachable is a worse failure than an unmatched filter."""
+    belt = _a_belt()
+    resolved, problem = await belt._resolve_zone({"zone_id": "fuel store"})
+    assert problem is None
+    assert resolved["zone_id"] == "fuel store", "passed through unchanged, as before"
+
+
+def test_an_unscoped_count_says_it_is_site_wide() -> None:
+    """Otherwise the model supplies a location from the question.
+
+    Asked "what is on the helipad?", it called `list_entities(entity_type='drone')` with no zone at all and
+    answered "There are 2 drones on the helipad" — a site-wide count attributed to a place it never queried.
+    The tool did exactly what it was asked; what was missing was the scope of the answer.
+    """
+    from sio_copilot.tools import _entity_brief
+
+    rows = [{"type": "drone", "label": "Drone 18"}]
+    unscoped = _entity_brief(rows, {"entity_type": "drone"}, capped=False)
+    assert "WHOLE site" in unscoped["scope"]
+    assert "Do not attribute this count to a location" in unscoped["scope"]
+
+    # A scoped query needs no such warning: the zone is in the filter.
+    scoped = _entity_brief(rows, {"entity_type": "drone", "zone_id": "helipad"}, capped=False)
+    assert "scope" not in scoped
