@@ -241,3 +241,7 @@ keycloak:
 # Start OPA with the generated policy (optional; the embedded engine evaluates the same rules).
 opa: policies
     bash scripts/opa_bootstrap.sh
+
+# Start Grafana with the provisioned SIO datasources and dashboards (optional).
+grafana:
+    bash scripts/grafana_bootstrap.sh

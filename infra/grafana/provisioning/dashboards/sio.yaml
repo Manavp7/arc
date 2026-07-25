@@ -1,0 +1,18 @@
+# Dashboard provider (PRD M20).
+#
+# Provisioned from files rather than clicked together in the UI, so a dashboard change is a diff somebody can
+# review. `allowUiUpdates: false` is the part that matters: it stops a dashboard drifting from the file, which
+# is how a provisioned dashboard quietly becomes a hand-made one nobody can reproduce.
+apiVersion: 1
+
+providers:
+  - name: SIO
+    orgId: 1
+    folder: SIO
+    type: file
+    disableDeletion: false
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

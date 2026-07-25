@@ -210,6 +210,23 @@ class Metrics:
             buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5),
             registry=self.registry,
         )
+        self.http_seconds = Histogram(
+            "sio_http_seconds",
+            "HTTP request latency, by route and status",
+            ["service", "route", "status"],
+            # Buckets chosen for what this platform's routes actually do. A copilot answer takes seconds
+            # because a local model is generating tokens; an entity list takes milliseconds. A single set of
+            # buckets tuned for one would make the other unreadable, so the range spans both and the p95 per
+            # route is what a reader looks at.
+            buckets=(0.005, 0.025, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
+            registry=self.registry,
+        )
+        self.http_requests = Counter(
+            "sio_http_requests_total",
+            "HTTP requests, by route and status",
+            ["service", "route", "status"],
+            registry=self.registry,
+        )
 
     def render(self) -> bytes:
         return generate_latest(self.registry)

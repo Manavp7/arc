@@ -1,0 +1,35 @@
+# Datasources for the SIO stack (PRD M20, Tier 2 #4).
+#
+# Two, and the split is deliberate. Prometheus scrapes the /metrics every service already exposes, and
+# Postgres answers the questions that need the actual records — a dashboard tile showing "alerts by severity"
+# should read the alerts table, not a counter that resets when the service restarts.
+apiVersion: 1
+
+datasources:
+  - name: SIO Prometheus
+    type: prometheus
+    access: proxy
+    # host.docker.internal so a containerised Grafana can reach a Prometheus running on the host, which is how
+    # this stack runs: the platform is processes, not containers, and only Grafana is containerised.
+    url: http://host.docker.internal:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 15s
+      httpMethod: POST
+
+  - name: SIO Postgres
+    type: postgres
+    access: proxy
+    url: host.docker.internal:5432
+    user: sio
+    database: sio
+    secureJsonData:
+      password: sio
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
+      # Read-only is not enforceable through this setting alone, but stating the intent means a reviewer
+      # notices if a dashboard ever contains a write.
+      maxOpenConns: 4
+      maxIdleConns: 2

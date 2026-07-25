@@ -182,6 +182,32 @@ class SioService:
 
         self.routes(app)
 
+        # HTTP metrics, in the shared runtime so every service's routes are measured rather than only the
+        # API's. Registered BEFORE governance below, which — because Starlette applies middleware in reverse
+        # registration order — means it wraps the governance check and therefore measures the whole request
+        # including authentication. A latency figure that excluded auth would be measuring something no
+        # caller experiences.
+        @app.middleware("http")
+        async def record_http_metrics(request: Any, call_next: Any) -> Any:
+            started = time.perf_counter()
+            try:
+                response = await call_next(request)
+                status = str(response.status_code)
+            except Exception:
+                # A failed request is still a request, and excluding the failures would make a broken
+                # endpoint look fast.
+                self.metrics.http_requests.labels(
+                    service=self.name, route=_route_label(request), status="500"
+                ).inc()
+                raise
+            elapsed = time.perf_counter() - started
+            route = _route_label(request)
+            self.metrics.http_seconds.labels(service=self.name, route=route, status=status).observe(
+                elapsed
+            )
+            self.metrics.http_requests.labels(service=self.name, route=route, status=status).inc()
+            return response
+
         # Governance last, so it wraps every route including the subclass's.
         #
         # Installed HERE, in the shared runtime, rather than per service. That is the whole fix for what the
@@ -507,3 +533,21 @@ class SioService:
             "group": self.group,
             "adapters": self.settings.adapter_summary(),
         }
+
+
+def _route_label(request: Any) -> str:
+    """The route TEMPLATE, never the raw path.
+
+    This is the difference between a working Prometheus and one that falls over. `/api/alerts/alt_01K...` as a
+    label value creates a new time series per alert id — unbounded cardinality, which exhausts memory in the
+    scraper rather than in the service, so the symptom appears somewhere nobody is looking.
+
+    FastAPI puts the matched route on the scope, so the template is available: `/api/alerts/{alert_id}`. A
+    request that matched no route gets a single bucket rather than its path, for the same reason — a scanner
+    probing random URLs must not be able to create time series.
+    """
+    route = request.scope.get("route") if hasattr(request, "scope") else None
+    path = getattr(route, "path", None)
+    if path:
+        return str(path)
+    return "unmatched"
