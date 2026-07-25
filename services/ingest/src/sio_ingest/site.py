@@ -102,11 +102,17 @@ class Zone:
 
 @dataclass(frozen=True)
 class Camera:
-    """A fixed camera with a triangular field of view.
+    """A fixed camera with a real pose: position, bearing, field of view, height and tilt.
 
-    The FOV matters for more than decoration: it decides which agents a camera can see (so the
-    simulator only emits frames containing something), it answers "which cameras cover Gate B",
-    and its complement is the blind-spot query (PRD M6).
+    The FOV decides which agents a camera can see (so the simulator only emits frames containing
+    something), answers "which cameras cover Gate B", and its complement is the blind-spot query
+    (PRD M6).
+
+    ``height_m``, ``tilt_deg`` and ``vfov_deg`` exist so that image position and ground distance are
+    related by an actual pinhole projection rather than by a curve that looks about right. The
+    simulator projects ground positions into the image with this model and fusion inverts it with the
+    same one — which is what calibration *is*. Two different approximations left the fused position
+    10-28 m from the truth, well outside any sane association gate.
     """
 
     source_id: str
@@ -117,6 +123,12 @@ class Camera:
     range_m: float = 60.0
     label: str = ""
     covers: tuple[str, ...] = ()
+    height_m: float = 6.0
+    """Mounting height above the ground plane."""
+    tilt_deg: float = 18.0
+    """Downward tilt of the optical axis. With a 6 m mount this puts the axis on the ground at ~18 m."""
+    vfov_deg: float = 45.0
+    """Vertical field of view."""
 
     @property
     def geo(self) -> Geo:

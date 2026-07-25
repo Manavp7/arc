@@ -54,7 +54,10 @@ def gps_observation(
         north=north,
         sigma_m=2.5,
         label=label,
-        device_id=device,
+        # Namespaced exactly as observation_from_gps does it. A helper producing un-namespaced ids
+        # would exercise something the system never emits — and did: the device-conflict test passed
+        # for the wrong reason, because the positional gate happened to separate the trucks anyway.
+        device_id=f"gps:{device}",
     )
 
 
@@ -148,9 +151,14 @@ def test_projection_refuses_boxes_above_the_horizon() -> None:
 def test_projection_uncertainty_grows_with_range() -> None:
     """A distant fix must be weighted less, or a 50 m detection drags an entity off its GPS track."""
     projector = GroundProjector(calibration())
+    # With the physical model, row 700 is ~7 m away and row 170 is ~55 m: a real spread rather than
+    # two boxes that both land inside a few metres.
     near = projector.project(BBox(x1=600, y1=620, x2=700, y2=700))
-    far = projector.project(BBox(x1=600, y1=280, x2=700, y2=320))
+    far = projector.project(BBox(x1=600, y1=150, x2=700, y2=170))
     assert near is not None and far is not None
+    assert far.range_m > near.range_m * 3, (
+        "the two boxes must differ in range for this to mean anything"
+    )
     assert far.position_sigma_m > near.position_sigma_m
     assert near.confidence > far.confidence
 
@@ -398,7 +406,9 @@ def test_gps_observation_uses_the_device_as_identity_not_the_agent() -> None:
         ORIGIN,
         ORIGIN,
     )
-    assert observation.device_id == "gps-truck-0007", "the device id is legitimate identity"
+    assert observation.device_id == "gps:gps-truck-0007", (
+        "the device id is legitimate identity, namespaced by kind"
+    )
     assert "agent_id" not in observation.attributes, "ground-truth identity must not be carried"
     assert observation.attributes["plate"] == "XYZ-1", "a plate is evidence, and is allowed"
 
@@ -417,3 +427,166 @@ def test_describe_reports_association_reasons() -> None:
         "rejected_by_class",
     }
     assert description["entities"] >= 1
+
+
+# --------------------------------------------------- device exclusivity (regression)
+def test_two_trackers_close_together_stay_separate() -> None:
+    """A device id is identity, and therefore also non-identity.
+
+    Observed live: six trucks queued 16 m apart at the gate all fell inside the 25 m association
+    radius, so five separate GPS trackers were absorbed into a single entity that then claimed 39,651
+    observations and five devices. The positional gate cannot fix this — the trucks really are that
+    close — but their device ids prove they are different objects.
+    """
+    fusion = SensorFusion(ORIGIN, assoc_radius_m=25.0)
+    for index in range(6):
+        # Deliberately 6 m apart: close enough that the positional gate *would* merge them, so only
+        # the device rule can keep them separate. At 16 m the gate separates them on its own and the
+        # test would pass while proving nothing — which is exactly what it did at first.
+        fusion.observe(gps_observation(index * 6.0, 0.0, device=f"gps-truck-{index}"))
+
+    assert len(fusion.entities) == 6, (
+        f"six trackers must be six entities, got {len(fusion.entities)}"
+    )
+    assert fusion.stats["rejected_by_device_conflict"] > 0, (
+        "the trucks must have been separated by device identity, not merely by distance"
+    )
+    for entity in fusion.entities.values():
+        assert len(entity.device_ids) == 1, "an entity must never accumulate two tracker ids"
+
+
+def test_two_devices_of_different_kinds_may_share_an_entity() -> None:
+    """A truck carries a GPS tracker *and* an RFID tag, so conflict must be per device kind.
+
+    A global "a different id means a different object" rule refused exactly the multi-sensor merge
+    that fusion exists to perform, and broke the M5 acceptance test.
+    """
+    fusion = SensorFusion(ORIGIN, assoc_radius_m=25.0)
+    fusion.observe(gps_observation(10.0, 10.0, device="gps-truck-1"))
+    fusion.observe(
+        observation_from_rfid(
+            {"tag_id": "TAG-1", "plate": "AAA-111"},
+            "iot-rfid-gate-a",
+            utc_now(),
+            from_local_metres(11.0, 10.5, ORIGIN),
+            ORIGIN,
+        )
+    )
+    assert len(fusion.entities) == 1
+    entity = next(iter(fusion.entities.values()))
+    assert {device.split(":", 1)[0] for device in entity.device_ids} == {"gps", "tag"}
+
+
+def test_a_camera_track_can_still_join_a_gps_entity() -> None:
+    """Device exclusivity must not block the multi-sensor case, which is the point of fusion.
+
+    A camera observation carries no device id, so there is nothing to conflict with.
+    """
+    fusion = SensorFusion(ORIGIN, assoc_radius_m=25.0)
+    fusion.observe(gps_observation(40.0, 20.0, device="gps-truck-9"))
+    fusion.observe(camera_observation(41.5, 21.0, source="cam-gate-a", track="trk-1", seconds=1))
+
+    assert len(fusion.entities) == 1
+    entity = next(iter(fusion.entities.values()))
+    assert entity.modalities == {"gps", "video"}
+    assert entity.is_multi_sensor
+
+
+# --------------------------------------------------------------- entity merging
+def test_a_camera_entity_and_a_gps_entity_merge_into_one() -> None:
+    """Track-to-track fusion.
+
+    Association happens one observation at a time, so a truck first seen by a camera becomes a
+    video-only entity while its GPS tracker becomes a second one — and once the camera track is bound
+    it stays bound, so the two never meet. Live, that produced one entity per *sensor* rather than one
+    per truck, with multi_sensor stuck at 1 of 8 while everything looked superficially fine.
+    """
+    fusion = SensorFusion(ORIGIN, assoc_radius_m=25.0)
+
+    # The mechanism that keeps them apart is not distance — it is that each sensor's *index* lookup
+    # short-circuits before positional matching. A camera track bound to one entity and a GPS device
+    # bound to another will stay bound however close the two entities drift, which is exactly what
+    # happened live: one entity per sensor rather than one per truck.
+    fusion.observe(camera_observation(30.0, 20.0, track="trk-1", sigma=4.0))
+    fusion.observe(gps_observation(90.0, 20.0, device="gps-truck-5"))  # far away: a separate entity
+    assert len(fusion.entities) == 2
+
+    # Now the truck drives into the camera's view: both sensors report the same place, but each is
+    # already bound, so neither association path can bring them together.
+    for step in range(4):
+        fusion.observe(
+            camera_observation(30.0 + step * 0.2, 20.0, track="trk-1", sigma=4.0, seconds=1 + step)
+        )
+        fusion.observe(
+            gps_observation(31.0 + step * 0.2, 20.2, device="gps-truck-5", seconds=1 + step)
+        )
+    assert len(fusion.entities) == 2, "still two, because both sensors are index-bound"
+
+    assert fusion.merge_pass() == 1
+    assert len(fusion.entities) == 1
+
+    entity = next(iter(fusion.entities.values()))
+    assert entity.modalities == {"gps", "video"}, "the merged entity must claim both sensors"
+    assert entity.is_multi_sensor
+    assert entity.device_ids == {"gps:gps-truck-5"}
+    assert entity.track_ids == {"trk-1"}
+    assert entity.observations == 10, "observation counts add up"
+
+
+def test_merging_re_points_the_indexes() -> None:
+    """After a merge, the absorbed entity's device and track ids must resolve to the survivor.
+
+    Otherwise every later observation from that device finds a dangling id, creates a fresh entity,
+    and the pair re-splits on the next message — a merge loop that looks like flapping.
+    """
+    fusion = SensorFusion(ORIGIN, assoc_radius_m=25.0)
+    fusion.observe(camera_observation(10.0, 10.0, track="trk-9", sigma=4.0))
+    fusion.observe(gps_observation(90.0, 10.0, device="gps-9"))
+    for step in range(3):
+        fusion.observe(camera_observation(10.0, 10.0, track="trk-9", sigma=4.0, seconds=1 + step))
+        fusion.observe(gps_observation(11.0, 10.2, device="gps-9", seconds=1 + step))
+    assert len(fusion.entities) == 2
+    assert fusion.merge_pass() == 1
+    survivor = next(iter(fusion.entities))
+
+    fusion.observe(gps_observation(12.3, 10.2, device="gps-9", seconds=3))
+    fusion.observe(camera_observation(11.0, 10.0, track="trk-9", sigma=4.0, seconds=3))
+    assert len(fusion.entities) == 1, "both sensors must still resolve to the survivor"
+    assert next(iter(fusion.entities)) == survivor
+
+
+def test_two_different_trackers_never_merge() -> None:
+    """The safety property. Merging two entities destroys information that cannot be recovered."""
+    fusion = SensorFusion(ORIGIN, assoc_radius_m=25.0)
+    fusion.observe(gps_observation(20.0, 20.0, device="gps-a"))
+    fusion.observe(gps_observation(90.0, 20.0, device="gps-b"))
+    # Both bound, then parked two metres apart — closer than any gate would refuse.
+    for step in range(4):
+        fusion.observe(gps_observation(20.0, 20.0, device="gps-a", seconds=1 + step))
+        fusion.observe(gps_observation(22.0, 20.0, device="gps-b", seconds=1 + step))
+    assert len(fusion.entities) == 2
+    assert fusion.merge_pass() == 0, "two GPS trackers are two objects, whatever the distance"
+    assert len(fusion.entities) == 2
+
+
+def test_a_person_and_a_truck_never_merge() -> None:
+    fusion = SensorFusion(ORIGIN, assoc_radius_m=25.0)
+    fusion.observe(camera_observation(5.0, 5.0, label="truck", track="t-truck"))
+    fusion.observe(camera_observation(5.2, 5.1, label="truck", track="t-truck", seconds=1))
+    fusion.observe(camera_observation(6.0, 5.0, label="person", track="t-person", seconds=1))
+    fusion.observe(camera_observation(6.1, 5.1, label="person", track="t-person", seconds=2))
+    assert fusion.merge_pass() == 0
+    assert len(fusion.entities) == 2
+
+
+def test_modalities_survive_the_evidence_window() -> None:
+    """`provenance` is a bounded window; the claim "GPS and video agreed" is durable."""
+    fusion = SensorFusion(ORIGIN)
+    fusion.observe(camera_observation(0.0, 0.0, track="t1", sigma=4.0))
+    for step in range(60):  # flood the window with GPS fixes
+        fusion.observe(gps_observation(0.1 * step, 0.0, device="gps-1", seconds=step * 0.1))
+    fusion.merge_pass()
+    entity = next(iter(fusion.entities.values()))
+    assert len(entity.provenance) <= 40, "the evidence window stays bounded"
+    assert "video" in entity.modalities, "but the camera contribution is not forgotten"
+    assert entity.is_multi_sensor

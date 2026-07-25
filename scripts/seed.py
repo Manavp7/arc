@@ -110,6 +110,11 @@ async def seed(*, clear: bool, write_geojson: bool) -> int:
                         "bearing_deg": camera.bearing_deg,
                         "fov_deg": camera.fov_deg,
                         "range_m": camera.range_m,
+                        # The physical pose. Fusion inverts the projection with exactly these
+                        # numbers, so they are calibration, not decoration.
+                        "height_m": camera.height_m,
+                        "tilt_deg": camera.tilt_deg,
+                        "vfov_deg": camera.vfov_deg,
                         "covers": list(camera.covers),
                     }
                 ),

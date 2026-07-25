@@ -239,6 +239,14 @@ class FusedEntity:
     """Devices bound to this object. A device id is identity, so a match here is certain."""
     track_ids: set[str] = field(default_factory=set)
     source_ids: set[str] = field(default_factory=set)
+    modalities_seen: set[str] = field(default_factory=set)
+    """Every sensor kind that has ever contributed.
+
+    Kept separately from `provenance`, which is a bounded window of *recent* evidence. Deriving
+    "is this multi-sensor?" from that window meant an entity genuinely corroborated by GPS, video and
+    RFID reported as single-sensor as soon as the older entries rolled off — understating exactly the
+    thing fusion exists to do.
+    """
     embedding: np.ndarray | None = None
     attributes: dict[str, Any] = field(default_factory=dict)
     label: str | None = None
@@ -247,7 +255,8 @@ class FusedEntity:
 
     @property
     def modalities(self) -> set[str]:
-        return {str(entry.modality) for entry in self.provenance}
+        """Sensor kinds that have contributed, ever — not just those still in the evidence window."""
+        return set(self.modalities_seen) or {str(entry.modality) for entry in self.provenance}
 
     @property
     def is_multi_sensor(self) -> bool:
@@ -293,6 +302,7 @@ class SensorFusion:
             "matched_by_appearance": 0,
             "rejected_by_gate": 0,
             "rejected_by_class": 0,
+            "rejected_by_device_conflict": 0,
             "expired": 0,
             "merged": 0,
         }
@@ -332,6 +342,16 @@ class SensorFusion:
         # 3. The real problem: position, time and class agreement.
         best: tuple[float, FusedEntity] | None = None
         for entity in self.entities.values():
+            if self._device_conflict(entity, observation):
+                # A device id means identity, and therefore also *non*-identity: if this entity
+                # already carries a different tracker's id, the two are provably different objects
+                # however close together they are.
+                #
+                # Live consequence of omitting this: six trucks queued 16 m apart at the gate fell
+                # inside the 25 m radius, so five separate GPS trackers were absorbed into one
+                # entity — which then claimed 39,651 observations and five devices.
+                self.stats["rejected_by_device_conflict"] += 1
+                continue
             if not types_compatible(entity.entity_type, observation.entity_type):
                 self.stats["rejected_by_class"] += 1
                 continue
@@ -362,12 +382,36 @@ class SensorFusion:
             for entity in self.entities.values():
                 if entity.embedding is None:
                     continue
+                if self._device_conflict(entity, observation):
+                    self.stats["rejected_by_device_conflict"] += 1
+                    continue
                 if not types_compatible(entity.entity_type, observation.entity_type):
                     continue
                 if float(np.dot(vector, entity.embedding)) >= self.reid_threshold:
                     self.stats["matched_by_appearance"] += 1
                     return entity
         return None
+
+    @staticmethod
+    def _device_conflict(entity: FusedEntity, observation: Observation2D) -> bool:
+        """Does this observation carry a *different* device of the same kind as one already bound?
+
+        A device id is identity, which necessarily makes it non-identity too — and that half is easy
+        to forget, because it only bites when two distinct objects come close enough to pass a
+        positional gate. (Live: six trucks queued 16 m apart absorbed five separate GPS trackers into
+        one entity.)
+
+        But the test has to be **per device kind**. A truck legitimately carries a GPS tracker *and*
+        an RFID tag; a global "different id means different object" rule refused exactly the
+        multi-sensor merge that fusion exists to perform, and broke the M5 acceptance test. So ids are
+        namespaced (``gps:...``, ``tag:...``) and only a clash within one namespace is a conflict:
+        one object, at most one device of each kind.
+        """
+        if not observation.device_id or not entity.device_ids:
+            return False
+        namespace = observation.device_id.split(":", 1)[0]
+        same_kind = {device for device in entity.device_ids if device.split(":", 1)[0] == namespace}
+        return bool(same_kind) and observation.device_id not in same_kind
 
     def _create(self, observation: Observation2D, now: float) -> FusedEntity:
         entity = FusedEntity(
@@ -397,6 +441,7 @@ class SensorFusion:
         entity.updated_monotonic = now
         entity.observations += 1
         entity.source_ids.add(observation.source_id)
+        entity.modalities_seen.add(str(observation.modality))
 
         if observation.device_id:
             entity.device_ids.add(observation.device_id)
@@ -450,6 +495,98 @@ class SensorFusion:
         # every read of it expensive.
         if len(entity.provenance) > 40:
             del entity.provenance[:-40]
+
+    def merge_pass(self) -> int:
+        """Merge entities that have turned out to be the same object.
+
+        Association happens one observation at a time, so a truck first seen by a camera becomes a
+        video-only entity and its GPS tracker — arriving moments later, or gated out while the
+        projected position was still uncertain — becomes a second one. Once the camera track is bound
+        to the first entity it stays bound, so the two never meet: the yard ends up with one entity per
+        *sensor* rather than one per truck, and `multi_sensor` stays near zero while everything looks
+        superficially fine.
+
+        This is track-to-track fusion, and the criteria are deliberately stricter than for a single
+        observation, because merging two entities destroys information that cannot be recovered:
+
+        * no device conflict — a clash of two GPS trackers proves they are different objects;
+        * class compatible;
+        * both filters agree on position within a tight mutual gate;
+        * both recently updated, so this is a live coincidence and not two historical visits.
+        """
+        merged = 0
+        now = time.monotonic()
+        candidates = [
+            entity
+            for entity in self.entities.values()
+            if entity.stale_for(now) < self.time_window_s * 2
+        ]
+        for index, left in enumerate(candidates):
+            if left.entity_id not in self.entities:
+                continue  # already merged away in this pass
+            for right in candidates[index + 1 :]:
+                if right.entity_id not in self.entities or left.entity_id not in self.entities:
+                    continue
+                if not self._mergeable(left, right):
+                    continue
+                keeper, absorbed = (
+                    (left, right) if left.first_seen <= right.first_seen else (right, left)
+                )
+                self._absorb(keeper, absorbed)
+                merged += 1
+                self.stats["merged"] += 1
+        return merged
+
+    def _mergeable(self, left: FusedEntity, right: FusedEntity) -> bool:
+        if left.device_ids and right.device_ids:
+            for namespace in {device.split(":", 1)[0] for device in left.device_ids}:
+                left_kind = {d for d in left.device_ids if d.startswith(f"{namespace}:")}
+                right_kind = {d for d in right.device_ids if d.startswith(f"{namespace}:")}
+                if left_kind and right_kind and left_kind != right_kind:
+                    return False  # two different trackers of the same kind: different objects
+        if not types_compatible(left.entity_type, right.entity_type):
+            return False
+        # A mutual gate: each filter must find the other's position plausible. One-directional gating
+        # lets a very uncertain entity swallow a precise one.
+        left_east, left_north = left.filter.position
+        right_east, right_north = right.filter.position
+        if (
+            math.dist((left_east, left_north), (right_east, right_north))
+            > self.assoc_radius_m * 0.6
+        ):
+            return False
+        forward = left.filter.mahalanobis(right_east, right_north, right.filter.position_sigma_m)
+        backward = right.filter.mahalanobis(left_east, left_north, left.filter.position_sigma_m)
+        return max(forward, backward) <= self.gate_sigma
+
+    def _absorb(self, keeper: FusedEntity, absorbed: FusedEntity) -> None:
+        """Fold ``absorbed`` into ``keeper``, keeping the union of its evidence."""
+        keeper.first_seen = min(keeper.first_seen, absorbed.first_seen)
+        keeper.last_seen = max(keeper.last_seen, absorbed.last_seen)
+        keeper.observations += absorbed.observations
+        keeper.source_ids |= absorbed.source_ids
+        keeper.modalities_seen |= absorbed.modalities_seen
+        keeper.device_ids |= absorbed.device_ids
+        keeper.track_ids |= absorbed.track_ids
+        keeper.provenance = [*keeper.provenance, *absorbed.provenance][-40:]
+        for key, value in absorbed.attributes.items():
+            keeper.attributes.setdefault(key, value)
+        if keeper.embedding is None:
+            keeper.embedding = absorbed.embedding
+        # A device-declared type is more specific than a camera's guess, so prefer whichever entity
+        # had one.
+        if keeper.entity_type is EntityType.UNKNOWN or (
+            absorbed.device_ids and not keeper.device_ids
+        ):
+            keeper.entity_type = absorbed.entity_type
+
+        # Re-point the indexes before dropping the absorbed entity, or its devices and tracks would
+        # resolve to an entity that no longer exists and every later observation would create a new one.
+        for device_id in absorbed.device_ids:
+            self._device_index[device_id] = keeper.entity_id
+        for track_id in absorbed.track_ids:
+            self._track_index[track_id] = keeper.entity_id
+        self.entities.pop(absorbed.entity_id, None)
 
     def _expire(self, now: float) -> None:
         stale = [
@@ -548,7 +685,9 @@ def observation_from_gps(
         sigma_m=max(1.0, accuracy),
         label=str(payload.get("entity_type", "unknown")),
         confidence=float(payload.get("confidence", 0.9)),
-        device_id=source_id,
+        # Namespaced, so a GPS tracker and an RFID tag on the same truck are different *kinds* of
+        # device rather than conflicting identities.
+        device_id=f"gps:{source_id}",
         observation_id=payload.get("observation_id"),
         attributes={
             key: value

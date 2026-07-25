@@ -40,6 +40,17 @@ from sio_schemas import (
 from ..site import Camera, Sensor, Site, load_site
 from .agents import Agent, Population, Truck
 
+# Real-world heights in metres, used to size a detection box from its distance. Values a surveyor
+# would recognise, because the point of a physical projection model is that both sides agree on
+# physics rather than on a curve that looks about right.
+OBJECT_HEIGHT_M: dict[EntityType, float] = {
+    EntityType.TRUCK: 3.6,
+    EntityType.VEHICLE: 1.6,
+    EntityType.FORKLIFT: 2.3,
+    EntityType.PERSON: 1.75,
+    EntityType.DRONE: 0.5,
+}
+
 
 @dataclass
 class TickOutput:
@@ -357,39 +368,53 @@ class YardSimulator:
 
     @staticmethod
     def _project_bbox(camera: Camera, agent: Agent) -> list[float] | None:
-        """A plausible pixel bbox, or None when the object is not really in frame.
+        """Project an agent into the image with an actual pinhole model.
 
-        Not photogrammetrically correct — it does not need to be. What it must get right is the
-        *relationships*: nearer objects are bigger, objects left of the optical axis appear left of
-        centre. That is enough for tracking association and for the UI to draw boxes.
+        Replaced two hand-tuned curves — one here and one in fusion's ground projector — that
+        disagreed by 10 to 28 metres, far outside any sensible association gate. Using the *same
+        physics* on both sides makes the inverse exact, and that agreement is what calibration means:
+        here the simulator stands in for the physical world, and fusion reads the same declared
+        camera pose from the database.
 
-        Two details it must also get right, both learned from a failing test: the vertical centre has
-        to be **bounded**, because an unbounded 1/distance term put a nearby object's box at y≈1650
-        in a 720-pixel frame; and the result has to be clipped *and then validated*, because clipping
-        alone can leave a degenerate or entirely off-frame box.
+        An airborne object is still projected by its ground track. The flat-ground assumption does not
+        hold for it, and fusion is told to distrust camera fixes for drones rather than silently
+        believing a position that is wrong by the drone's altitude.
         """
         width_px, height_px = 1280.0, 720.0
         dx = agent.kinematics.east - camera.east
         dy = agent.kinematics.north - camera.north
-        distance = max(2.0, math.hypot(dx, dy))
+        distance = max(1.0, math.hypot(dx, dy))
+
+        # --- horizontal: bearing offset maps to a column ----------------------------
         bearing = (math.degrees(math.atan2(dx, dy)) + 360) % 360
         offset_deg = (bearing - camera.bearing_deg + 180) % 360 - 180
-
         centre_x = width_px / 2 + (offset_deg / (camera.fov_deg / 2)) * (width_px / 2)
-        # Apparent size falls off with distance, capped so a very close object fills the frame
-        # instead of overflowing it.
-        box_height = min(height_px * 0.9, max(24.0, 2200.0 / distance))
-        box_width = box_height * (
-            1.9 if agent.entity_type in (EntityType.TRUCK, EntityType.FORKLIFT) else 0.55
+
+        # --- vertical: the ground contact point maps to a row -----------------------
+        # A ground point at horizontal distance d from a camera at height h has depression angle
+        # atan(h/d); with the axis tilted tilt_deg below horizontal over a vertical field of view
+        # vfov_deg, that is linear in image row.
+        depression_deg = math.degrees(math.atan(camera.height_m / distance))
+        ground_y = height_px / 2 + ((depression_deg - camera.tilt_deg) / (camera.vfov_deg / 2)) * (
+            height_px / 2
         )
-        # Ground-plane perspective: nearer objects sit lower in frame, asymptotically toward the
-        # bottom third rather than without limit.
-        centre_y = height_px * 0.5 + min(height_px * 0.28, 900.0 / distance)
+
+        # --- apparent height is the angle the object subtends ------------------------
+        object_height_m = OBJECT_HEIGHT_M.get(agent.entity_type, 1.8)
+        subtended_deg = math.degrees(math.atan(object_height_m / distance))
+        box_height = (subtended_deg / camera.vfov_deg) * height_px
+        if agent.entity_type in (EntityType.TRUCK, EntityType.VEHICLE):
+            aspect = 2.1
+        elif agent.entity_type is EntityType.FORKLIFT:
+            aspect = 1.4
+        else:
+            aspect = 0.45
+        box_width = box_height * aspect
 
         x1 = max(0.0, min(width_px, centre_x - box_width / 2))
-        y1 = max(0.0, min(height_px, centre_y - box_height / 2))
+        y1 = max(0.0, min(height_px, ground_y - box_height))
         x2 = max(0.0, min(width_px, centre_x + box_width / 2))
-        y2 = max(0.0, min(height_px, centre_y + box_height / 2))
+        y2 = max(0.0, min(height_px, ground_y))
         if x2 - x1 < 2.0 or y2 - y1 < 2.0:
             return None  # clipped away entirely, or too small to count as a detection
         return [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)]

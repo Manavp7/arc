@@ -245,6 +245,12 @@ class FusionService(SioService):
 
     async def _publish_entities(self, ctx: MessageContext | None) -> None:
         assert self.fusion is not None
+        # Merge before publishing, so a truck that was briefly two entities is published once rather
+        # than twice — otherwise the world model would carry both and the duplicate would outlive the
+        # merge.
+        merged = self.fusion.merge_pass()
+        if merged:
+            self.log.info("fusion.merged", pairs=merged, note="track-to-track fusion")
         for fused in list(self.fusion.publishable()):
             entity = Entity(
                 entity_id=fused.entity_id,
@@ -335,6 +341,8 @@ class FusionService(SioService):
             by_position=stats["matched_by_position"],
             by_appearance=stats["matched_by_appearance"],
             gate_rejects=stats["rejected_by_gate"],
+            device_conflicts=stats["rejected_by_device_conflict"],
+            merged=stats["merged"],
             created=stats["created"],
             expired=stats["expired"],
             unprojectable=self._unprojectable,

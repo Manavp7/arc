@@ -9,10 +9,16 @@ The model here is the standard one for a fixed camera over flat ground:
 * **bearing** comes from the box's horizontal position. A detection at the centre of frame lies along
   the optical axis; one at the edge lies at half the field of view off-axis. Linear in between, which
   is a small-angle approximation that is fine for a 60-90 degree lens.
-* **range** comes from the box's vertical position, under a flat-ground assumption. The bottom of the
-  box is where the object meets the ground, and for a camera at a known height and tilt that maps
-  monotonically to distance. Near the horizon the mapping becomes ill-conditioned, so range is capped
-  and the uncertainty grows with distance.
+* **range** comes from the box's bottom edge under a flat-ground assumption, by inverting the pinhole
+  projection exactly: a ground point at distance ``d`` seen from height ``h`` has depression angle
+  ``atan(h/d)``, which maps linearly to an image row given the tilt and vertical field of view. Near
+  the horizon the inverse is ill-conditioned, so the uncertainty it reports grows accordingly and
+  fixes beyond the camera's rated range are refused outright.
+
+An earlier version used a hand-tuned curve here and a *different* hand-tuned curve in the simulator's
+forward projection. They disagreed by 10 to 28 metres — far outside any sensible association gate, and
+the reason camera tracks never fused with GPS tracks. Both sides now use the same physics, which is
+what calibration means.
 
 Both assumptions are stated rather than hidden, because they decide when the output can be trusted:
 flat ground within a yard is reasonable; a sloped approach road is not. `position_sigma_m` reports the
@@ -47,7 +53,11 @@ class CameraCalibration:
     fov_deg: float = 70.0
     range_m: float = 60.0
     height_m: float = 6.0
-    """Mounting height. Affects the vertical-position-to-range mapping."""
+    """Mounting height above the ground plane."""
+    tilt_deg: float = 18.0
+    """Downward tilt of the optical axis."""
+    vfov_deg: float = 45.0
+    """Vertical field of view."""
     frame_width: int = 1280
     frame_height: int = 720
     zone_id: str | None = None
@@ -71,6 +81,8 @@ class CameraCalibration:
             fov_deg=float(config.get("fov_deg", 70.0)),
             range_m=float(config.get("range_m", 60.0)),
             height_m=float(config.get("height_m", 6.0)),
+            tilt_deg=float(config.get("tilt_deg", 18.0)),
+            vfov_deg=float(config.get("vfov_deg", 45.0)),
             zone_id=row.get("zone_id"),
         )
 
@@ -116,24 +128,34 @@ class GroundProjector:
         ) * half_fov
         bearing = (calibration.bearing_deg + offset) % 360.0
 
-        # --- range from vertical position -----------------------------------------
-        # Normalised height down the frame: 0 at the horizon, 1 at the bottom edge. The horizon sits
-        # at a third of the frame in this camera model (matching the simulator's renderer), and
-        # anything above it is sky — no ground intersection exists.
-        horizon = calibration.frame_height * 0.33
-        if ground_y <= horizon + 1:
+        # --- range from the ground contact row ------------------------------------
+        # The exact inverse of the camera's projection:
+        #     depression = tilt + ((row - H/2) / (H/2)) * (vfov / 2)
+        #     distance   = height / tan(depression)
+        depression_deg = calibration.tilt_deg + (
+            (ground_y - calibration.frame_height / 2) / (calibration.frame_height / 2)
+        ) * (calibration.vfov_deg / 2)
+        if depression_deg <= 0.15:
+            return None  # at or above the horizon: the ray never meets the ground
+        range_m = calibration.height_m / math.tan(math.radians(depression_deg))
+        if range_m > calibration.range_m * 1.5:
+            # Beyond what this camera claims to cover. Returning a 300 m fix from a camera rated to
+            # 60 m would let one badly-placed box drag an entity across the site.
             return None
-        depth = (ground_y - horizon) / (calibration.frame_height - horizon)
-        # Inverse-perspective: the ground distance falls as the contact point moves down the frame.
-        # Clamped to the camera's stated range, beyond which its own FOV polygon says it cannot see.
-        range_m = min(calibration.range_m, calibration.height_m / max(0.02, depth) * 2.2)
 
         # --- uncertainty ----------------------------------------------------------
-        # One pixel of vertical error maps to more ground distance the further away the object is, so
-        # sigma grows roughly with the square of range. The constant is chosen so a 20 m detection has
-        # about 2 m of positional uncertainty, which matches how well this class of estimate does in
-        # practice against a GPS fix.
-        sigma = 0.4 + (range_m**2) * 0.005
+        # A pixel of vertical error subtends a fixed angle, and that angle maps to more ground
+        # distance the flatter the ray, so range error grows with roughly the square of range. Taking
+        # it from the derivative of h/tan(a) rather than from a fitted constant means it stays correct
+        # if the mounting height or tilt ever changes.
+        pixel_angle_rad = math.radians(calibration.vfov_deg / calibration.frame_height)
+        depression_rad = math.radians(depression_deg)
+        range_sigma = (
+            abs(calibration.height_m * pixel_angle_rad / (math.sin(depression_rad) ** 2)) * 2.0
+        )  # two pixels of contact-point uncertainty: detection boxes are not exact
+        # Bearing error contributes across-track uncertainty, which grows linearly with range.
+        bearing_sigma = range_m * math.radians(calibration.fov_deg / calibration.frame_width) * 3.0
+        sigma = max(0.5, math.hypot(range_sigma, bearing_sigma))
 
         geo = offset_geo(calibration.geo, bearing_deg=bearing, distance_m=range_m)
         return GroundFix(
