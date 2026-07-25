@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -22,8 +24,27 @@ from sio_schemas import (
 )
 
 from .activities import ActivityContext
+from .nocode import (
+    OPERATORS,
+    SEVERITIES,
+    Problem,
+    WorkflowSpec,
+    load_workflows,
+    parse,
+    to_playbook,
+    validate,
+)
 from .playbooks import PLAYBOOKS, Playbook, playbooks_for
 from .runner import InlineRunner, RunLedger, RunOutcome
+
+
+def _severity_rank(severity: str) -> int:
+    """Where a severity sits in the ordering, unknown values sorting lowest.
+
+    Lowest rather than highest: an unrecognised severity should not clear a `min_severity: critical` gate. A
+    typo must fail closed.
+    """
+    return SEVERITIES.index(severity) if severity in SEVERITIES else -1
 
 
 class WorkflowService(SioService):
@@ -38,6 +59,8 @@ class WorkflowService(SioService):
         self.pool: PgPool = get_pg_pool(self.settings)
         self.runner = InlineRunner()
         self.ledger = RunLedger()
+        self._authored: dict[str, WorkflowSpec] = {}
+        self._authored_problems: list[Problem] = []
         self._started = 0
         self._completed = 0
         self._failed = 0
@@ -45,12 +68,24 @@ class WorkflowService(SioService):
 
     async def setup(self) -> None:
         await self.pool.open()
+        self._reload_authored()
         self.log.info(
             "workflow.ready",
             runner=self.runner.name,
             playbooks=sorted(PLAYBOOKS),
+            authored=sorted(self._authored),
+            authored_problems=len(self._authored_problems),
             dry_run=self.settings.workflow_dry_run,
         )
+        for problem in self._authored_problems:
+            # Logged individually and loudly. A workflow that failed to load is indistinguishable from one that
+            # never fires, and the author will assume the latter.
+            self.log.warning(
+                "workflow.authored_rejected",
+                where=problem.where,
+                why=problem.message,
+                fix=problem.fix,
+            )
         if self.settings.workflow_dry_run:
             self.log.info(
                 "workflow.dry_run",
@@ -80,6 +115,67 @@ class WorkflowService(SioService):
         }
 
     # ------------------------------------------------------------------ handling
+    @property
+    def workflow_dir(self) -> Path:
+        """Where authored workflows live.
+
+        Under `.sio/` rather than in the package, because they are site configuration written by an operator, not
+        code — and a file an operator edits should never be inside something `pip install` overwrites.
+        """
+        return Path(self.settings.data_dir) / "workflows"
+
+    def _reload_authored(self) -> None:
+        specs, problems = load_workflows(self.workflow_dir)
+        # Collisions with a code playbook are rejected rather than merged, in that direction: an authored file
+        # silently overriding the fire response would be a way to disable it without anybody noticing.
+        self._authored = {spec.name: spec for spec in specs if spec.name not in PLAYBOOKS}
+        self._authored_problems = list(problems)
+        for spec in specs:
+            if spec.name in PLAYBOOKS:
+                self._authored_problems.append(
+                    Problem(
+                        spec.name,
+                        f"{spec.name!r} is also a code playbook, so this file was ignored",
+                        "rename it; an authored file must not be able to silently replace a code playbook",
+                    )
+                )
+
+    def _playbooks_for(self, event: Event, message: BusMessage) -> list[Playbook]:
+        """Code playbooks, plus authored workflows whose conditions pass.
+
+        One execution path for both. A separate one for no-code workflows would mean retries, compensation,
+        cooldowns and run records had a second implementation that drifts — and the no-code one would be the
+        less-tested of the pair while dispatching the same drones.
+        """
+        selected = list(playbooks_for(str(event.type), str(event.severity)))
+        if not self._authored:
+            return selected
+
+        fact = {
+            "type": str(event.type),
+            "severity": str(event.severity),
+            "zone_id": event.zone_id,
+            "payload": message.payload if isinstance(message.payload, dict) else {},
+            **(event.model_dump(mode="json") if hasattr(event, "model_dump") else {}),
+        }
+        for spec in self._authored.values():
+            if not spec.enabled or str(event.type) not in spec.event_types:
+                continue
+            if _severity_rank(str(event.severity)) < _severity_rank(spec.min_severity):
+                continue
+            if not spec.matches(fact):
+                self.log.debug(
+                    "workflow.conditions_failed", workflow=spec.name, event_type=str(event.type)
+                )
+                continue
+            try:
+                selected.append(to_playbook(spec))
+            except ValueError as error:
+                # An authored workflow that has become invalid — an activity removed by a later deploy, say —
+                # must not stop the code playbooks from running.
+                self.log.warning("workflow.authored_invalid", workflow=spec.name, why=str(error))
+        return selected
+
     async def on_message(self, message: BusMessage, ctx: MessageContext) -> None:
         if message.kind != "Event":
             return
@@ -89,7 +185,7 @@ class WorkflowService(SioService):
             # a fire response trigger a fire response.
             return
 
-        for playbook in playbooks_for(str(event.type), str(event.severity)):
+        for playbook in self._playbooks_for(event, message):
             subject = self._subject(playbook, event)
             if not self.ledger.may_start(playbook, subject):
                 self.log.info(
@@ -316,6 +412,126 @@ class WorkflowService(SioService):
 
     # -------------------------------------------------------------------- routes
     def routes(self, app: FastAPI) -> None:
+        @app.get("/workflow/vocabulary", tags=["workflow"])
+        async def vocabulary() -> dict[str, Any]:
+            """Everything an editor needs to offer valid choices.
+
+            Served rather than hard-coded into the UI, because a hard-coded activity list is a UI that offers
+            steps the engine cannot run — the failure being a workflow that validates in the browser and is
+            rejected on save. The editor should not be able to construct something invalid in the first place.
+            """
+            from .activities import ACTIVITIES
+
+            return {
+                "activities": sorted(ACTIVITIES),
+                "operators": list(OPERATORS),
+                "severities": list(SEVERITIES),
+                "fields": [
+                    # The paths that actually exist on a fact, because "type a field path" is how somebody ends
+                    # up with a condition that silently never matches.
+                    "type",
+                    "severity",
+                    "zone_id",
+                    "payload.zone_id",
+                    "payload.confidence",
+                    "payload.entity_id",
+                    "payload.value",
+                ],
+                "note": (
+                    "Adding a new activity is a code change, deliberately: dispatching a drone is code, and a "
+                    "builder that pretended otherwise would end up with a JSON file containing a Python "
+                    "expression."
+                ),
+            }
+
+        @app.post("/workflow/authored/validate", tags=["workflow"])
+        async def validate_authored(document: dict[str, Any]) -> dict[str, Any]:
+            """Check a workflow without saving it. The endpoint the editor calls on every keystroke.
+
+            Returns EVERY problem, not the first: somebody fixing a workflow wants the list, and a validator
+            revealing one problem per attempt turns a five-minute task into twenty.
+            """
+            spec = parse(document)
+            problems = validate(spec)
+            result: dict[str, Any] = {
+                "valid": not problems,
+                "problems": [problem.describe() for problem in problems],
+            }
+            if not problems:
+                playbook = to_playbook(spec)
+                # The execution ORDER, which is the one thing an author cannot read off their own JSON: the DAG
+                # is topologically sorted, so the steps may not run in the order they were written.
+                result["execution_order"] = [step.step_id for step in playbook.steps]
+                result["compensation_order"] = [
+                    step.step_id for step in reversed(playbook.steps) if step.compensate
+                ]
+            return result
+
+        @app.get("/workflow/authored", tags=["workflow"])
+        async def list_authored() -> dict[str, Any]:
+            return {
+                "workflows": [spec.describe() for spec in self._authored.values()],
+                # The rejected ones travel with the valid ones. A workflow that failed to load is otherwise
+                # indistinguishable from one that never fires, and the author will assume the latter.
+                "rejected": [problem.describe() for problem in self._authored_problems],
+            }
+
+        @app.put("/workflow/authored/{name}", tags=["workflow"])
+        async def save_authored(name: str, document: dict[str, Any]) -> dict[str, Any]:
+            """Save a workflow, refusing an invalid one.
+
+            Refusing rather than saving-and-warning. A saved-but-broken workflow is the worst of both: it appears
+            in the list, an operator believes it is armed, and it never runs.
+            """
+            document = {**document, "name": name}
+            spec = parse(document)
+            problems = validate(spec)
+            if problems:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "message": f"{len(problems)} problem(s); nothing was saved",
+                        "problems": [problem.describe() for problem in problems],
+                    },
+                )
+            if name in PLAYBOOKS:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"{name!r} is a code playbook. Authored files must not be able to replace one — that "
+                        "would be a way to disable the fire response without anybody noticing."
+                    ),
+                )
+            self.workflow_dir.mkdir(parents=True, exist_ok=True)
+            path = self.workflow_dir / f"{name}.json"
+            path.write_text(json.dumps(spec.describe(), indent=2) + "\n")
+            self._reload_authored()
+            playbook = to_playbook(spec)
+            self.log.info(
+                "workflow.authored_saved",
+                workflow=name,
+                steps=playbook.step_count,
+                triggers=list(spec.event_types),
+            )
+            return {
+                "saved": name,
+                "path": str(path),
+                "execution_order": [step.step_id for step in playbook.steps],
+                "armed": spec.enabled,
+            }
+
+        @app.delete("/workflow/authored/{name}", tags=["workflow"])
+        async def delete_authored(name: str) -> dict[str, Any]:
+            path = self.workflow_dir / f"{name}.json"
+            if not path.exists():
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"no authored workflow {name!r}; have {sorted(self._authored)}",
+                )
+            path.unlink()
+            self._reload_authored()
+            return {"deleted": name}
+
         @app.get("/workflow/playbooks", tags=["workflow"])
         async def playbooks() -> dict[str, Any]:
             """Every playbook, its triggers, and its steps with their compensations."""
