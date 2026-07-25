@@ -700,3 +700,80 @@ def test_a_conversational_reply_makes_no_claim_about_the_site() -> None:
     reply = conversational_reply("What can you help me with?")
     assert reply and "forecast" in reply.lower(), "it should describe real capabilities"
     assert conversational_reply("") is None
+
+
+# --- the false statement about the world --------------------------------------------------------
+def test_a_model_sending_the_string_null_does_not_empty_the_site() -> None:
+    """The worst bug this product can have, observed in the running system.
+
+    Asked "what is on site right now?", the model called:
+
+        list_entities(entity_type='null', limit='50', zone_id='null')
+
+    The literal string `'null'`. That reached the API as `type=null`, correctly matched no entity of type
+    "null", returned an empty list, and the copilot told the operator:
+
+        "There are no entities on site right now."
+
+    Fifty entities were on site. A fluent, confident, false statement about the physical world is far worse
+    than an error message, because there is nothing about it for the reader to distrust.
+    """
+    from sio_copilot.tools import ToolBelt
+
+    cleaned = ToolBelt._coerce({"entity_type": "null", "limit": "50", "zone_id": "null"}, limit=int)
+    assert "entity_type" not in cleaned
+    assert "zone_id" not in cleaned
+    assert cleaned["limit"] == 50, "the usable argument must survive"
+
+
+def test_every_spelling_of_nothing_is_treated_as_no_filter() -> None:
+    """Collected from observed behaviour, not imagined.
+
+    `all` and `any` matter as much as `null`: a model expressing "everything" as a filter VALUE turns a
+    request for everything into a request for nothing.
+    """
+    from sio_copilot.tools import ToolBelt
+
+    for value in ("null", "None", "  none  ", "", "undefined", "N/A", "all", "any", "*", "-"):
+        cleaned = ToolBelt._coerce({"entity_type": value})
+        assert "entity_type" not in cleaned, f"{value!r} was passed through as a filter"
+
+
+def test_a_real_filter_is_not_stripped() -> None:
+    from sio_copilot.tools import ToolBelt
+
+    assert ToolBelt._coerce({"entity_type": "truck"})["entity_type"] == "truck"
+    assert ToolBelt._coerce({"zone_id": "dock_3"})["zone_id"] == "dock_3"
+
+
+def test_an_empty_filtered_result_is_not_reported_as_an_empty_site() -> None:
+    """Defence in depth behind the argument strip.
+
+    A legitimate filter can match nothing — no trucks on site, nobody in dock 3 — and "no trucks" must never
+    become "nothing is on site". The model repeats what it is given, so what it is given carries the
+    distinction.
+    """
+    from sio_copilot.tools import _entity_brief
+
+    brief = _entity_brief([], {"entity_type": "truck"}, capped=False)
+    assert brief["filtered_by"] == {"entity_type": "truck"}
+    assert "says nothing about the rest of the site" in brief["note"]
+    assert "do not report it as the site being empty" in brief["note"]
+
+
+def test_a_genuinely_quiet_site_is_described_as_such() -> None:
+    """The fix must not make an empty site unreportable — only unfilterable-empty ambiguous."""
+    from sio_copilot.tools import _entity_brief
+
+    brief = _entity_brief([], {}, capped=False)
+    assert "filtered_by" not in brief
+    assert "no moving entity has been seen" in brief["note"]
+
+
+def test_a_count_that_hit_its_limit_is_reported_as_a_floor() -> None:
+    """The model repeats numbers verbatim and has no way to know a list was truncated."""
+    from sio_copilot.tools import _entity_brief
+
+    rows = [{"type": "truck", "label": f"T{index}"} for index in range(50)]
+    assert _entity_brief(rows, {}, capped=True)["count_is_at_least"] is True
+    assert "count_is_at_least" not in _entity_brief(rows, {}, capped=False)

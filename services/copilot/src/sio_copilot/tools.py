@@ -30,6 +30,16 @@ import httpx
 from sio_core import describe_error, get_logger
 from sio_core.llm import ToolSpec
 
+#: Strings a model sends when it means "no value".
+#:
+#: Collected from observed behaviour rather than imagined: `'null'` is the one that produced a false
+#: statement about the site, and the rest are the same mistake in different spellings. Note `'all'` and
+#: `'any'` — a model expressing "everything" as a filter VALUE turns a request for everything into a
+#: request for nothing.
+NULLISH = frozenset(
+    {"", "null", "none", "nil", "undefined", "n/a", "na", "any", "all", "*", "-", "unspecified"}
+)
+
 log = get_logger("sio.copilot.tools")
 
 # How long any single tool may take. A copilot answering in under ten seconds cannot afford a tool that
@@ -178,8 +188,27 @@ class ToolBelt:
         pedantically correct and would make the copilot look broken for a reason no user could act on, so
         the tool coerces and carries on. A value that genuinely cannot be coerced is dropped rather than
         guessed.
+
+        It also strips **null-ish strings**, and that is not a nicety — it prevents the worst class of bug
+        this product can have. Asked "what is on site right now?", the model called:
+
+            list_entities(entity_type='null', limit='50', zone_id='null')
+
+        The literal string `'null'`. That reached the API as `type=null`, which correctly matched no entity
+        of type "null", returned an empty list, and the copilot told the operator:
+
+            "There are no entities on site right now."
+
+        Fifty entities were on site. A fluent, confident, false statement about the physical world is far
+        worse than an error message, because there is nothing about it for the reader to distrust.
+
+        Every one of these spellings means "no filter" and none of them means "filter for the word null".
         """
-        out = dict(arguments)
+        out = {
+            key: value
+            for key, value in arguments.items()
+            if not (isinstance(value, str) and value.strip().lower() in NULLISH)
+        }
         for key, cast in casts.items():
             if key in out and out[key] is not None:
                 try:
@@ -448,13 +477,7 @@ class ToolBelt:
             ok=True,
             source=f"{self.api_url}/api/entities",
             evidence=[row.get("entity_id", "") for row in rows[:10]],
-            brief={
-                "count": len(rows),
-                "count_is_at_least": capped,
-                "counting": "moving entities seen in the last 5 minutes, excluding fixed infrastructure",
-                "by_type": _counted(row.get("type") for row in rows),
-                "examples": [row.get("label") or row.get("entity_id") for row in rows[:5]],
-            },
+            brief=_entity_brief(rows, arguments, capped=capped),
             data={
                 "count": len(rows),
                 "by_type": _counted(row.get("type") for row in rows),
@@ -903,6 +926,43 @@ def _brief_spatial(question: str, data: Any) -> dict[str, Any]:
         "zone_id": data.get("zone_id"),
         "occupants": len(data.get("confirmed") or data.get("postgis") or []),
     }
+
+
+def _entity_brief(
+    rows: list[dict[str, Any]], arguments: dict[str, Any], *, capped: bool
+) -> dict[str, Any]:
+    """What the model is told about an entity query, phrased so it cannot overstate the result.
+
+    Defence in depth behind the null-ish argument strip. Even with sane arguments, a legitimate filter can
+    match nothing — no trucks on site, nobody in dock 3 — and "no trucks" must never become "nothing is on
+    site". The model repeats what it is given, so what it is given has to carry the distinction: an empty
+    result is reported together with the filter that produced it, and the note says explicitly that this is
+    not a statement about the whole site.
+    """
+    filters = {
+        key: value
+        for key, value in arguments.items()
+        if key in ("entity_type", "zone_id") and value is not None
+    }
+    brief: dict[str, Any] = {
+        "count": len(rows),
+        "counting": "moving entities seen in the last 5 minutes, excluding fixed infrastructure",
+        "by_type": _counted(row.get("type") for row in rows),
+        "examples": [row.get("label") or row.get("entity_id") for row in rows[:5]],
+    }
+    if capped:
+        # A count that hit its own limit is a floor. The model has no way to know the list was truncated.
+        brief["count_is_at_least"] = True
+    if filters:
+        brief["filtered_by"] = filters
+    if not rows:
+        brief["note"] = (
+            f"nothing matched the filter {filters}. This says nothing about the rest of the site — "
+            "do not report it as the site being empty; say which filter returned nothing."
+            if filters
+            else "no moving entity has been seen in the last 5 minutes"
+        )
+    return brief
 
 
 def _counted(values: Any) -> dict[str, int]:
