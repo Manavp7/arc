@@ -85,7 +85,7 @@ class SioService:
         self._started_at = time.monotonic()
         self._stopping = asyncio.Event()
         self._seen: OrderedDict[str, None] = OrderedDict()
-        self._counters = {"consumed": 0, "produced": 0, "errors": 0}
+        self._counters = {"consumed": 0, "produced": 0, "errors": 0, "dead_lettered": 0}
         self._extra_checks: dict[str, str] = {}
         self._app: FastAPI | None = None
 
@@ -194,6 +194,22 @@ class SioService:
             checks.update(await self.health_checks())
         except Exception as exc:
             checks["custom"] = f"error: {exc}"
+        # Dead-lettered messages degrade health. This is not decoration.
+        #
+        # The dead-letter queue is containment: a bad message is set aside so it cannot wedge a stream.
+        # It worked exactly as designed and thereby hid a real failure for an entire phase — every
+        # single track failed to persist (a SQL parameter Postgres could not type), each one was
+        # rejected, dead-lettered and acked, and the pipeline carried on looking healthy. 23,000
+        # messages in `dlq.tracks` and a service reporting "ok".
+        #
+        # Containment without visibility is just a quieter kind of failure, so a service that is
+        # dropping messages now says so.
+        rejected = int(self._counters.get("dead_lettered", 0))
+        if rejected:
+            checks["dead_lettered"] = (
+                f"degraded: {rejected} message(s) rejected and dead-lettered — see dlq.* streams"
+            )
+
         checks.update(self._extra_checks)
         # A check is healthy when it *starts with* "ok", so a service can report useful detail
         # ("ok (18 agents, 81 frames)") without declaring itself broken.
@@ -293,7 +309,13 @@ class SioService:
                 # than redelivering something that will fail identically forever.
                 self._counters["errors"] += 1
                 self.metrics.errors.labels(service=self.name, kind="domain").inc()
-                self.log.error("message.rejected", topic=topic, error=str(exc))
+                self._counters["dead_lettered"] += 1
+                self.log.error(
+                    "message.rejected",
+                    topic=topic,
+                    error=str(exc),
+                    dead_lettered_total=self._counters["dead_lettered"],
+                )
                 await self.bus.dead_letter(message, str(exc))
                 self.metrics.dead_lettered.labels(service=self.name, topic=topic).inc()
                 if message.stream_id:

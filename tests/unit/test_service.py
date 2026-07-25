@@ -242,3 +242,24 @@ async def test_message_context_reports_age(settings, memory_bus) -> None:
     ctx = MessageContext(service, message)
     assert ctx.age_s >= 0.0
     assert ctx.attempt >= 0
+
+
+async def test_a_service_that_dead_letters_reports_itself_degraded(settings, memory_bus) -> None:  # type: ignore[no-untyped-def]
+    """Containment without visibility is a quieter kind of failure.
+
+    The dead-letter queue worked exactly as designed and hid a real failure for an entire phase: every
+    track failed to persist on a SQL parameter Postgres could not type, each one was rejected,
+    dead-lettered and acked, and every service kept reporting "ok" while 23,000 messages piled up in
+    dlq.tracks. A service that is dropping messages must say so.
+    """
+    service = RejectingService(settings, bus=memory_bus)
+    healthy = await service.health()
+    assert healthy.status == "ok", "nothing has failed yet"
+
+    await memory_bus.publish(Topic.DETECTIONS, a_detection())
+    await service.drain(limit=1, timeout_s=2.0)
+
+    degraded = await service.health()
+    assert degraded.status == "degraded"
+    assert "dead_lettered" in degraded.checks
+    assert "1 message" in degraded.checks["dead_lettered"]

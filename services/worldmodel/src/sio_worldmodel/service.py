@@ -158,8 +158,16 @@ class WorldModelService(SioService):
                 start_ts, last_ts, hits, confidence, path, payload
             ) VALUES (
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                CASE WHEN %s IS NULL THEN NULL
-                     ELSE ST_SetSRID(ST_GeomFromText(%s), 4326)::geography END,
+                -- Cast the parameter explicitly, and no CASE.
+                --
+                -- Postgres cannot infer a type for a bare placeholder inside a "WHEN ... IS NULL"
+                -- test, so the original CASE failed with "could not determine data type of parameter
+                -- $11" for EVERY track. The CASE was unnecessary anyway: PostGIS functions are STRICT,
+                -- so a NULL WKT already yields a NULL geography.
+                --
+                -- (And placeholders inside a SQL comment still count: writing the old expression out
+                -- in a comment here made psycopg see 13 placeholders for 12 parameters.)
+                ST_SetSRID(ST_GeomFromText(%s::text), 4326)::geography,
                 %s::jsonb
             )
             ON CONFLICT (tenant_id, track_id) DO UPDATE SET
@@ -182,7 +190,6 @@ class WorldModelService(SioService):
                 track.last_ts,
                 track.hits,
                 track.confidence,
-                path_wkt,
                 path_wkt,
                 track.to_json(),
             ),

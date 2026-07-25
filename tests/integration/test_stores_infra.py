@@ -587,3 +587,69 @@ async def test_postgis_and_shapely_agree_on_zone_membership(pool, cfg) -> None: 
         f"shapely and PostGIS disagree at {len(disagreements)} points more than {knife_edge_m} m "
         f"from any boundary: {disagreements[:3]}"
     )
+
+
+async def test_every_worldmodel_write_runs_against_postgres(pool, cfg) -> None:  # type: ignore[no-untyped-def]
+    """Execute the world model's persistence statements for real, including the empty cases.
+
+    Regression, and an expensive one: the track insert bound a bare placeholder inside a
+    ``CASE WHEN ... IS NULL`` test, which Postgres cannot assign a type. EVERY track failed with
+    "could not determine data type of parameter $11" — for an entire phase. Nothing looked wrong,
+    because the dead-letter queue did its job: each message was rejected, dead-lettered and acked, and
+    the pipeline carried on. 23,000 messages in dlq.tracks and every service reporting "ok".
+
+    Two lessons, both now encoded: a write path that is never executed by a test is a write path that
+    does not work, and the empty and NULL cases are the ones that break — a track with no path, one
+    fix, or three.
+    """
+    from sio_worldmodel.service import WorldModelService
+
+    from sio_schemas import BBox, Track, TrackState, TrackStatus
+
+    service = WorldModelService.__new__(WorldModelService)
+    service.pool = pool
+    from sio_core import get_logger
+
+    service.log = get_logger("test.worldmodel")
+
+    cases = {
+        "no fixes at all": [],
+        "one bbox fix, no geo": [TrackState(ts=utc_now(), bbox=BBox(x1=0, y1=0, x2=5, y2=5))],
+        "two geo fixes": [
+            TrackState(ts=utc_now(), geo=Geo(lat=37.7749, lon=-122.4194)),
+            TrackState(ts=utc_now(), geo=Geo(lat=37.7750, lon=-122.4194)),
+        ],
+    }
+    written = []
+    for label, states in cases.items():
+        track = Track(
+            tenant_id=TENANT,
+            source_id="cam-test",
+            **{"class": "truck"},
+            confidence=0.8,
+            status=TrackStatus.CONFIRMED,
+            hits=4,
+            states=states,
+        )
+        await service._handle_track(track)
+        # Republished on every frame, so the upsert must work too.
+        await service._handle_track(track)
+        row = await pool.fetchrow(
+            "SELECT track_id, path IS NULL AS no_path FROM tracks WHERE tenant_id = %s AND track_id = %s",
+            (TENANT, track.track_id),
+        )
+        assert row is not None, f"track with {label} was not persisted"
+        written.append(track.track_id)
+
+    # A path is stored only when there are enough fixes for a linestring.
+    paths = await pool.fetch(
+        "SELECT track_id, ST_NPoints(path::geometry) AS points FROM tracks "
+        "WHERE tenant_id = %s AND track_id = ANY(%s) ORDER BY track_id",
+        (TENANT, written),
+    )
+    assert any(row["points"] == 2 for row in paths), "the two-fix track should have a linestring"
+    assert any(row["points"] is None for row in paths), "the no-fix track should have no path"
+
+    await pool.execute(
+        "DELETE FROM tracks WHERE tenant_id = %s AND track_id = ANY(%s)", (TENANT, written)
+    )
