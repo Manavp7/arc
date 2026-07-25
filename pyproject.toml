@@ -24,6 +24,7 @@ dependencies = [
     "sio-copilot",
     "sio-mcp",
     "sio-workflow",
+    "sio-decision",
 ]
 
 [tool.uv]
@@ -47,6 +48,7 @@ sio-prediction = { workspace = true }
 sio-copilot = { workspace = true }
 sio-mcp = { workspace = true }
 sio-workflow = { workspace = true }
+sio-decision = { workspace = true }
 
 [dependency-groups]
 dev = [

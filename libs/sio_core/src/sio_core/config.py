@@ -264,6 +264,15 @@ class Settings(BaseSettings):
     without consequences. Every dry-run step records what it WOULD have done, so the run log is still an
     honest account."""
 
+    # --- decision -----------------------------------------------------------
+    decision_use_llm: bool = True
+    """Whether to ask a model to write the rationale.
+
+    When false — or when the model is unreachable — a template built from the same measurements is used
+    instead. That is not a degraded mode: the template quotes the numbers the options were scored on and is
+    arguably more trustworthy than a generated paragraph. Either way the model explains the ranking and
+    never changes it, because the optimiser is the part that can be checked."""
+
     # --- alerts -------------------------------------------------------------
     alert_dedup_window_s: float = 120.0
     alert_escalate_after_s: float = 300.0
