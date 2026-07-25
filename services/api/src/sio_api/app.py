@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import json
+from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -25,6 +28,12 @@ from sio_schemas import BusMessage, Entity, Event, HealthStatus, new_id, utc_now
 
 from .queries import ReadModel
 from .stream import StreamHub
+from .timeline import (
+    DEFAULT_PRESENCE_WINDOW_S,
+    ReplayRegistry,
+    TimelineReader,
+    plan_replay,
+)
 
 _hub: StreamHub | None = None
 
@@ -51,6 +60,8 @@ class ApiService(SioService):
         super().__init__(*args, **kwargs)
         self.pool = get_pg_pool(self.settings)
         self.read = ReadModel(self.pool)
+        self.timeline = TimelineReader(self.pool)
+        self.replays = ReplayRegistry()
         self.blob = get_blob(self.settings)
         self.hub = StreamHub(self.bus)
         global _hub
@@ -196,11 +207,113 @@ class ApiService(SioService):
 
         @api.get("/world/at")
         async def world_at(
-            ts: datetime, limit: int = Query(default=500, le=2000)
+            ts: datetime,
+            limit: int = Query(default=500, le=2000),
+            presence_window_s: float = Query(default=DEFAULT_PRESENCE_WINDOW_S, gt=0, le=3600),
         ) -> dict[str, Any]:
-            """The world as it stood at ``ts`` — the timeline scrubber's data source (UC5)."""
-            entities = await read.world_at(ts, tenant_id=current_tenant(), limit=limit)
-            return {"ts": ts, "entities": [e.to_wire() for e in entities], "count": len(entities)}
+            """The world as it stood at ``ts`` — the scrubber's data source (UC5).
+
+            ``presence_window_s`` is how stale an entity's last report may be and still count as present.
+            It is a parameter rather than a constant because it is a judgement: too short and a replay
+            flickers, too long and departed objects linger as ghosts at their final positions.
+            """
+            world = await self.timeline.world_at(
+                ts,
+                tenant_id=current_tenant(),
+                limit=limit,
+                presence_window_s=presence_window_s,
+            )
+            return {
+                "ts": world["ts"],
+                "entities": [entity.to_wire() for entity in world["entities"]],
+                "count": len(world["entities"]),
+                "counts": world["counts"],
+                "presence_window_s": world["presence_window_s"],
+            }
+
+        @api.get("/timeline/bounds")
+        async def timeline_bounds() -> dict[str, Any]:
+            """How far back the record goes, so a scrubber knows what it may scrub over."""
+            return await self.timeline.bounds(tenant_id=current_tenant())
+
+        @api.get("/timeline/density")
+        async def timeline_density(
+            from_: datetime | None = Query(default=None, alias="from"),
+            to: datetime | None = None,
+            buckets: int = Query(default=120, ge=8, le=1000),
+        ) -> dict[str, Any]:
+            """Event counts per bucket, for the scrubber's activity strip.
+
+            Counted in the database and returned as a fixed number of buckets, so the payload is the same
+            size whether the window is an hour or a week. Fetching every event instead would make the UI
+            slower the further back you look, which is exactly when you need it.
+            """
+            end = to or utc_now()
+            start = from_ or (end - timedelta(hours=1))
+            return await self.timeline.density(
+                tenant_id=current_tenant(), start=start, end=end, buckets=buckets
+            )
+
+        @api.post("/replay")
+        async def create_replay(
+            from_: datetime | None = Query(default=None, alias="from"),
+            to: datetime | None = None,
+            speed: float = Query(default=20.0, gt=0, le=600),
+            step_s: float | None = Query(default=None, gt=0, le=3600),
+        ) -> dict[str, Any]:
+            """Plan a replay of a window, and report what will actually be delivered.
+
+            Returns the plan rather than starting the stream, because the plan can differ from the
+            request: the frame count is capped, so a long window gets a wider step. Telling the client
+            the *effective* speed matters — one told "1x" while receiving a frame a minute has been
+            misled about what it is watching.
+            """
+            end = to or utc_now()
+            start = from_ or (end - timedelta(minutes=10))
+            if start >= end:
+                raise HTTPException(status_code=400, detail="'from' must precede 'to'")
+            session = plan_replay(
+                tenant_id=current_tenant(), start=start, end=end, speed=speed, step_s=step_s
+            )
+            self.replays.add(session)
+            return {
+                **session.describe(),
+                "stream": f"/api/replay/{session.replay_id}/stream",
+            }
+
+        @api.get("/replay/{replay_id}/stream")
+        async def stream_replay(replay_id: str) -> StreamingResponse:
+            """Stream reconstructed frames over SSE at the planned rate."""
+            session = self.replays.get(replay_id)
+            if session is None:
+                raise HTTPException(
+                    status_code=404, detail=f"unknown or expired replay {replay_id!r}"
+                )
+
+            async def frames() -> AsyncIterator[bytes]:
+                try:
+                    async for frame in self.timeline.replay_frames(session):
+                        yield f"event: ReplayFrame\ndata: {json.dumps(frame)}\n\n".encode()
+                    yield b"event: ReplayComplete\ndata: {}\n\n"
+                except asyncio.CancelledError:
+                    # The client hung up. Cancel the session so the registry does not hold a dead one
+                    # and the loop stops doing database work nobody is reading.
+                    session.cancelled = True
+                    raise
+
+            return StreamingResponse(
+                frames(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+        @api.delete("/replay/{replay_id}")
+        async def cancel_replay(replay_id: str) -> dict[str, Any]:
+            return {"cancelled": self.replays.cancel(replay_id)}
+
+        @api.get("/replay")
+        async def list_replays() -> dict[str, Any]:
+            return self.replays.describe()
 
         @api.get("/spatial/nearby")
         async def nearby(

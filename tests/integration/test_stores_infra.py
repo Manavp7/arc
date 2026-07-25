@@ -822,3 +822,172 @@ async def test_every_service_endpoint_responds(pool, cfg) -> None:  # type: igno
             await service.teardown()
 
     assert not failures, "endpoints returning a server error:\n  " + "\n  ".join(failures)
+
+
+async def test_scrubbing_to_a_past_instant_reconstructs_the_world_as_it_was(pool, cfg) -> None:  # type: ignore[no-untyped-def]
+    """The UC5 acceptance criterion, asserted against real recorded history.
+
+    The bug this guards against is the one that makes a replay worthless: showing historical entities at
+    their PRESENT positions. So the test writes a known history — one entity moving east along a known
+    path — and then checks that each instant reports the position that was true then, not the last one.
+    """
+    from datetime import timedelta
+
+    from sio_api.timeline import TimelineReader
+
+    from sio_schemas import Entity, EntityType
+
+    reader = TimelineReader(pool)
+    entity = Entity(
+        entity_id=new_id("ent"),
+        tenant_id=TENANT,
+        type=EntityType.TRUCK,
+        label="Scrub Test Truck",
+        first_seen=utc_now() - timedelta(minutes=10),
+        last_seen=utc_now(),
+    )
+    await pool.execute(
+        """
+        INSERT INTO entities (tenant_id, entity_id, type, label, confidence, is_static,
+                              first_seen, last_seen, payload)
+        VALUES (%s, %s, %s, %s, %s, false, %s, %s, %s::jsonb)
+        ON CONFLICT (tenant_id, entity_id) DO NOTHING
+        """,
+        (
+            TENANT,
+            entity.entity_id,
+            str(entity.type),
+            entity.label,
+            0.9,
+            entity.first_seen,
+            entity.last_seen,
+            entity.to_json(),
+        ),
+    )
+
+    # A known path: one state per minute, moving steadily east.
+    base = utc_now() - timedelta(minutes=9)
+    longitudes = [-122.4200 + 0.0005 * step for step in range(10)]
+    for step, longitude in enumerate(longitudes):
+        await pool.execute(
+            """
+            INSERT INTO entity_states (tenant_id, entity_id, ts, geom, speed_mps, heading_deg, confidence)
+            VALUES (%s, %s, %s, %s::geography, %s, %s, %s)
+            ON CONFLICT (tenant_id, entity_id, ts) DO NOTHING
+            """,
+            (
+                TENANT,
+                entity.entity_id,
+                base + timedelta(minutes=step),
+                f"SRID=4326;POINT({longitude} 37.7749)",
+                5.0,
+                90.0,
+                0.9,
+            ),
+        )
+
+    try:
+        # Scrub to each minute and check the position that was true THEN.
+        for step, expected_lon in enumerate(longitudes):
+            at = base + timedelta(minutes=step, seconds=1)
+            world = await reader.world_at(at, tenant_id=TENANT, presence_window_s=120.0)
+            found = next(
+                (item for item in world["entities"] if item.entity_id == entity.entity_id), None
+            )
+            assert found is not None, (
+                f"the entity is missing from the reconstruction at step {step}"
+            )
+            assert found.state is not None and found.state.geo is not None
+            assert found.state.geo.lon == pytest.approx(expected_lon, abs=1e-6), (
+                f"at step {step} the reconstruction returned {found.state.geo.lon} "
+                f"instead of {expected_lon} — it is showing a position from a different time"
+            )
+            # last_seen must be rewound too, or a replayed entity claims a dwell it had not yet had.
+            assert found.last_seen <= at
+
+        # Velocity is reconstructed from speed and heading: a frozen map is indistinguishable from a
+        # broken one, so a moving entity must be reported as moving.
+        mid = await reader.world_at(base + timedelta(minutes=5, seconds=1), tenant_id=TENANT)
+        moving = next(item for item in mid["entities"] if item.entity_id == entity.entity_id)
+        assert moving.state is not None and moving.state.velocity is not None
+        assert moving.state.velocity.speed_mps == pytest.approx(5.0, rel=0.01)
+        assert moving.state.velocity.east > 4.0, "heading 90 degrees is due east"
+
+        # Before it existed, it must not appear at all.
+        early = await reader.world_at(base - timedelta(hours=2), tenant_id=TENANT)
+        assert all(item.entity_id != entity.entity_id for item in early["entities"])
+
+        # Long after its last report it must not linger as a ghost at its final position.
+        late = await reader.world_at(
+            base + timedelta(hours=1), tenant_id=TENANT, presence_window_s=120.0
+        )
+        assert all(item.entity_id != entity.entity_id for item in late["entities"]), (
+            "an entity whose last report is an hour old is not present; showing it would be a ghost"
+        )
+    finally:
+        await pool.execute(
+            "DELETE FROM entity_states WHERE tenant_id = %s AND entity_id = %s",
+            (TENANT, entity.entity_id),
+        )
+        await pool.execute(
+            "DELETE FROM entities WHERE tenant_id = %s AND entity_id = %s",
+            (TENANT, entity.entity_id),
+        )
+
+
+async def test_zone_membership_is_reconstructed_from_the_visit_intervals(pool, cfg) -> None:  # type: ignore[no-untyped-def]
+    """Zones come from the bitemporal edges, not from the state rows.
+
+    Measured on the live database: 90,536 state rows and ZERO of them carrying a zone, because the spatial
+    service owns membership and records it as an interval. The interval covering T is the answer, and this
+    is the query bitemporal storage exists for.
+    """
+    from datetime import timedelta
+
+    from sio_api.timeline import TimelineReader
+
+    from sio_schemas import Relationship, RelationshipType
+
+    reader = TimelineReader(pool)
+    entity_id = new_id("ent")
+    entered_at = utc_now() - timedelta(minutes=30)
+    left_at = utc_now() - timedelta(minutes=20)
+
+    visit = Relationship(
+        tenant_id=TENANT,
+        **{"from": entity_id, "to": "dock_9"},
+        type=RelationshipType.ENTERED,
+        ts_valid_from=entered_at,
+        ts_valid_to=left_at,
+    )
+    await pool.execute(
+        """
+        INSERT INTO relationships (rel_id, tenant_id, from_id, type, to_id,
+                                   ts_valid_from, ts_valid_to, confidence, payload)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+        """,
+        (
+            visit.id,
+            TENANT,
+            entity_id,
+            "entered",
+            "dock_9",
+            entered_at,
+            left_at,
+            0.95,
+            visit.to_json(),
+        ),
+    )
+    try:
+        during = await reader.memberships_at(entered_at + timedelta(minutes=5), tenant_id=TENANT)
+        assert during.get(entity_id) == "dock_9"
+
+        before = await reader.memberships_at(entered_at - timedelta(minutes=5), tenant_id=TENANT)
+        assert entity_id not in before, "it had not entered yet"
+
+        after = await reader.memberships_at(left_at + timedelta(minutes=5), tenant_id=TENANT)
+        assert entity_id not in after, "it had already left"
+    finally:
+        await pool.execute(
+            "DELETE FROM relationships WHERE tenant_id = %s AND rel_id = %s", (TENANT, visit.id)
+        )
