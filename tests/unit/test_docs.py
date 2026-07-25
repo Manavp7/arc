@@ -130,3 +130,38 @@ def test_the_documents_the_plan_promises_exist(document: str) -> None:
     path = DOCS / document
     assert path.exists(), f"docs/{document} is promised by the plan and missing"
     assert len(path.read_text()) > 500, f"docs/{document} looks like a stub"
+
+
+# --- the licence table (R6) -------------------------------------------------------------------------
+def test_every_downloaded_model_has_a_licence_row() -> None:
+    """R6: the licence table must cover what the platform actually downloads.
+
+    Checked against `scripts/fetch_models.py` rather than against a list in the test, so a model added to the
+    fetcher without a licence row fails here. That direction matters more than it sounds: one of the shipped
+    weights is AGPL-3.0, and the cost of discovering a copyleft dependency during a procurement review is
+    measured in weeks.
+    """
+    fetcher = (REPO_ROOT / "scripts" / "fetch_models.py").read_text()
+    models = set(re.findall(r'filename="([^"]+\.onnx)"', fetcher))
+    assert models, "could not find any model filenames in scripts/fetch_models.py"
+
+    table = (DOCS / "MODELS.md").read_text()
+    missing = sorted(name for name in models if name not in table)
+    assert not missing, (
+        f"these models are downloaded but have no licence row in docs/MODELS.md: {missing}. "
+        f"R6 requires the table to be complete."
+    )
+
+
+def test_the_licence_table_names_the_copyleft_dependency() -> None:
+    """The one fact in that table somebody has to act on.
+
+    A licence table that lists everything as "open source" is decoration. AGPL-3.0 reaches network use, so a
+    commercial deployment needs either an enterprise licence or a different detector — and the document has to
+    say so plainly enough that nobody reaches procurement without knowing.
+    """
+    table = (DOCS / "MODELS.md").read_text()
+    assert "AGPL-3.0" in table, "the Ultralytics weights are AGPL-3.0 and the table must say so"
+    assert "Enterprise" in table or "enterprise" in table, (
+        "the table should name the way out, not just the problem"
+    )
