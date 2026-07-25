@@ -1043,3 +1043,146 @@ async def test_every_analytics_query_runs_against_postgres(pool, cfg) -> None:  
     assert "Nothing is read from a counter" in report
 
     await service.client.aclose()
+
+
+async def test_every_mission_query_runs_against_postgres(pool, cfg) -> None:  # type: ignore[no-untyped-def]
+    """Execute the missions service's reads and writes for real.
+
+    **Sixth occurrence of the same class of bug**, and it landed again here: `_occupancy` selected
+    `last_seen_ts` from `entities`, where the column is `last_seen`. Unit tests cannot catch it — the
+    auto-completion logic is pure and thoroughly tested, and only a real database has an opinion about column
+    names. This one was found by starting the service and watching objectives never complete, which is slower
+    and less certain than a test.
+
+    Exercises the whole lifecycle rather than each statement in isolation, because the interesting failures here
+    are between statements: assignment writes `mission_resources` and then re-derives the `resources` array on
+    `missions` from it, and a mismatch between those two is invisible to either query alone.
+    """
+    from sio_missions.service import MissionsService
+
+    from sio_core.bus.memory import MemoryBus
+
+    service = MissionsService(settings=cfg, bus=MemoryBus())
+    service.pool = pool
+    tenant = cfg.tenant_id
+    mission_id = "msn_infra_probe"
+    resource_id = "ent_infra_probe"
+
+    await pool.execute(
+        """
+        INSERT INTO missions (tenant_id, mission_id, name, state, zone_id, payload)
+        VALUES (%s, %s, 'Infra probe', 'active', 'fuel_store', %s)
+        ON CONFLICT (tenant_id, mission_id) DO UPDATE SET state = 'active'
+        """,
+        (
+            tenant,
+            mission_id,
+            service._json(
+                {
+                    "objectives": [
+                        {
+                            "objective_id": "obj_probe",
+                            "description": "Reach the fuel store",
+                            "zone_id": "fuel_store",
+                        }
+                    ]
+                }
+            ),
+        ),
+    )
+
+    # The query that was broken: occupancy from the world model.
+    occupancy = await service._occupancy()
+    assert isinstance(occupancy, dict)
+
+    # Rendering computes progress, reads comms and derives the replay window.
+    rendered = await service._render(await service._load(mission_id), include_comms=True)
+    assert rendered["mission_id"] == mission_id
+    assert "progress" in rendered
+    assert isinstance(rendered["comms"], list)
+
+    # The comms log accepts an append.
+    comm_id = await service._log_comm(mission_id, author="infra", body="probe", kind="system")
+    assert comm_id.startswith("cmm_")
+
+    # Append-only, enforced by the database rather than by the service. Asserted here because a trigger that
+    # silently stops existing after a migration edit would leave the guarantee in the README only.
+    with pytest.raises(Exception, match="append-only"):
+        await pool.execute(
+            "UPDATE mission_comms SET body = 'rewritten' WHERE tenant_id = %s AND comm_id = %s",
+            (tenant, comm_id),
+        )
+
+    # Assignment, and the array on `missions` re-derived from `mission_resources`.
+    await pool.execute(
+        """
+        INSERT INTO mission_resources (tenant_id, mission_id, resource_id) VALUES (%s, %s, %s)
+        ON CONFLICT (tenant_id, mission_id, resource_id) DO UPDATE SET released_ts = NULL
+        """,
+        (tenant, mission_id, resource_id),
+    )
+    await pool.execute(
+        """
+        UPDATE missions SET resources = (
+            SELECT coalesce(array_agg(resource_id ORDER BY resource_id), '{}')
+              FROM mission_resources
+             WHERE tenant_id = %s AND mission_id = %s AND released_ts IS NULL
+        ) WHERE tenant_id = %s AND mission_id = %s
+        """,
+        (tenant, mission_id, tenant, mission_id),
+    )
+    row = await pool.fetchrow(
+        "SELECT resources FROM missions WHERE tenant_id = %s AND mission_id = %s",
+        (tenant, mission_id),
+    )
+    assert list(row["resources"]) == [resource_id], "the denormalised array drifted from the table"
+
+    # ONE ACTIVE MISSION PER RESOURCE, enforced by a partial unique index rather than a service check.
+    # Dispatching the same drone to two fires is what slips through a read-then-write check under concurrency:
+    # two requests both see "not assigned", both write. Asserted against the real index.
+    with pytest.raises(Exception, match="mission_resources_one_mission_idx"):
+        await pool.execute(
+            "INSERT INTO mission_resources (tenant_id, mission_id, resource_id) VALUES (%s, %s, %s)",
+            (tenant, "msn_infra_other", resource_id),
+        )
+
+    # Releasing frees it, and the history is kept rather than deleted.
+    await pool.execute(
+        """
+        UPDATE mission_resources SET released_ts = now()
+         WHERE tenant_id = %s AND mission_id = %s AND resource_id = %s
+        """,
+        (tenant, mission_id, resource_id),
+    )
+    await pool.execute(
+        "INSERT INTO mission_resources (tenant_id, mission_id, resource_id) VALUES (%s, %s, %s)",
+        (tenant, "msn_infra_other", resource_id),
+    )
+    held = await pool.fetch(
+        "SELECT mission_id FROM mission_resources WHERE tenant_id = %s AND resource_id = %s",
+        (tenant, resource_id),
+    )
+    assert len(held) == 2, "the released assignment should remain as history"
+
+    # The health check's orphan query.
+    checks = await service.health_checks()
+    assert "postgres" in checks
+
+    # The list query, including its ordering expression.
+    listed = await pool.fetch(
+        """
+        SELECT mission_id FROM missions
+         WHERE tenant_id = %s AND (%s::text IS NULL OR state = %s)
+         ORDER BY (state IN ('active', 'paused')) DESC, updated_ts DESC LIMIT %s
+        """,
+        (tenant, None, None, 10),
+    )
+    assert any(str(item["mission_id"]) == mission_id for item in listed)
+
+    await pool.execute(
+        "DELETE FROM mission_resources WHERE tenant_id = %s AND resource_id = %s",
+        (tenant, resource_id),
+    )
+    await pool.execute(
+        "DELETE FROM missions WHERE tenant_id = %s AND mission_id = %s", (tenant, mission_id)
+    )
