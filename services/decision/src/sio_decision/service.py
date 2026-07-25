@@ -49,6 +49,29 @@ ACTIONABLE = {
 #: somebody has to assert rather than one inferred from having legs.
 RESPONDER_KINDS = {"drone": "drone", "forklift": "patrol"}
 
+#: What each responder type can physically do.
+#:
+#: This exists because of a recommendation the running system actually produced. A security agent proposed
+#: an overflight — "a single overflight distinguishes the two" — and the solver, optimising over every
+#: available responder, dispatched a FORKLIFT. The rationale shown to the operator argued for something the
+#: recommended action could not do.
+#:
+#: A forklift is not a worse choice for an overflight. It is not a choice: it cannot fly. So capability is a
+#: FILTER rather than a term in the objective — no amount of proximity should let a ground vehicle win an
+#: aerial task, and a scoring penalty would eventually be outweighed by a short distance.
+CAPABILITIES: dict[str, frozenset[str]] = {
+    "drone": frozenset({"aerial", "observe", "patrol"}),
+    "forklift": frozenset({"ground", "patrol", "move_load"}),
+    "vehicle": frozenset({"ground", "patrol"}),
+    "person": frozenset({"ground", "observe", "patrol", "intervene"}),
+}
+#: Capability a task needs, by the kind of task it is.
+REQUIRED_CAPABILITY: dict[str, str] = {
+    "overflight": "aerial",
+    "aerial_survey": "aerial",
+    "intervention": "intervene",
+}
+
 RESPONDER_ROLE_ATTRIBUTE = "role"
 #: Attribute values that opt an entity into the responder pool regardless of its type.
 RESPONDER_ROLES = {"patrol", "security", "responder", "marshal"}
@@ -118,9 +141,20 @@ class DecisionService(SioService):
         await self.recommend_for(event, kind, ctx)
 
     async def recommend_for(
-        self, event: Event, kind: str, ctx: MessageContext | None
+        self,
+        event: Event,
+        kind: str,
+        ctx: MessageContext | None,
+        *,
+        task: str | None = None,
     ) -> Decision | None:
-        """Build a recommendation for one event."""
+        """Build a recommendation for one event.
+
+        `task` names what is actually being asked for, when the caller knows. An agent proposing an
+        overflight knows that only something airborne will do, and passing that through is what stops the
+        solver dispatching a forklift to fly over a fuel store — which it did, with a rationale arguing for
+        an overflight sitting directly above it.
+        """
         incident = await self._incident_from(event, kind)
         if incident is None:
             self.log.info(
@@ -130,11 +164,29 @@ class DecisionService(SioService):
             )
             return None
 
-        responders = await self._responders()
+        requires = REQUIRED_CAPABILITY.get(task or "")
+        responders = await self._responders(requires=requires)
         if not responders:
-            self.log.info("decision.no_responders", event=event.event_id)
+            self.log.info(
+                "decision.no_responders",
+                event=event.event_id,
+                requires=requires,
+                why=(
+                    f"nothing on site has the {requires!r} capability this task needs"
+                    if requires
+                    else "no dispatchable responder is on site"
+                ),
+            )
 
         options, solves = build_options(responders, [incident])
+        if requires and not responders:
+            # Say the true thing. "No aerial responder is available" is actionable; quietly recommending a
+            # forklift for an overflight is worse than recommending nothing, because it looks like an answer.
+            for option in options:
+                option.rejection_reason = (
+                    option.rejection_reason
+                    or f"this task needs a {requires} responder and none is on site"
+                )
         rationale, degraded = (
             await llm_rationale(self.llm, options, [incident])
             if self.llm
@@ -195,7 +247,7 @@ class DecisionService(SioService):
             zone_id=event.zone_id,
         )
 
-    async def _responders(self) -> list[Responder]:
+    async def _responders(self, *, requires: str | None = None) -> list[Responder]:
         """Who is available, from the world model.
 
         Read live rather than configured, because a responder that left the site an hour ago is not
@@ -221,12 +273,19 @@ class DecisionService(SioService):
             ),
         )
         responders: list[Responder] = []
+        excluded_for_capability = 0
         for row in rows:
             payload = row.get("payload") or {}
             attributes = payload.get("attributes") or {}
             state = payload.get("state") or {}
             velocity = state.get("velocity") or {}
             speed = float(velocity.get("east", 0.0)) ** 2 + float(velocity.get("north", 0.0)) ** 2
+            entity_type = str(row["type"])
+            if requires is not None and requires not in CAPABILITIES.get(entity_type, frozenset()):
+                # Filtered, not penalised. A forklift is not a worse choice for an overflight — it cannot
+                # fly, and a scoring penalty would eventually be outweighed by a short distance.
+                excluded_for_capability += 1
+                continue
             responders.append(
                 Responder(
                     entity_id=str(row["entity_id"]),
@@ -248,6 +307,13 @@ class DecisionService(SioService):
                     busy=speed > 1.0,
                     battery_pct=_battery_of(attributes),
                 )
+            )
+        if requires is not None:
+            self.log.info(
+                "decision.responders_filtered",
+                requires=requires,
+                available=len(responders),
+                excluded=excluded_for_capability,
             )
         return responders
 
@@ -405,7 +471,10 @@ class DecisionService(SioService):
 
         @app.post("/decisions/recommend", tags=["decision"])
         async def recommend_now(
-            kind: str = "fire", zone_id: str = "dock_3", severity: str = "critical"
+            kind: str = "fire",
+            zone_id: str = "dock_3",
+            severity: str = "critical",
+            task: str | None = None,
         ) -> dict[str, Any]:
             """Produce a recommendation on demand — the demo path, and a way to see the options list.
 
@@ -421,7 +490,7 @@ class DecisionService(SioService):
                 rule_id="decision.manual_request",
                 attributes={"manual": True},
             )
-            decision = await self.recommend_for(event, kind, None)
+            decision = await self.recommend_for(event, kind, None, task=task)
             if decision is None:
                 raise HTTPException(
                     status_code=422,

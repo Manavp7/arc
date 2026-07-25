@@ -74,6 +74,14 @@ class Proposal:
     urgency: str = "medium"
     memory: Recollection | None = None
     facts: dict[str, Any] = field(default_factory=dict)
+    task: str | None = None
+    """What is actually being asked for, when the agent knows.
+
+    An agent proposing an overflight knows that only something airborne will do. Without this the decision
+    service optimised over every responder on site and recommended a FORKLIFT for an aerial task, with the
+    rationale arguing for an overflight printed directly above it — a recommendation that contradicted its
+    own justification.
+    """
 
     def with_memory_caution(self) -> str:
         """The rationale, with any precedent from memory appended.

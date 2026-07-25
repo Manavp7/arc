@@ -122,6 +122,9 @@ class SecurityAgent:
                 zone_id=zone,
                 urgency="medium",
                 summary=f"Send the patrol drone over {zone} for a look",
+                # Only something airborne can perform an overflight. Stated rather than left to the solver
+                # to infer, because it cannot.
+                task="overflight",
                 rationale=(
                     f"{zone} is occupied but has produced no events recently, which means either nothing "
                     f"is happening there or nothing is watching it. A single overflight distinguishes the "

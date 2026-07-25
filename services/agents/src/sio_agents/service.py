@@ -129,6 +129,7 @@ class AgentsService(SioService):
                 f"{self.decision_url}/decisions/recommend",
                 params={
                     "kind": proposal.kind,
+                    "task": proposal.task,
                     "zone_id": proposal.zone_id or "yard",
                     "severity": {"low": "high", "medium": "high", "high": "critical"}.get(
                         proposal.urgency, "high"

@@ -236,3 +236,52 @@ def test_port_probe_agrees_with_reality() -> None:
         listener.bind(("127.0.0.1", port))
         listener.listen(1)
         assert port_is_bound(port)
+
+
+# --- restart policy -----------------------------------------------------------------------------
+def test_a_clean_exit_is_still_restarted() -> None:
+    """For a daemon, exit 0 outside shutdown is not success — it is a service that has vanished.
+
+    Found while testing something else: a SIGTERM to the decision service produced a graceful exit 0, the
+    supervisor declined to restart it because zero meant "it meant to do that", and the stack carried on
+    with fourteen of fifteen services. One line scrolled past in a log nobody was reading, and the next
+    request to `/api/decisions` returned a 503 whose cause was twenty minutes upstream.
+
+    Deliberate stops are covered separately: `stopping` is set for both Ctrl-C and `--stop`.
+    """
+    import asyncio
+
+    from supervisor import ProcessSpec, Supervisor
+
+    spec = ProcessSpec(name="ghost", command=["/bin/true"], tier=1, health_port=0)
+    supervisor = Supervisor([spec])
+    started: list[str] = []
+
+    async def record(target: ProcessSpec) -> bool:
+        started.append(target.name)
+        return True
+
+    supervisor.start = record  # type: ignore[method-assign]
+    asyncio.run(supervisor._maybe_restart(spec, 0))
+    assert started == ["ghost"], "a clean exit outside shutdown must still be restarted"
+
+
+def test_a_deliberate_stop_does_not_restart_anything() -> None:
+    """Otherwise `just stop` would fight the supervisor forever."""
+    import asyncio
+
+    from supervisor import ProcessSpec, Supervisor
+
+    spec = ProcessSpec(name="ghost", command=["/bin/true"], tier=1, health_port=0)
+    supervisor = Supervisor([spec])
+    supervisor.stopping.set()
+    started: list[str] = []
+
+    async def record(target: ProcessSpec) -> bool:
+        started.append(target.name)
+        return True
+
+    supervisor.start = record  # type: ignore[method-assign]
+    asyncio.run(supervisor._maybe_restart(spec, 0))
+    asyncio.run(supervisor._maybe_restart(spec, 1))
+    assert started == [], "nothing may be restarted during a deliberate stop"

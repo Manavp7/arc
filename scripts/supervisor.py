@@ -316,8 +316,28 @@ class Supervisor:
         await self._maybe_restart(spec, code)
 
     async def _maybe_restart(self, spec: ProcessSpec, code: int) -> None:
-        if self.stopping.is_set() or code == 0:
+        """Restart a service that exited when it was not asked to — including a clean exit.
+
+        `code == 0` used to mean "it meant to do that" and skip the restart. For a *daemon* that is wrong:
+        every process here is a long-running server, none of them is supposed to exit at all, and a clean
+        exit outside shutdown is not a success — it is a service that has vanished.
+
+        Found while testing: SIGTERM to the decision service produced a graceful exit 0, the supervisor
+        declined to restart it, and the stack carried on with fourteen of fifteen services. One line
+        scrolled past in a log nobody was reading. The next request to `/api/decisions` returned a 503 whose
+        cause was twenty minutes upstream.
+
+        Deliberate stops are already covered: `self.stopping` is set for both Ctrl-C and `--stop`, and this
+        returns immediately in that case. So anything reaching the restart logic is, by definition,
+        unexpected.
+        """
+        if self.stopping.is_set():
             return
+        if code == 0:
+            self.say(
+                spec.name,
+                "exited cleanly, which a long-running service should never do — restarting anyway",
+            )
         count = self.restarts.get(spec.name, 0)
         if count >= self.restart_limit:
             self.say(

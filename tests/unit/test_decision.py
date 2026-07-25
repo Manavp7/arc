@@ -604,3 +604,51 @@ def test_an_approval_cannot_name_an_option_from_another_decision() -> None:
     known = {option.option_id for option in decision.options}
     assert "opt_from_somewhere_else" not in known
     assert decision.chosen in known
+
+
+# --- capability, not proximity ------------------------------------------------------------------
+def test_a_forklift_cannot_be_recommended_for_an_overflight() -> None:
+    """The recommendation the running system actually produced.
+
+    A security agent proposed an overflight — its rationale read "a single overflight distinguishes the
+    two" — and the solver, optimising over every available responder, dispatched a FORKLIFT. The
+    justification shown to the operator argued for something the recommended action could not do.
+
+    A forklift is not a worse choice here. It cannot fly. So capability has to be a FILTER: a scoring
+    penalty would eventually be outweighed by a short distance, and the nearest responder to a fuel store
+    is usually a forklift.
+    """
+    from sio_decision.service import CAPABILITIES, REQUIRED_CAPABILITY
+
+    assert REQUIRED_CAPABILITY["overflight"] == "aerial"
+    assert "aerial" in CAPABILITIES["drone"]
+    assert "aerial" not in CAPABILITIES["forklift"], "a forklift must never satisfy an aerial task"
+    assert "aerial" not in CAPABILITIES["person"]
+    assert "aerial" not in CAPABILITIES["vehicle"]
+
+
+def test_every_responder_type_declares_its_capabilities() -> None:
+    """A type missing from the table would be silently excluded from every filtered task."""
+    from sio_decision.service import CAPABILITIES, RESPONDER_KINDS
+
+    missing = [kind for kind in RESPONDER_KINDS if kind not in CAPABILITIES]
+    assert not missing, f"these dispatchable types have no declared capabilities: {missing}"
+
+
+def test_a_ground_task_still_accepts_ground_responders() -> None:
+    """The filter must not accidentally exclude everything."""
+    from sio_decision.service import CAPABILITIES
+
+    assert "patrol" in CAPABILITIES["forklift"]
+    assert "patrol" in CAPABILITIES["drone"], (
+        "a drone can patrol too — filtering is not exclusivity"
+    )
+
+
+def test_an_agent_can_state_what_a_task_requires() -> None:
+    """The requirement originates with the agent, which is the only component that knows."""
+    from sio_agents.loop import Proposal
+
+    proposal = Proposal(agent="security", summary="s", rationale="r", task="overflight")
+    assert proposal.task == "overflight"
+    assert Proposal(agent="a", summary="s", rationale="r").task is None, "and it stays optional"
