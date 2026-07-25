@@ -162,12 +162,21 @@ def test_every_expected_tool_exists(scorecard) -> None:  # type: ignore[no-untyp
     """
     from sio_copilot.evalset import EVAL_CASES
 
-    try:
-        from sio_copilot.tools import ToolBelt
+    # A belt with placeholder URLs. `specs()` is an instance method that only reads the tool table, so nothing
+    # is contacted — my first version called `ToolBelt.specs()` on the class, which skipped the test with
+    # "missing 1 required positional argument: 'self'". A guard that skips itself is a guard that is not there,
+    # and this one exists to catch an UNWINNABLE fixture: a case expecting a tool nobody implements is scored
+    # wrong on every attempt, which looks exactly like the model degrading.
+    from sio_copilot.tools import ToolBelt
 
-        available = {spec.name for spec in ToolBelt.specs()}
-    except Exception as error:  # pragma: no cover - the belt needs settings in some configurations
-        pytest.skip(f"tool belt unavailable: {error}")
+    belt = ToolBelt(
+        api_url="http://unused",
+        spatial_url="http://unused",
+        prediction_url="http://unused",
+        worldmodel_url="http://unused",
+        ingest_url="http://unused",
+    )
+    available = {spec.name for spec in belt.specs()}
 
     expected = {case.expect_tool for case in EVAL_CASES if case.expect_tool}
     expected |= {tool for case in EVAL_CASES for tool in case.acceptable_tools}
