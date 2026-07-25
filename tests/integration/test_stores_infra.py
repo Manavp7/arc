@@ -739,8 +739,9 @@ async def test_every_prediction_query_runs_against_postgres(pool, cfg) -> None: 
     Runs the whole cycle rather than the individual statements, because the bug was in a query only the
     cycle reaches.
     """
-    from sio_core.bus.memory import MemoryBus
     from sio_prediction.service import PredictionService
+
+    from sio_core.bus.memory import MemoryBus
 
     # Constructed through __init__ with an in-memory bus, not via __new__ with hand-set attributes.
     # Last phase, a test that built its subject with __new__ masked an attribute __init__ never
@@ -748,13 +749,13 @@ async def test_every_prediction_query_runs_against_postgres(pool, cfg) -> None: 
     # constructs its subject differently from production is testing a different object.
     service = PredictionService(settings=cfg, bus=MemoryBus())
     service.pool = pool  # the real database; everything else is as production builds it
-    await service._load_zones()  # noqa: SLF001
+    await service._load_zones()
 
     made_at = utc_now()
     # Each of these hits a different table: events (throughput), events (occupancy), measurements.
-    assert isinstance(await service._site_forecasts(made_at), list)  # noqa: SLF001
-    assert isinstance(await service._zone_forecasts(made_at), list)  # noqa: SLF001
-    assert isinstance(await service._sensor_forecasts(made_at), list)  # noqa: SLF001
+    assert isinstance(await service._site_forecasts(made_at), list)
+    assert isinstance(await service._zone_forecasts(made_at), list)
+    assert isinstance(await service._sensor_forecasts(made_at), list)
 
     # And the full cycle, which is what the timer calls and what the 500 came from.
     await service.tick()
