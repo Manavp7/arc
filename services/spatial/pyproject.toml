@@ -1,0 +1,23 @@
+[project]
+name = "sio-spatial"
+version = "0.1.0"
+description = "SIO spatial reasoning: PostGIS + H3 queries, zone membership, coverage and blind spots (PRD M6)"
+requires-python = ">=3.12,<3.14"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "sio-core",
+    "sio-schemas",
+    "shapely>=2.0",
+    "h3>=4.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sio_spatial"]
+
+[tool.uv.sources]
+sio-core = { workspace = true }
+sio-schemas = { workspace = true }

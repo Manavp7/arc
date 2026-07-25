@@ -1,0 +1,384 @@
+"""Tests for spatial reasoning (PRD M6).
+
+Two things get the most attention, because they are where this component fails in the field rather
+than in a demo:
+
+* **hysteresis.** The naive "inside now, outside before → entered" rule produces an event storm for an
+  entity parked on a boundary. Most of these tests are about *not* emitting events.
+* **agreement between implementations.** Membership is decided in memory on the hot path and in PostGIS
+  for ad-hoc queries. Two implementations of point-in-polygon that quietly disagree is a bug that
+  surfaces as an inexplicable timeline, so the shapes are tested directly here and cross-checked
+  against PostGIS in the infra suite.
+"""
+
+from __future__ import annotations
+
+from datetime import timedelta
+
+import pytest
+from shapely.geometry import Polygon
+from sio_spatial.geometry import (
+    DEFAULT_H3_RESOLUTION,
+    CameraFootprint,
+    ZoneIndex,
+    ZoneShape,
+    cell_for,
+    cells_within,
+    haversine_m,
+    metres_to_degrees,
+    zone_shape_from_row,
+)
+from sio_spatial.membership import MembershipTracker
+
+from sio_schemas import Geo, utc_now
+
+ORIGIN = Geo(lat=37.7749, lon=-122.4194)
+
+
+def square(centre: Geo, side_m: float) -> Polygon:
+    """An axis-aligned square of a given side length in metres, centred on a point."""
+    half_lat, half_lon = metres_to_degrees(side_m / 2, centre.lat)
+    return Polygon(
+        [
+            (centre.lon - half_lon, centre.lat - half_lat),
+            (centre.lon + half_lon, centre.lat - half_lat),
+            (centre.lon + half_lon, centre.lat + half_lat),
+            (centre.lon - half_lon, centre.lat + half_lat),
+        ]
+    )
+
+
+def a_zone(
+    zone_id: str = "dock", centre: Geo = ORIGIN, side_m: float = 60.0, *, restricted: bool = False
+) -> ZoneShape:
+    return ZoneShape(
+        zone_id=zone_id,
+        name=zone_id.replace("_", " ").title(),
+        kind="dock",
+        restricted=restricted,
+        polygon=square(centre, side_m),
+    )
+
+
+def offset(geo: Geo, *, east_m: float = 0.0, north_m: float = 0.0) -> Geo:
+    lat_degrees, lon_degrees = metres_to_degrees(1.0, geo.lat)
+    return Geo(lat=geo.lat + north_m * lat_degrees, lon=geo.lon + east_m * lon_degrees)
+
+
+# --------------------------------------------------------------------- geometry
+def test_metres_to_degrees_round_trips_through_haversine() -> None:
+    for metres in (1.0, 25.0, 500.0):
+        moved = offset(ORIGIN, north_m=metres)
+        assert haversine_m(ORIGIN, moved) == pytest.approx(metres, rel=0.01)
+        moved_east = offset(ORIGIN, east_m=metres)
+        assert haversine_m(ORIGIN, moved_east) == pytest.approx(metres, rel=0.01)
+
+
+def test_a_point_inside_a_zone_is_inside_it() -> None:
+    zone = a_zone(side_m=60)
+    assert zone.contains(ORIGIN)
+    assert not zone.contains(offset(ORIGIN, east_m=100))
+
+
+def test_distance_to_boundary_is_signed() -> None:
+    """Hysteresis depends on this sign, so it gets its own test."""
+    zone = a_zone(side_m=60)
+    assert zone.distance_to_boundary_m(ORIGIN) == pytest.approx(30.0, rel=0.05), "centre is 30 m in"
+    just_inside = offset(ORIGIN, east_m=28)
+    assert 0 < zone.distance_to_boundary_m(just_inside) < 3
+    just_outside = offset(ORIGIN, east_m=32)
+    assert -3 < zone.distance_to_boundary_m(just_outside) < 0
+
+
+def test_nested_zones_return_innermost_first() -> None:
+    """A restricted cage inside a yard: the most specific answer is the smallest enclosing zone.
+
+    Returning only one zone would make "is this person in a restricted area?" depend on insertion
+    order, which is not a property anyone should have to reason about.
+    """
+    index = ZoneIndex([a_zone("yard", side_m=200), a_zone("cage", side_m=20, restricted=True)])
+    containing = index.zones_containing(ORIGIN)
+    assert [zone.zone_id for zone in containing] == ["cage", "yard"]
+    assert index.innermost(ORIGIN).zone_id == "cage"
+    assert index.innermost(ORIGIN).restricted
+
+
+def test_a_point_outside_everything_is_in_no_zone() -> None:
+    index = ZoneIndex([a_zone(side_m=40)])
+    assert index.zones_containing(offset(ORIGIN, east_m=500)) == []
+    assert index.innermost(offset(ORIGIN, east_m=500)) is None
+
+
+def test_nearest_zone_can_filter_by_kind() -> None:
+    far = ZoneShape(
+        zone_id="gate",
+        name="Gate",
+        kind="gate",
+        restricted=False,
+        polygon=square(offset(ORIGIN, east_m=150), 20),
+    )
+    index = ZoneIndex([a_zone("dock", side_m=40), far])
+    assert index.nearest(ORIGIN)[0].zone_id == "dock"
+    assert index.nearest(ORIGIN, kind="gate")[0].zone_id == "gate"
+    assert index.nearest(ORIGIN, kind="runway") is None
+
+
+def test_zone_shape_from_geojson_row() -> None:
+    row = {
+        "zone_id": "dock_1",
+        "name": "Dock 1",
+        "kind": "dock",
+        "restricted": False,
+        "geojson": {"type": "Polygon", "coordinates": [list(square(ORIGIN, 40).exterior.coords)]},
+    }
+    shape_ = zone_shape_from_row(row)
+    assert shape_ is not None
+    assert shape_.contains(ORIGIN)
+    assert zone_shape_from_row({"zone_id": "x", "geojson": None}) is None
+
+
+# --------------------------------------------------------------------------- H3
+def test_h3_cells_are_stable_and_distinct() -> None:
+    assert cell_for(ORIGIN) == cell_for(ORIGIN), "the same point must always give the same cell"
+    assert cell_for(ORIGIN) != cell_for(offset(ORIGIN, east_m=200)), (
+        "200 m apart is a different cell"
+    )
+
+
+def test_h3_resolution_is_sized_for_vehicles() -> None:
+    """A cell should hold about one vehicle, or counts per cell mean nothing.
+
+    Too coarse puts the whole dock apron in one bucket; too fine scatters a single truck across a
+    dozen cells and turns every count into noise.
+    """
+    import h3
+
+    area = h3.average_hexagon_area(DEFAULT_H3_RESOLUTION, unit="m^2")
+    assert 100 < area < 1_000, f"resolution {DEFAULT_H3_RESOLUTION} gives {area:.0f} m2 cells"
+
+
+def test_cells_within_a_radius_cover_it_without_overreaching() -> None:
+    cells = cells_within(ORIGIN, 50.0)
+    assert cell_for(ORIGIN) in cells, "the origin's own cell must be included"
+    from sio_spatial.geometry import cell_centre
+
+    assert all(haversine_m(ORIGIN, cell_centre(cell)) <= 50.0 for cell in cells)
+    assert len(cells_within(ORIGIN, 200.0)) > len(cells), "a bigger radius covers more cells"
+
+
+def test_ring_count_follows_the_resolution() -> None:
+    """Derived from the resolution's edge length, so changing resolution does not silently change
+    what "within 500 m" means."""
+    fine = cells_within(ORIGIN, 100.0, 12)
+    coarse = cells_within(ORIGIN, 100.0, 10)
+    assert len(fine) > len(coarse)
+
+
+# ------------------------------------------------------------------- footprints
+def test_a_camera_footprint_is_a_sector_not_a_triangle() -> None:
+    """A triangle understates the far edge of a wide lens by about 8 per cent of its range, which
+    fabricates blind spots that do not exist."""
+    footprint = CameraFootprint.build("cam", ORIGIN, bearing_deg=0.0, fov_deg=70.0, range_m=60.0)
+    straight_ahead = offset(ORIGIN, north_m=55)
+    assert footprint.covers(straight_ahead)
+    # A point near the arc's edge, which a chord would cut off.
+    edge = offset(ORIGIN, north_m=50, east_m=25)
+    assert footprint.covers(edge), "the sector must reach the arc, not the chord"
+    assert not footprint.covers(offset(ORIGIN, north_m=-30)), "behind the camera"
+    assert not footprint.covers(offset(ORIGIN, north_m=200)), "beyond its range"
+
+
+def test_a_footprint_respects_its_bearing() -> None:
+    east_facing = CameraFootprint.build("cam", ORIGIN, bearing_deg=90.0, fov_deg=60.0, range_m=50.0)
+    assert east_facing.covers(offset(ORIGIN, east_m=40))
+    assert not east_facing.covers(offset(ORIGIN, north_m=40))
+
+
+# ------------------------------------------------------------------ hysteresis
+def tracker(**kwargs: float) -> MembershipTracker:
+    defaults = {"margin_m": 2.0, "enter_confirm_s": 2.0, "exit_grace_s": 15.0}
+    defaults.update(kwargs)
+    return MembershipTracker(index=ZoneIndex([a_zone("dock", side_m=60)]), **defaults)  # type: ignore[arg-type]
+
+
+def test_a_clean_entry_and_exit_produce_exactly_two_events() -> None:
+    """The happy path: drive in, stay, drive out."""
+    tracked = tracker()
+    start = utc_now()
+
+    assert tracked.observe("truck-1", ORIGIN, start) == [], "provisional, not yet confirmed"
+    entered = tracked.observe("truck-1", ORIGIN, start + timedelta(seconds=3))
+    assert [change.kind for change in entered] == ["entered"]
+    assert entered[0].zone_id == "dock"
+
+    # Parked for a minute. Dwell is measured from the observations, so they have to happen.
+    for second in range(6, 60, 3):
+        assert tracked.observe("truck-1", ORIGIN, start + timedelta(seconds=second)) == []
+
+    outside = offset(ORIGIN, east_m=100)
+    assert tracked.observe("truck-1", outside, start + timedelta(seconds=62)) == [], "grace period"
+    exited = tracked.observe("truck-1", outside, start + timedelta(seconds=90))
+    assert [change.kind for change in exited] == ["exited"]
+    # Dwell runs to the last sighting INSIDE (t=57), not to the moment the exit was confirmed. All we
+    # actually know is that it left somewhere between 57 s and 62 s, and the conservative end of that
+    # is the honest number to report.
+    assert exited[0].dwell_s == pytest.approx(57.0, abs=1.0)
+
+
+def test_an_entry_is_timestamped_when_it_happened_not_when_it_was_confirmed() -> None:
+    """The confirmation delay is an artefact of how we decide, not part of the world.
+
+    Letting it leak into the timestamp would make every dwell measurement short by the confirmation
+    window — a systematic bias, which is worse than noise because averaging cannot remove it.
+    """
+    tracked = tracker(enter_confirm_s=5.0)
+    start = utc_now()
+    tracked.observe("truck-1", ORIGIN, start)
+    changes = tracked.observe("truck-1", ORIGIN, start + timedelta(seconds=6))
+    assert changes[0].ts == start
+
+
+def test_an_entity_jittering_on_a_boundary_produces_no_events() -> None:
+    """The failure this whole component exists to prevent.
+
+    A truck parked on a dock boundary with a couple of metres of GPS noise reports
+    inside/outside/inside indefinitely. Without hysteresis the events table would claim it entered and
+    left dozens of times, and every downstream rule would inherit that.
+    """
+    tracked = tracker()
+    start = utc_now()
+    events = []
+    for step in range(60):
+        # Alternating half a metre either side of the boundary: well inside the 2 m margin.
+        east = 29.5 if step % 2 else 30.5
+        events += tracked.observe(
+            "truck-1", offset(ORIGIN, east_m=east), start + timedelta(seconds=step)
+        )
+
+    assert events == [], f"boundary jitter produced {len(events)} events"
+
+
+def test_clipping_a_corner_is_not_an_entry() -> None:
+    """A vehicle turning through the corner of a zone has not entered it."""
+    tracked = tracker(enter_confirm_s=3.0)
+    start = utc_now()
+    changes = tracked.observe("truck-1", ORIGIN, start)
+    changes += tracked.observe("truck-1", offset(ORIGIN, east_m=200), start + timedelta(seconds=1))
+    assert changes == []
+    assert tracked.stats["entries_discarded"] == 1
+    assert tracked.occupancy() == {}, "and it must not appear as an occupant"
+
+
+def test_a_dropped_fix_is_not_a_departure() -> None:
+    """A false exit is worse than a late one: it closes the dwell clock and can fire rules about
+    leaving, on a truck that never moved."""
+    tracked = tracker(exit_grace_s=20.0)
+    start = utc_now()
+    tracked.observe("truck-1", ORIGIN, start)
+    tracked.observe("truck-1", ORIGIN, start + timedelta(seconds=3))
+
+    # One bad fix throwing the position across the site, then recovery.
+    assert (
+        tracked.observe("truck-1", offset(ORIGIN, east_m=300), start + timedelta(seconds=10)) == []
+    )
+    assert tracked.observe("truck-1", ORIGIN, start + timedelta(seconds=12)) == []
+    assert tracked.zones_of("truck-1") == ["dock"], "still inside throughout"
+    assert tracked.stats["exited"] == 0
+
+
+def test_a_sustained_absence_does_become_a_departure() -> None:
+    """The grace period must be a delay, not a veto."""
+    tracked = tracker(exit_grace_s=10.0)
+    start = utc_now()
+    tracked.observe("truck-1", ORIGIN, start)
+    tracked.observe("truck-1", ORIGIN, start + timedelta(seconds=3))
+    outside = offset(ORIGIN, east_m=300)
+    tracked.observe("truck-1", outside, start + timedelta(seconds=20))
+    changes = tracked.observe("truck-1", outside, start + timedelta(seconds=35))
+    assert [change.kind for change in changes] == ["exited"]
+
+
+def test_nested_zones_produce_an_event_each() -> None:
+    """Entering a restricted cage inside a yard is two facts, and the restricted one matters."""
+    tracked = MembershipTracker(
+        index=ZoneIndex([a_zone("yard", side_m=200), a_zone("cage", side_m=20, restricted=True)]),
+        enter_confirm_s=1.0,
+    )
+    start = utc_now()
+    tracked.observe("person-1", ORIGIN, start)
+    changes = tracked.observe("person-1", ORIGIN, start + timedelta(seconds=2))
+    assert sorted(change.zone_id for change in changes) == ["cage", "yard"]
+    assert any(change.restricted for change in changes)
+    assert sorted(tracked.zones_of("person-1")) == ["cage", "yard"]
+
+
+def test_occupancy_excludes_provisional_entries() -> None:
+    """An occupancy count that includes unconfirmed entries would flicker exactly as much as the
+    events it is meant to replace."""
+    tracked = tracker(enter_confirm_s=5.0)
+    start = utc_now()
+    tracked.observe("truck-1", ORIGIN, start)
+    assert tracked.occupancy() == {}
+    tracked.observe("truck-1", ORIGIN, start + timedelta(seconds=6))
+    assert tracked.occupancy() == {"dock": ["truck-1"]}
+
+
+def test_forgetting_an_entity_closes_its_membership_at_the_last_known_time() -> None:
+    """An entity that stops being observed has not necessarily left, but leaving the membership open
+    forever makes occupancy drift upward permanently."""
+    tracked = tracker()
+    start = utc_now()
+    tracked.observe("truck-1", ORIGIN, start)
+    tracked.observe("truck-1", ORIGIN, start + timedelta(seconds=3))
+    last_seen = start + timedelta(seconds=3)
+
+    changes = tracked.forget("truck-1", start + timedelta(seconds=500))
+    assert [change.kind for change in changes] == ["exited"]
+    assert changes[0].ts == last_seen, "the exit is recorded when we last actually knew, not now"
+    assert tracked.occupancy() == {}
+
+
+def test_stale_memberships_expire() -> None:
+    tracked = tracker()
+    start = utc_now()
+    tracked.observe("truck-1", ORIGIN, start)
+    tracked.observe("truck-1", ORIGIN, start + timedelta(seconds=3))
+    assert tracked.expire_stale(start + timedelta(seconds=30), max_silence_s=60.0) == []
+    changes = tracked.expire_stale(start + timedelta(seconds=300), max_silence_s=60.0)
+    assert [change.kind for change in changes] == ["exited"]
+
+
+def test_two_entities_in_one_zone_are_tracked_separately() -> None:
+    tracked = tracker()
+    start = utc_now()
+    for entity in ("truck-1", "truck-2"):
+        tracked.observe(entity, ORIGIN, start)
+        tracked.observe(entity, ORIGIN, start + timedelta(seconds=3))
+    assert sorted(tracked.occupancy()["dock"]) == ["truck-1", "truck-2"]
+
+    tracked.observe("truck-1", offset(ORIGIN, east_m=300), start + timedelta(seconds=10))
+    tracked.observe("truck-1", offset(ORIGIN, east_m=300), start + timedelta(seconds=40))
+    assert tracked.occupancy()["dock"] == ["truck-2"]
+
+
+def test_dwell_accumulates_while_inside() -> None:
+    tracked = tracker()
+    start = utc_now()
+    tracked.observe("truck-1", ORIGIN, start)
+    for minute in range(1, 6):
+        tracked.observe("truck-1", ORIGIN, start + timedelta(minutes=minute))
+    assert tracked.dwell_of("truck-1", "dock") == pytest.approx(300.0, abs=1.0)
+    assert tracked.dwell_of("truck-1", "nowhere") is None
+    assert tracked.dwell_of("ghost", "dock") is None
+
+
+def test_hysteresis_stats_are_reported() -> None:
+    """An operator asking "why did that not fire?" needs to see the suppression counts."""
+    tracked = tracker()
+    start = utc_now()
+    tracked.observe("truck-1", ORIGIN, start)
+    tracked.observe("truck-1", ORIGIN, start + timedelta(seconds=3))
+    tracked.observe("truck-1", offset(ORIGIN, east_m=300), start + timedelta(seconds=5))
+    assert tracked.stats["provisional_entries"] == 1
+    assert tracked.stats["entered"] == 1
+    assert tracked.stats["exits_deferred"] >= 1

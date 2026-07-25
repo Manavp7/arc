@@ -201,6 +201,24 @@ class Settings(BaseSettings):
     fusion_time_window_s: float = 5.0
     fusion_max_stale_s: float = 120.0
 
+    # --- spatial ------------------------------------------------------------
+    h3_resolution: int = 12
+    """About 307 m^2 per cell (~19 m across): one cell holds roughly one vehicle, so counts per cell
+    mean something. Coarser puts the whole dock apron in one bucket; finer scatters a truck across a
+    dozen cells and turns every count into noise."""
+    spatial_boundary_margin_m: float = 2.0
+    """Hysteresis band on zone boundaries, set from the position uncertainty we expect to trust. An
+    entity parked on a boundary reports inside/outside/inside forever without it, and the events table
+    would record a truck entering a dock forty times a minute."""
+    spatial_enter_confirm_s: float = 2.0
+    """How long inside before entry is asserted. Filters a vehicle clipping a corner while turning."""
+    spatial_exit_grace_s: float = 15.0
+    """How long outside before exit is asserted. Deliberately longer than entry: a false exit closes
+    the dwell clock and can fire rules about leaving, so a dropped fix must not look like a departure."""
+    spatial_max_silence_s: float = 180.0
+    """When nothing has reported an entity for this long, close its memberships. It has not
+    necessarily left, but leaving them open forever makes occupancy drift upward permanently."""
+
     # --- events -------------------------------------------------------------
     rules_dir: Path = Path("infra/rules")
     dwell_threshold_s: float = 900.0
