@@ -100,7 +100,7 @@ class CopilotService(SioService):
                 tools=self.belt.specs(),
                 max_tokens=1,
             )
-        except Exception as exc:  # noqa: BLE001 - a cold model is a slow answer, not an outage
+        except Exception as exc:
             self.log.warning("copilot.warm_failed", error=str(exc))
         return time.perf_counter() - started
 
