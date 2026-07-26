@@ -24,6 +24,28 @@ pytestmark = [pytest.mark.infra, pytest.mark.anyio]
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def belt_tool_names() -> set[str]:
+    """Every tool the copilot exposes, asked of the belt itself.
+
+    One definition of "the tools", shared by the tests below, rather than a number each has to remember. The
+    stdio and HTTP tests both asserted `== 9`; a tenth tool (`timeseries_query`) was added and both went
+    stale, so the integration job would have failed on a change that was entirely correct — reporting
+    "expected nine, got ten", which reads like the MCP server is broken when it is right.
+
+    Placeholder URLs because `specs()` only reads the tool table; nothing is contacted.
+    """
+    from sio_copilot.tools import ToolBelt
+
+    belt = ToolBelt(
+        api_url="http://unused",
+        spatial_url="http://unused",
+        prediction_url="http://unused",
+        worldmodel_url="http://unused",
+        ingest_url="http://unused",
+    )
+    return {spec.name for spec in belt.specs()}
+
+
 async def test_an_external_client_lists_the_tools_over_stdio() -> None:
     """The acceptance criterion, first half: an external client can see what the server offers.
 
@@ -46,7 +68,14 @@ async def test_an_external_client_lists_the_tools_over_stdio() -> None:
 
         listed = await session.list_tools()
         names = {tool.name for tool in listed.tools}
-        assert len(names) == 9, f"expected nine tools, got {sorted(names)}"
+        # The SET, not a count. What this means is "every tool the copilot has is reachable over MCP", and
+        # saying that directly is both harder to break spuriously and stricter — a tool that fails to surface
+        # still fails here, and now names itself instead of reporting a number.
+        assert names == belt_tool_names(), (
+            f"MCP and the copilot's tool belt disagree.\n"
+            f"  missing over MCP: {sorted(belt_tool_names() - names)}\n"
+            f"  only over MCP:    {sorted(names - belt_tool_names())}"
+        )
         for required in ("graph_query", "list_entities", "spatial_query", "timeline_replay"):
             assert required in names
 
@@ -187,7 +216,9 @@ async def test_an_external_client_works_over_streamable_http() -> None:
                 info = await session.initialize()
                 assert info.serverInfo.name == "sio"
                 listed = await session.list_tools()
-                assert len(listed.tools) == 9
+                # The same set over HTTP as over stdio. A transport that silently drops a tool is the bug
+                # worth catching; the count never was.
+                assert {tool.name for tool in listed.tools} == belt_tool_names()
 
                 result = await session.call_tool("graph_query", {"entity_id": "ent_http_probe"})
                 assert not result.isError
