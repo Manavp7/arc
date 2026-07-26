@@ -19,7 +19,14 @@ class PgPool:
     of using Postgres here, and both are far clearer written directly.
     """
 
-    def __init__(self, dsn: str, *, min_size: int = 1, max_size: int = 8) -> None:
+    def __init__(
+        self,
+        dsn: str,
+        *,
+        min_size: int = 1,
+        max_size: int = 8,
+        open_timeout_s: float = 30.0,
+    ) -> None:
         try:
             from psycopg_pool import AsyncConnectionPool
         except ImportError as exc:  # pragma: no cover - dependency is declared
@@ -29,10 +36,15 @@ class PgPool:
             dsn, min_size=min_size, max_size=max_size, open=False, kwargs={"autocommit": True}
         )
         self._opened = False
+        self._open_timeout_s = open_timeout_s
 
     async def open(self) -> None:
         if not self._opened:
-            await self._pool.open(wait=True, timeout=30)
+            # Configurable, because 30 seconds hard-coded is a long time to discover that Postgres is not
+            # there. It is the right default for a service starting up while the database is still booting,
+            # and the wrong one for a test suite that has to run on a laptop with no datastores — where it
+            # turns each attempt into a 30-second stall.
+            await self._pool.open(wait=True, timeout=self._open_timeout_s)
             self._opened = True
 
     async def close(self) -> None:

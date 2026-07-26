@@ -60,6 +60,13 @@ def api(monkeypatch: pytest.MonkeyPatch):
         original(self, *args, **kwargs)
 
     monkeypatch.setattr(httpx.AsyncClient, "__init__", patched)
+
+    # Routes that query Postgres DIRECTLY are not covered by the httpx stub, so on a machine with no database
+    # they block for the pool's full open timeout and then raise. That is why this test — which lives in the
+    # infra-free unit ring — passed here and would have failed on the macOS CI runner, where nothing is
+    # installed. Two seconds instead of thirty keeps the suite usable when the database is genuinely absent.
+    monkeypatch.setenv("SIO_PG_CONNECT_TIMEOUT_S", "2")
+
     service = ApiService()
     return service.app, stub
 
@@ -122,7 +129,12 @@ def test_no_route_serves_a_request_carrying_another_tenants_id(api) -> None:
 
     headers = {"Authorization": f"Bearer {token_for(TENANT_B)}"}
     leaked: list[str] = []
-    with TestClient(app) as client:
+    served_ok = 0
+    # `raise_server_exceptions=False` so a route whose datastore is unreachable becomes a 500 rather than
+    # propagating out of the client and failing the test. A 500 is definitionally not a data leak, and this
+    # test is a leak test — but without this it could only run where a database happens to be running, which
+    # is exactly the hidden infrastructure dependency that would have broken the macOS job.
+    with TestClient(app, raise_server_exceptions=False) as client:
         for method, path in parameterised:
             response = client.request(
                 method, concrete(path), headers=headers, json={} if method != "GET" else None
@@ -131,10 +143,18 @@ def test_no_route_serves_a_request_carrying_another_tenants_id(api) -> None:
             # true for the forwarding routes, since the downstream service scopes every query. The tenant
             # header is what proves the request was scoped to B and not to A.
             if response.status_code == 200:
+                served_ok += 1
                 served = response.headers.get("x-sio-tenant")
                 if served != TENANT_B:
                     leaked.append(f"{method} {path} served as tenant {served!r}")
     assert not leaked, "requests were served outside the caller's tenant:\n" + "\n".join(leaked)
+    # A leak test that tolerates errors can pass by having every route fail, which would be the most
+    # comfortable possible false negative: green, and proving nothing. This asserts the run actually got
+    # answers out of a decent share of the routes it attacked.
+    assert served_ok >= len(parameterised) // 2, (
+        f"only {served_ok} of {len(parameterised)} routes returned 200, so this run barely tested anything. "
+        f"A leak test that passes because everything errored is worse than no leak test."
+    )
 
 
 def test_every_route_reports_the_tenant_it_served(api) -> None:

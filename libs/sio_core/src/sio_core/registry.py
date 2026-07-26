@@ -41,7 +41,12 @@ def get_pg_pool(settings: Settings | None = None) -> Any:
 
     return _cached(
         "pg",
-        lambda: PgPool(cfg.pg_dsn, min_size=cfg.pg_pool_min, max_size=cfg.pg_pool_max),
+        lambda: PgPool(
+            cfg.pg_dsn,
+            min_size=cfg.pg_pool_min,
+            max_size=cfg.pg_pool_max,
+            open_timeout_s=cfg.pg_connect_timeout_s,
+        ),
     )
 
 

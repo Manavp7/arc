@@ -169,6 +169,12 @@ class Settings(BaseSettings):
     pg_database: str = "sio"
     pg_user: str = "sio"
     pg_password: str = "sio"
+    # How long to wait for the connection pool to open.
+    #
+    # 30s is right for a service starting while Postgres is still booting, and wrong for a test suite that
+    # must run on a laptop with no datastores — where it turns every attempt into a half-minute stall. The
+    # infra-free unit ring sets it to 2.
+    pg_connect_timeout_s: float = 30.0
     pg_pool_min: int = 1
     pg_pool_max: int = 8
 
