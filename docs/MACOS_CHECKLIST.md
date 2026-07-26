@@ -150,6 +150,7 @@ Useful specifics:
 | `extension postgis missing` | `brew install postgis pgvector` then `just db-init` |
 | `bash: declare -A: invalid option` | a bash-4 construct slipped into a script — a bug on my side; `tests/unit/test_scripts_portability.py` should have caught it. Please report. |
 | `just: command not found` | `brew install just` |
+| `these migrations changed after being applied: 004_reasoning.sql` | Your database predates a change to that file. It is not a code problem and a **fresh** database is unaffected — verified. Run `just db-init --reset` (destructive: it rebuilds the schema). The guard exists because editing an applied migration leaves two databases claiming the same version number with different shapes, which is worse than the inconvenience of this message. |
 | Apple silicon vs Intel brew prefix | handled: `pg_bin_dir()` checks `/opt/homebrew` and `/usr/local` |
 
 ## Resetting
