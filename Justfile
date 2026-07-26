@@ -151,7 +151,7 @@ demo-reset:
 
 # ---------------------------------------------------------------------------- checks
 # The gate every phase must pass: lint, format, types, unit tests, web build.
-check: lint typecheck test web-check
+check: lint typecheck test web-check schemas-check
     @echo "✓ check passed"
 
 # The end-to-end rings. Needs a running platform — `just services && just dev` first.
@@ -212,6 +212,15 @@ eval-tools *args:
 # Regenerate the JSON Schema exports from the pydantic contracts.
 schemas:
     {{uv}} python -m sio_schemas.export --out docs/schemas
+
+# Fail if the exported JSON schemas have drifted from the pydantic models.
+#
+# Part of `just check` as of Phase 8, and it should have been from the start. It ran ONLY in CI, so when a
+# field was added to `Alert` the export went stale and stayed stale — invisible locally, and invisible in CI
+# too because CI has never been able to run on this account. A check that lives in one place only is a check
+# that is off whenever that place is.
+schemas-check:
+    {{uv}} python -m sio_schemas.export --check --out docs/schemas
 
 # Typecheck and build the web console.
 web-check:

@@ -385,6 +385,19 @@
       "default": null,
       "title": "Escalated Ts"
     },
+    "escalation_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Why this escalated. Separate from urgency_reason, which explains the SCORE.",
+      "title": "Escalation Reason"
+    },
     "event_ids": {
       "items": {
         "type": "string"

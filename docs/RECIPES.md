@@ -8,7 +8,7 @@ it sends somebody to a command that does not exist and they conclude the docs ca
 The descriptions come from the comments above each recipe, so `just --list` and this page cannot
 disagree.
 
-There are **53**.
+There are **54**.
 
 ## Setup
 
@@ -74,6 +74,7 @@ There are **53**.
 | `just bench *args` | Needs a running platform. |
 | `just eval-tools *args` | Verify the copilot's model can actually select tools (gate for Phase 4). |
 | `just schemas` | Regenerate the JSON Schema exports from the pydantic contracts. |
+| `just schemas-check` | that is off whenever that place is. |
 | `just web-check` | Typecheck and build the web console. |
 
 ## Utility
