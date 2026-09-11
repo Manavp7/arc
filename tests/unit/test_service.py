@@ -310,3 +310,35 @@ async def test_a_service_that_dead_letters_reports_itself_degraded(settings, mem
     assert degraded.status == "degraded"
     assert "dead_lettered" in degraded.checks
     assert "1 message" in degraded.checks["dead_lettered"]
+
+
+async def test_retry_executes_again_after_handler_recovers(settings, memory_bus) -> None:
+    from unittest.mock import AsyncMock
+
+    service = RecordingService(settings, memory_bus)
+    message = BusMessage.of(Topic.DETECTIONS, a_detection())
+    message.stream_id = "1-0"
+    original_handler = service.on_message
+    service.on_message = AsyncMock(side_effect=RuntimeError("transient"))
+    memory_bus.ack = AsyncMock()
+    await service._handle(message)
+    assert message.id not in service._seen
+    memory_bus.ack.assert_not_awaited()
+    service.on_message = original_handler
+    await service._handle(message)
+    await service._handle(message)
+    assert len(service.seen) == 1
+    assert memory_bus.ack.await_count == 2
+
+
+async def test_failed_ack_does_not_repeat_successful_handler(settings, memory_bus) -> None:
+    from unittest.mock import AsyncMock
+
+    service = RecordingService(settings, memory_bus)
+    message = BusMessage.of(Topic.DETECTIONS, a_detection())
+    message.stream_id = "1-0"
+    memory_bus.ack = AsyncMock(side_effect=[RuntimeError("network"), None])
+    await service._handle(message)
+    await service._handle(message)
+    assert len(service.seen) == 1
+    assert memory_bus.ack.await_count == 2

@@ -108,10 +108,19 @@ class PerceptionService(SioService):
 
         if self._is_stale(ctx.age_s):
             return
+        previous_inference = self._last_inference_at.get(observation.source_id)
         if not self._due(observation.source_id):
             return
 
-        results = await self._infer(observation)
+        try:
+            results = await self._infer(observation)
+        except Exception:
+            # A failed attempt must not use up this camera's inference interval.
+            if previous_inference is None:
+                self._last_inference_at.pop(observation.source_id, None)
+            else:
+                self._last_inference_at[observation.source_id] = previous_inference
+            raise
         if not results:
             return
 
@@ -291,8 +300,12 @@ class PerceptionService(SioService):
         if not observation.raw_ref:
             return
         redacted, applied = await asyncio.to_thread(self.redactor.apply, image, results)
-        if not applied:
+        pending_key = observation.raw_ref if observation.raw_ref.startswith("pending/") else None
+        if not applied and not pending_key:
             return
+        # Buffered raw camera bytes are inaccessible through the media API. Only
+        # the result of this redaction pass is promoted into the public namespace.
+        output_key = observation.raw_ref.removeprefix("pending/")
         import cv2
 
         # The original, but only when explicitly asked for — and under a separate key.
@@ -310,7 +323,7 @@ class PerceptionService(SioService):
             original_ok, original = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
             if original_ok:
                 await self.blob.put(
-                    f"raw/{observation.raw_ref}",
+                    f"raw/{output_key}",
                     original.tobytes(),
                     content_type="image/jpeg",
                     metadata={
@@ -323,11 +336,21 @@ class PerceptionService(SioService):
         success, encoded = cv2.imencode(".jpg", redacted, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
         if success:
             await self.blob.put(
-                observation.raw_ref,
+                output_key,
                 encoded.tobytes(),
                 content_type="image/jpeg",
-                metadata={"redacted": "true", "regions": str(applied)},
+                metadata={
+                    "redacted": str(
+                        bool(self.settings.blur_faces or self.settings.blur_plates)
+                    ).lower(),
+                    "regions": str(applied),
+                },
             )
+            observation.raw_ref = output_key
+            if pending_key:
+                # Indexers receive only the sanitized reference, after it exists.
+                await self.publish(Topic.FRAMES_READY, observation)
+                await self.blob.delete(pending_key)
             self._frames_redacted += 1
 
     # ------------------------------------------------------------------ reporting

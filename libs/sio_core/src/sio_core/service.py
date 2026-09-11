@@ -338,10 +338,14 @@ class SioService:
         if message_id in self._seen:
             self._seen.move_to_end(message_id)
             return True
+        return False
+
+    def _mark_handled(self, message_id: str) -> None:
+        """Remember completed work before ack, never an attempted handler."""
         self._seen[message_id] = None
+        self._seen.move_to_end(message_id)
         if len(self._seen) > self.idempotency_cache_size:
             self._seen.popitem(last=False)
-        return False
 
     async def _consume_forever(self) -> None:
         topics = [str(t) for t in self.subscribes]
@@ -384,6 +388,7 @@ class SioService:
                     max(0.0, ctx.age_s)
                 )
                 await self.on_message(message, ctx)
+                self._mark_handled(message.id)
                 self._counters["consumed"] += 1
                 self.metrics.consumed.labels(service=self.name, topic=topic).inc()
                 if message.stream_id:
@@ -401,6 +406,7 @@ class SioService:
                     dead_lettered_total=self._counters["dead_lettered"],
                 )
                 await self.bus.dead_letter(message, str(exc))
+                self._mark_handled(message.id)
                 self.metrics.dead_lettered.labels(service=self.name, topic=topic).inc()
                 if message.stream_id:
                     await self.bus.ack(topic, self.group, message.stream_id)

@@ -9,7 +9,9 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 
 from sio_core import MessageContext, PgPool, SioService, get_pg_pool
+from sio_core.authn import ServiceIdentity
 from sio_core.explain import ExplanationBuilder
+from sio_core.tenancy import current_tenant
 from sio_schemas import (
     BusMessage,
     Event,
@@ -57,6 +59,11 @@ class WorkflowService(SioService):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.pool: PgPool = get_pg_pool(self.settings)
+        if self.settings.workflow_runner != "inline":
+            raise ValueError(
+                "SIO_WORKFLOW_RUNNER=temporal is not implemented; select inline. "
+                "Inline execution does not resume after process failure."
+            )
         self.runner = InlineRunner()
         self.ledger = RunLedger()
         self._authored: dict[str, WorkflowSpec] = {}
@@ -112,6 +119,11 @@ class WorkflowService(SioService):
             "suppressed_by_cooldown": str(self.ledger.suppressed),
             "needing_human": str(self._needing_human),
             "runner": self.runner.name,
+            "dry_run": str(self.settings.workflow_dry_run).lower(),
+            "durability": "in-process; interrupted runs do not resume",
+            "action_mode": "dry_run"
+            if self.settings.workflow_dry_run
+            else "armed; actuators unsupported",
         }
 
     # ------------------------------------------------------------------ handling
@@ -187,7 +199,7 @@ class WorkflowService(SioService):
 
         for playbook in self._playbooks_for(event, message):
             subject = self._subject(playbook, event)
-            if not self.ledger.may_start(playbook, subject):
+            if not self.ledger.may_start(playbook, subject, tenant_id=event.tenant_id):
                 self.log.info(
                     "workflow.suppressed",
                     playbook=playbook.name,
@@ -207,6 +219,13 @@ class WorkflowService(SioService):
                 parts.append(event.entities[0] if event.entities else "")
         return "|".join(parts) or "*"
 
+    def _report_token(self, tenant_id: str) -> str:
+        if self.settings.auth_mode == "dev":
+            tenant_settings = self.settings.model_copy(update={"tenant_id": tenant_id})
+            return ServiceIdentity("workflow", tenant_settings).token()
+        # The API verifies this supplied token; report generation also rejects any tenant mismatch.
+        return self.settings.workflow_service_token
+
     async def _run(
         self, playbook: Playbook, event: Event, ctx: MessageContext | None
     ) -> RunOutcome:
@@ -220,6 +239,7 @@ class WorkflowService(SioService):
             zone_id=event.zone_id,
             entity_ids=list(event.entities),
             dry_run=self.settings.workflow_dry_run,
+            bearer_token=self._report_token(event.tenant_id),
         )
         self._started += 1
         self.log.info(
@@ -235,10 +255,12 @@ class WorkflowService(SioService):
             await self._publish_step(run, step, playbook, ctx)
             await self._persist(run)
 
-        outcome = await self.runner.execute(
-            playbook, context, trigger_event_id=event.event_id, on_progress=on_progress
-        )
-        await context.close()
+        try:
+            outcome = await self.runner.execute(
+                playbook, context, trigger_event_id=event.event_id, on_progress=on_progress
+            )
+        finally:
+            await context.close()
 
         outcome.run.explanation = self._explain(playbook, outcome, event)
         await self._persist(outcome.run)
@@ -306,7 +328,8 @@ class WorkflowService(SioService):
     ) -> None:
         run = outcome.run
         summary = (
-            f"{playbook.name} completed all {playbook.step_count} steps"
+            f"{playbook.name} completed; "
+            f"{sum(step.status == RunStatus.FAILED for step in run.steps)} optional step(s) failed"
             if outcome.ok
             else f"{playbook.name} failed and rolled back {len(outcome.compensated)} step(s)"
         )
@@ -410,6 +433,12 @@ class WorkflowService(SioService):
         builder.confidence(0.95 if outcome.ok else 0.5)
         return builder.build()
 
+    def _require_configuration_tenant(self) -> None:
+        if current_tenant() != self.settings.tenant_id:
+            raise HTTPException(
+                status_code=403, detail="workflow configuration belongs to another tenant"
+            )
+
     # -------------------------------------------------------------------- routes
     def routes(self, app: FastAPI) -> None:
         @app.get("/workflow/vocabulary", tags=["workflow"])
@@ -469,6 +498,7 @@ class WorkflowService(SioService):
 
         @app.get("/workflow/authored", tags=["workflow"])
         async def list_authored() -> dict[str, Any]:
+            self._require_configuration_tenant()
             return {
                 "workflows": [spec.describe() for spec in self._authored.values()],
                 # The rejected ones travel with the valid ones. A workflow that failed to load is otherwise
@@ -483,6 +513,7 @@ class WorkflowService(SioService):
             Refusing rather than saving-and-warning. A saved-but-broken workflow is the worst of both: it appears
             in the list, an operator believes it is armed, and it never runs.
             """
+            self._require_configuration_tenant()
             document = {**document, "name": name}
             spec = parse(document)
             problems = validate(spec)
@@ -522,6 +553,7 @@ class WorkflowService(SioService):
 
         @app.delete("/workflow/authored/{name}", tags=["workflow"])
         async def delete_authored(name: str) -> dict[str, Any]:
+            self._require_configuration_tenant()
             path = self.workflow_dir / f"{name}.json"
             if not path.exists():
                 raise HTTPException(
@@ -540,15 +572,15 @@ class WorkflowService(SioService):
         @app.get("/workflow/runs", tags=["workflow"])
         async def runs(limit: int = 20) -> dict[str, Any]:
             """Recent runs with per-step status — what the UI renders as live progress."""
-            return self.ledger.describe(limit=limit)
+            return self.ledger.describe(limit=limit, tenant_id=current_tenant())
 
         @app.get("/workflow/runs/{run_id}", tags=["workflow"])
         async def run_detail(run_id: str) -> dict[str, Any]:
-            run = self.ledger.get(run_id)
+            run = self.ledger.get(run_id, tenant_id=current_tenant())
             if run is None:
                 row = await self.pool.fetchrow(
                     "SELECT payload FROM workflow_runs WHERE tenant_id = %s AND run_id = %s",
-                    (self.settings.tenant_id, run_id),
+                    (current_tenant(), run_id),
                 )
                 if row is None:
                     raise HTTPException(status_code=404, detail=f"unknown run {run_id!r}")
@@ -570,7 +602,7 @@ class WorkflowService(SioService):
                     detail=f"unknown playbook {playbook_name!r}; have {sorted(PLAYBOOKS)}",
                 )
             trigger = Event(
-                tenant_id=self.settings.tenant_id,
+                tenant_id=current_tenant(),
                 type=EventType.FIRE_DETECTED,
                 severity=Severity.CRITICAL,
                 zone_id=zone_id,

@@ -1,0 +1,46 @@
+.ops-workbench { max-width: 1420px; margin: 0 auto; padding: 30px; color: var(--text); }
+.ops-workbench h1 { font-size: clamp(26px,3vw,38px); margin: 8px 0; font-weight: 500; letter-spacing: -.035em; }
+.ops-workbench h2 { font-size: 19px; margin: 9px 0; font-weight: 500; }
+.ops-workbench p { line-height: 1.65; }
+.ops-workbench label { display: grid; gap: 8px; font-size: 12px; color: var(--muted); }
+.ops-workbench input,.ops-workbench select,.ops-workbench textarea { width: 100%; min-width: 0; color: var(--text); background: #0b1210; border: 1px solid var(--border); padding: 10px 12px; border-radius: 4px; font: inherit; }
+.ops-workbench input[type=checkbox] { width: 16px; height: 16px; accent-color: #bedfc0; }
+.ops-workbench button { cursor: pointer; }
+.ops-workbench button:disabled { cursor: default; opacity: .45; }
+.ops-stat-strip { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); margin: 24px 0; border-top: 1px solid #3e5443; border-bottom: 1px solid var(--border); }
+.ops-stat-strip > div { display: grid; gap: 7px; padding: 21px; border-right: 1px solid var(--border); }
+.ops-stat-strip > div:last-child { border-right: 0; }
+.ops-stat-strip strong { font-size: clamp(25px,3vw,39px); font-weight: 400; font-variant-numeric: tabular-nums; }
+.ops-stat-strip span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; }
+.ops-inline-filter { max-width: 240px; margin: 22px 0; }
+.ops-job-list { display: grid; gap: 14px; }
+.ops-job { padding: 22px; border: 1px solid var(--border); background: #0d1611; border-radius: 5px; }
+.ops-job header { display: flex; justify-content: space-between; align-items: start; gap: 15px; }
+.ops-job progress { width: 100%; height: 6px; accent-color: #bedfc0; }
+.ops-status-failed,.ops-status-interrupted,.ops-status-cancelled { color: #f6b5a1; }
+.ops-status-completed { color: #bedfc0; }
+.ops-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin: 22px 0; }
+.ops-toolbar label { flex: 1; min-width: 130px; }
+.ops-toolbar label:first-child { flex: 2; }
+.ops-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 5px; }
+.ops-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; }
+.ops-table th { color: var(--muted); font-weight: 400; text-transform: uppercase; font-size: 10px; letter-spacing: .08em; background: #101b14; }
+.ops-table th,.ops-table td { padding: 15px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.ops-table tbody tr:last-child td { border-bottom: 0; }
+.ops-table td:first-child { width: 36px; }
+.ops-table td p { margin: 6px 0; max-width: 480px; }
+.ops-record-button { padding: 0; border: 0; background: transparent; color: #cee5d0; text-align: left; font: inherit; font-weight: 600; }
+.ops-reasons { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; color: #b8c9bc; font-size: 10px; }
+.ops-reasons span { padding: 3px 6px; border: 1px solid #354039; border-radius: 3px; }
+.ops-confirm { margin: 20px 0; padding: 24px; border: 1px solid #6b5442; background: #231c14; border-radius: 5px; }
+.ops-confirm label { max-width: 420px; margin: 15px 0; }
+.ops-danger { color: #ffbeab; border-color: #835545; }
+.ops-handover-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 28px; }
+.ops-handover-layout section { min-width: 0; padding: 22px; border: 1px solid var(--border); border-radius: 5px; background: #0d1611; }
+.ops-handover-layout form { display: grid; gap: 16px; }
+.ops-handover { border-bottom: 1px solid var(--border); padding: 15px 0; }
+.ops-handover p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.ops-handover small { color: var(--muted); }
+.ops-handover ul { padding-left: 18px; }
+.ops-overdue { color: #ffb292; }
+@media(max-width: 700px) { .ops-workbench { padding: 20px 12px; } .ops-stat-strip > div { padding: 15px 8px; } .ops-stat-strip span { font-size: 9px; } .ops-job { padding: 16px; } .ops-handover-layout { grid-template-columns: 1fr; } .ops-table { min-width: 620px; } .ops-toolbar { gap: 9px; } .ops-workbench .rv-page-head { display: grid; } }

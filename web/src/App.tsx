@@ -15,7 +15,27 @@
  * relation — an alert, an event and a recommendation are all inspected the same way.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AuthGate, SessionControls } from "./components/AuthGate";
+import { IncidentPanel } from "./components/IncidentPanel";
+import { SourcesPanel } from "./components/SourcesPanel";
+import { SitePanel } from "./components/SitePanel";
+import { VideoReviewPanel } from "./components/VideoReviewPanel";
+import { CasePanel } from "./components/CasePanel";
+import { SearchPanel } from "./components/SearchPanel";
+import { ObjectExplorerPanel } from "./components/ObjectExplorerPanel";
+import { ReviewMetricsPanel } from "./components/ReviewMetricsPanel";
+import { EvaluationPanel } from "./components/EvaluationPanel";
+import { ProcessingQueuePanel } from "./components/ProcessingQueuePanel";
+import { OperatorInboxPanel } from "./components/OperatorInboxPanel";
+import { StoragePanel } from "./components/StoragePanel";
+import { CameraSetupPanel } from "./components/CameraSetupPanel";
+import { EvidencePackagePanel } from "./components/EvidencePackagePanel";
+import { EvidenceComparePanel } from "./components/EvidenceComparePanel";
+import { NotificationCenter } from "./components/NotificationCenter";
+import type { NotificationTarget } from "./lib/notifications";
+import { OperationsProvider, OperatingModes, SystemPanel } from "./components/SystemPanel";
+import * as session from "./lib/session";
 import { AlertsPanel } from "./components/AlertsPanel";
 import { AnalyticsPanel } from "./components/AnalyticsPanel";
 import { CopilotPanel } from "./components/CopilotPanel";
@@ -34,11 +54,23 @@ import { TwinPanel } from "./components/TwinPanel";
 import { WorkflowBuilderPanel } from "./components/WorkflowBuilderPanel";
 import { Timeline } from "./components/Timeline";
 import { api } from "./lib/api";
+import { mergeAlertSnapshot, settleConsoleSnapshot } from "./lib/snapshot";
 import { connectStream } from "./lib/stream";
+import { latestTimestamp } from "./lib/freshness";
 import { openAlerts, useSioStore } from "./store";
 import type { Alert, Entity, SioEvent } from "./types";
 
 type RailTab =
+  | "evaluation" | "queue" | "inbox" | "storage" | "camera" | "evidence" | "compare"
+  | "incident"
+  | "footage"
+  | "cases"
+  | "search"
+  | "objects"
+  | "quality"
+  | "site"
+  | "sources"
+  | "system"
   | "events"
   | "alerts"
   | "decisions"
@@ -64,7 +96,7 @@ const FEED_ROWS = 80;
 
 function ConnectionBadge() {
   const connection = useSioStore((state) => state.connection);
-  const lastMessageAt = useSioStore((state) => state.lastMessageAt);
+  const lastStreamActivityAt = useSioStore((state) => state.lastStreamActivityAt);
   const label = {
     live: "live",
     connecting: "connecting",
@@ -74,7 +106,7 @@ function ConnectionBadge() {
   return (
     <span
       className={`badge badge-${connection}`}
-      title={lastMessageAt ?? "no messages yet"}
+      title={lastStreamActivityAt ? `Last stream activity ${lastStreamActivityAt}` : "No stream activity yet"}
     >
       <i className="dot" />
       {label}
@@ -175,7 +207,7 @@ function EventFeed({
 function EntityDetail() {
   const selectedId = useSioStore((state) => state.selectedEntityId);
   const entity = useSioStore((state) =>
-    selectedId ? state.entities.get(selectedId) : undefined,
+    selectedId ? (state.replayAt ? state.historyEntities : state.entities).get(selectedId) : undefined,
   );
   const selectEntity = useSioStore((state) => state.selectEntity);
 
@@ -187,7 +219,7 @@ function EntityDetail() {
           <strong>{selectedId}</strong>
           <button onClick={() => selectEntity(null)}>×</button>
         </header>
-        <p className="empty">Not in the live view.</p>
+        <p className="empty">Not observed in the selected view.</p>
       </aside>
     );
   }
@@ -252,186 +284,171 @@ function EntityDetail() {
   );
 }
 
-export default function App() {
-  const [tab, setTab] = useState<RailTab>("events");
-  const [explaining, setExplaining] = useState<Explainable | null>(null);
-  const onExplain = useCallback(
-    (subject: Explainable) => setExplaining(subject),
-    [],
-  );
-  const closeDrawer = useCallback(() => setExplaining(null), []);
-  const setConnection = useSioStore((state) => state.setConnection);
-  const upsertEntity = useSioStore((state) => state.upsertEntity);
-  const upsertEntities = useSioStore((state) => state.upsertEntities);
-  const addEvent = useSioStore((state) => state.addEvent);
-  const upsertAlert = useSioStore((state) => state.upsertAlert);
-  const setEvents = useSioStore((state) => state.setEvents);
-  const setZones = useSioStore((state) => state.setZones);
-  const alerts = useSioStore((state) => state.alerts);
-  const unresolvedAlerts = useMemo(() => openAlerts(alerts), [alerts]);
-  // Movers only, matching what the copilot counts.
-  //
-  // These disagreed: the header said "58 entities" (everything, including cameras, gates and docks) while
-  // the copilot answered "28 entities on site" for the same moment, because it excludes fixed
-  // infrastructure. Two parts of one product giving different answers to "how many things are here" is
-  // corrosive out of all proportion to the size of the bug — the user cannot tell which to believe, so
-  // they believe neither.
-  //
-  // The copilot's definition is the right one: a camera is not ON the site, it IS the site.
-  const liveCount = useSioStore(
-    (state) =>
-      [...state.entities.values()].filter((entity) => !entity.is_static).length,
-  );
-  // Same definition during replay, so the number does not change meaning when scrubbing.
-  const historyCount = useSioStore(
-    (state) =>
-      [...state.historyEntities.values()].filter((entity) => !entity.is_static)
-        .length,
-  );
-  const scrubbing = useSioStore((state) => state.replayAt !== null);
-  const entityCount = scrubbing ? historyCount : liveCount;
-
-  // Initial snapshot, then live updates. Loading the snapshot first means the map is populated
-  // immediately rather than filling in as messages happen to arrive.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const [entities, events, zones] = await Promise.all([
-          api.entities({ limit: 500, active_within_s: LIVE_WINDOW_S }),
-          api.events({ limit: 50 }),
-          api.zones().catch(() => []),
-        ]);
-        if (cancelled) return;
-        upsertEntities(entities);
-        setEvents(events);
-        setZones(zones);
-      } catch (error) {
-        console.warn("initial load failed (is the API running?)", error);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [upsertEntities, setEvents, setZones]);
-
-  useEffect(() => {
-    const close = connectStream({
-      onStatus: setConnection,
-      onMessage: (message) => {
-        switch (message.kind) {
-          case "Entity":
-            upsertEntity(message.payload as Entity);
-            break;
-          case "Event":
-            addEvent(message.payload as SioEvent);
-            break;
-          case "Alert":
-            // The header count is driven by the stream so it moves the moment an alert is raised, rather
-            // than on the inbox panel's poll — which the operator may not have open.
-            upsertAlert(message.payload as Alert);
-            break;
-          default:
-            break;
-        }
-      },
-    });
-    return close;
-  }, [setConnection, upsertEntity, addEvent, upsertAlert]);
-
-  return (
-    <div className="app">
-      <header className="topbar">
-        <h1>
-          SIO <span>Spatial Intelligence OS</span>
-        </h1>
-        <div className="topbar-right">
-          <span
-            className="stat"
-            title="Moving entities seen in the last 5 minutes — fixed infrastructure is not counted"
-          >
-            {entityCount} entities
-          </span>
-          <span className="stat">{unresolvedAlerts.length} open alerts</span>
-          <ConnectionBadge />
-        </div>
-      </header>
-
-      <main className="workspace">
-        <section className="map-pane">
-          {/* Each panel gets its own boundary: a broken map must still leave the event feed,
-              alerts and copilot usable rather than blanking the console. */}
-          <ErrorBoundary label="Live map">
-            <LiveMap />
-          </ErrorBoundary>
-          <ErrorBoundary label="Entity detail">
-            <EntityDetail />
-          </ErrorBoundary>
-        </section>
-
-        <aside className="rail">
-          <nav className="tabs">
-            {(
-              [
-                "events",
-                "alerts",
-                "decisions",
-                "copilot",
-                "missions",
-                "playbooks",
-                "twin",
-                "forecast",
-                "analytics",
-                "builder",
-              ] as RailTab[]
-            ).map((name) => (
-              <button
-                key={name}
-                className={name === tab ? "tab tab-active" : "tab"}
-                onClick={() => setTab(name)}
-              >
-                {name}
-                {/* The unattended count rides on the tab, because the operator will be looking at the
-                      map when it changes. */}
-                {name === "alerts" && unresolvedAlerts.length > 0 && (
-                  <span className="tab-badge">{unresolvedAlerts.length}</span>
-                )}
-              </button>
-            ))}
-          </nav>
-          <div className="rail-body">
-            {/* Keyed by tab so a panel that throws is contained to that tab and remounts cleanly when
-                the operator switches away and back, rather than poisoning the rail. */}
-            <ErrorBoundary key={tab} label={tab}>
-              {tab === "events" && <EventFeed onExplain={onExplain} />}
-              {tab === "alerts" && <AlertsPanel onExplain={onExplain} />}
-              {tab === "decisions" && <DecisionsPanel onExplain={onExplain} />}
-              {tab === "copilot" && <CopilotPanel onExplain={onExplain} />}
-              {tab === "missions" && <MissionControlPanel />}
-              {tab === "playbooks" && <PlaybookRunsPanel />}
-              {/* Mounted only while the tab is open, which is what keeps the lazy chunk unrequested until
-                  somebody asks — and lets Cesium release its WebGL context when they leave. */}
-              {tab === "twin" && <TwinPanel />}
-              {tab === "forecast" && <ForecastPanel />}
-              {tab === "analytics" && <AnalyticsPanel />}
-              {tab === "builder" && <WorkflowBuilderPanel />}
-            </ErrorBoundary>
-          </div>
-        </aside>
-      </main>
-
-      {/* One drawer for events, alerts and recommendations. Outside the rail so it can be wide enough
-          for an evidence list without squeezing the map. */}
-      <ErrorBoundary label="the explanation">
-        <ExplanationDrawer subject={explaining} onClose={closeDrawer} />
-      </ErrorBoundary>
-
-      <footer className="timeline-strip">
-        <span className="timeline-label">timeline</span>
-        <ErrorBoundary label="the timeline">
-          <Timeline />
-        </ErrorBoundary>
-      </footer>
-    </div>
-  );
+type Workspace = "monitor" | "review" | "investigate" | "respond" | "admin";
+const SECTIONS: Record<Workspace, { label: string; tabs: RailTab[] }> = {
+  monitor: { label: "Monitor", tabs: ["alerts", "events", "analytics"] },
+  review: { label: "Footage & cases", tabs: ["footage", "objects", "evaluation", "queue", "inbox", "cases", "compare", "evidence", "search", "quality"] },
+  investigate: { label: "Investigate", tabs: ["incident", "copilot", "forecast", "twin"] },
+  respond: { label: "Respond", tabs: ["decisions", "missions", "playbooks"] },
+  admin: { label: "Administration", tabs: ["sources", "site", "camera", "storage", "system", "builder"] },
+};
+const TAB_NAMES: Record<RailTab, string> = { objects: "Objects", compare: "Compare footage", evaluation: "Evaluation lab", queue: "Processing queue", inbox: "Operator inbox", storage: "Storage", camera: "Camera setup", evidence: "Evidence packages", footage: "Footage", cases: "Cases", search: "Search", quality: "Review quality", site: "Site editor", alerts: "Alerts", events: "Event feed", analytics: "Analytics", incident: "Incident", copilot: "Copilot", forecast: "Forecasts", twin: "3D twin", decisions: "Decisions", missions: "Missions", playbooks: "Response log", sources: "Sources", system: "System health", builder: "Workflow builder" };
+const TAB_PERMISSIONS: Partial<Record<RailTab, string>> = { objects: "review.read", compare: "case.read", storage: "storage.read", camera: "site.write", inbox: "case.read", evidence: "case.read", sources: "integration.read", missions: "mission.read", copilot: "copilot.ask", builder: "workflow.write" };
+function canOpenTab(name: RailTab): boolean {
+  const permission = TAB_PERMISSIONS[name];
+  return !permission || session.can(permission);
 }
+
+function Console() {
+  // Role changes on token renewal refresh existing controls without resetting the workspace.
+  const identity = session.useSession();
+  const [workspace, setWorkspace] = useState<Workspace>("monitor");
+  const [tab, setTab] = useState<RailTab>("alerts");
+  const [incident, setIncident] = useState<Alert | null>(null);
+  const [missionId, setMissionId] = useState<string | undefined>();
+  const [caseId, setCaseId] = useState<string | undefined>();
+  const [comparisonDirty, setComparisonDirty] = useState(false);
+  const [footageDirty, setFootageDirty] = useState(false);
+  const [navigationNotice, setNavigationNotice] = useState<string | null>(null);
+  const [packageId, setPackageId] = useState<string | undefined>();
+  const [videoId, setVideoId] = useState<string | undefined>();
+  const [videoAt, setVideoAt] = useState<number | undefined>();
+  const [analysisId, setAnalysisId] = useState<string | undefined>();
+  const [siteId, setSiteId] = useState<string | undefined>();
+  const [explaining, setExplaining] = useState<Explainable | null>(null);
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
+  const [snapshotAt, setSnapshotAt] = useState<string | null>(null);
+  const [now, setNow] = useState(Date.now());
+  const generation = useRef(0);
+  const onExplain = useCallback((subject: Explainable) => setExplaining(subject), []);
+  const closeDrawer = useCallback(() => setExplaining(null), []);
+  const alerts = useSioStore(state => state.alerts);
+  const entities = useSioStore(state => state.entities);
+  const historyEntities = useSioStore(state => state.historyEntities);
+  const replayAt = useSioStore(state => state.replayAt);
+  const lastMessageAt = useSioStore(state => state.lastMessageAt);
+  const unresolvedAlerts = useMemo(() => openAlerts(alerts), [alerts]);
+  const entityCount = [...(replayAt ? historyEntities : entities).values()].filter(entity => !entity.is_static).length;
+  const activeIncident = incident ? alerts.find(row => row.alert_id === incident.alert_id) ?? incident : null;
+  const refreshedAt = latestTimestamp(lastMessageAt, snapshotAt);
+  const age = refreshedAt ? Math.max(0, Math.floor((now - new Date(refreshedAt).getTime()) / 1000)) : null;
+  const loadSnapshot = useCallback(async () => {
+    const run = ++generation.current;
+    const alertsAtStart = new Map(useSioStore.getState().alerts.map(alert => [alert.alert_id, alert]));
+    const snapshot = await settleConsoleSnapshot({
+      entities: api.entities({ limit: 500, active_within_s: LIVE_WINDOW_S }),
+      events: api.events({ limit: 100 }), zones: api.zones(), alerts: api.alertInbox({ limit: 200 }),
+    });
+    if (run !== generation.current) return;
+    const store = useSioStore.getState();
+    if (snapshot.entities) store.replaceEntities(snapshot.entities);
+    if (snapshot.events) store.setEvents([...new Map([...snapshot.events, ...store.events].map(event => [event.event_id, event])).values()].sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, 500));
+    if (snapshot.zones) store.setZones(snapshot.zones);
+    if (snapshot.alerts) store.setAlerts(mergeAlertSnapshot(snapshot.alerts, useSioStore.getState().alerts, alertsAtStart));
+    setSnapshotError(snapshot.failures.length ? `Some sections could not refresh. ${snapshot.failures.join("; ")}` : null);
+    // The freshness indicator describes the site picture, so an alerts-only refresh does not advance it.
+    if (snapshot.entities) setSnapshotAt(new Date().toISOString());
+  }, []);
+  useEffect(() => {
+    void loadSnapshot();
+    const retry = setInterval(() => void loadSnapshot(), 30000);
+    return () => { generation.current++; clearInterval(retry); };
+  }, [loadSnapshot]);
+  useEffect(() => {
+    const timer = setInterval(() => { setNow(Date.now()); useSioStore.getState().pruneStaleEntities(LIVE_WINDOW_S); }, 5000);
+    return () => clearInterval(timer);
+  }, []);
+  useEffect(() => connectStream({
+    onStatus: state => useSioStore.getState().setConnection(state),
+    onActivity: receivedAt => useSioStore.getState().markStreamActivity(receivedAt),
+    onConnected: () => void loadSnapshot(),
+    onMessage: message => {
+      const store = useSioStore.getState();
+      if (message.kind === "Entity") store.upsertEntity(message.payload as Entity);
+      else if (message.kind === "Event") store.addEvent(message.payload as SioEvent);
+      else if (message.kind === "Alert") store.upsertAlert(message.payload as Alert);
+    },
+  }), [loadSnapshot]);
+  useEffect(() => {
+    if (!canOpenTab(tab)) setTab(SECTIONS[workspace].tabs.find(canOpenTab) ?? "alerts");
+  }, [identity, tab, workspace]);
+  useEffect(() => { if (!comparisonDirty && !footageDirty) setNavigationNotice(null); }, [comparisonDirty,footageDirty]);
+  function navigate(section: Workspace, target?: RailTab): boolean {
+    const next = target && canOpenTab(target) ? target : SECTIONS[section].tabs.find(canOpenTab) ?? "alerts";
+    if (tab === "compare" && comparisonDirty && next !== "compare") {
+      setNavigationNotice("Save or discard your alignment changes before leaving Compare footage.");
+      return false;
+    }
+    if (tab === "footage" && footageDirty && next !== "footage") {
+      setNavigationNotice("Save a movement snapshot or discard its draft, save or discard footage edits and bookmarks, and queue or reset changed analysis settings before leaving Footage.");
+      return false;
+    }
+    setNavigationNotice(null);
+    setWorkspace(section);
+    setTab(next);
+    return true;
+  }
+  function investigate(alert: Alert) { setIncident(alert); navigate("investigate", "incident"); if (alert.entity_ids[0]) useSioStore.getState().selectEntity(alert.entity_ids[0]); }
+  function openMission(id?: string) { if (navigate("respond", "missions")) setMissionId(id); }
+  function openCase(id: string) { if (navigate("review", "cases")) setCaseId(id); }
+  function openComparison(id: string) { if (navigate("review", "compare")) setCaseId(id); }
+  function openPackage(id: string, selectedPackageId?: string) { if (navigate("review", "evidence")) { setCaseId(id); setPackageId(selectedPackageId); } }
+  function openVideo(id: string, atS?: number, version?: string) { if (tab === "footage" && footageDirty) { setNavigationNotice("Save a movement snapshot or discard its draft, save or discard footage edits and bookmarks, and queue or reset changed analysis settings before opening another recording or analysis."); return; } if (navigate("review", "footage")) { setVideoId(id); setVideoAt(atS); setAnalysisId(version); } }
+  function openNotification(target: NotificationTarget) {
+    if (target.kind === "case") openCase(target.case_id ?? target.id);
+    else if (target.kind === "analysis" && target.video_id) openVideo(target.video_id, undefined, target.analysis_id ?? target.id);
+    else if (target.kind === "package" && target.case_id) openPackage(target.case_id, target.package_id ?? target.id);
+  }
+  function searchResult(kind: string, id: string, atS?: number, version?: string) {
+    if (kind === "case") openCase(id);
+    else if (kind === "video" || kind === "video_event") openVideo(id, atS, version);
+    else if (kind === "alert") { const found = alerts.find(row => row.alert_id === id); if (found) investigate(found); else void api.request<Alert>(`/alerts/${encodeURIComponent(id)}`).then(investigate).catch(() => setSnapshotError("This alert could not be opened.")); }
+    else if (kind === "mission") openMission(id);
+    else if (kind === "site") { setSiteId(id); navigate("admin", "site"); }
+    else if (kind === "entity") { useSioStore.getState().selectEntity(id); navigate("monitor", "events"); }
+    else if (kind === "event") { void api.request<SioEvent>(`/events/${encodeURIComponent(id)}`).then(event => onExplain(fromEvent(event))).catch(() => setSnapshotError("This event could not be opened.")); }
+  }
+  return <div className={`app ${workspace === "review" || workspace === "admin" ? "app-review" : ""}`}>
+    <header className="topbar"><div className="brand"><span className="brand-mark">S</span><h1>SIO <span>Site operations</span></h1></div><div className="topbar-right"><NotificationCenter onOpenTarget={openNotification} /><ConnectionBadge /><SessionControls /></div></header>
+    <div className="workspace-bar"><nav className="workspace-nav" aria-label="Workspaces">{(Object.keys(SECTIONS) as Workspace[]).map(section => <button key={section} aria-current={workspace === section ? "page" : undefined} className={workspace === section ? "workspace-tab active" : "workspace-tab"} onClick={() => navigate(section)}>{SECTIONS[section].label}{section === "monitor" && unresolvedAlerts.length > 0 && <span className="tab-badge">{unresolvedAlerts.length}</span>}</button>)}</nav><OperatingModes /></div>
+    <main className={`workspace workspace-${workspace}`}>
+      {workspace !== "admin" && workspace !== "review" && <section className="map-pane" aria-label="Site map"><ErrorBoundary label="Site map"><LiveMap /></ErrorBoundary><div className="map-status"><strong>{replayAt ? "Historical picture" : "Live picture"}</strong><span>{entityCount} moving entities</span><span>{replayAt ? new Date(replayAt).toLocaleString() : age == null ? "Waiting for observations" : `Updated ${age}s ago`}</span></div><ErrorBoundary label="Entity detail"><EntityDetail /></ErrorBoundary></section>}
+      <aside className="rail"><nav className="tabs" aria-label={`${SECTIONS[workspace].label} tools`}>{SECTIONS[workspace].tabs.filter(canOpenTab).map(name => <button key={name} aria-pressed={name === tab} className={name === tab ? "tab tab-active" : "tab"} onClick={() => navigate(workspace, name)}>{TAB_NAMES[name]}</button>)}</nav>
+        <div className="rail-body">{navigationNotice && <p className="snapshot-error" role="alert">{navigationNotice}</p>}{snapshotError && <div className="snapshot-error" role="status"><span>Live snapshot unavailable. {snapshotError}</span><button onClick={() => void loadSnapshot()}>Retry</button></div>}
+          <ErrorBoundary key={tab} label={TAB_NAMES[tab]}>
+            {tab === "alerts" && <AlertsPanel onExplain={onExplain} onInvestigate={investigate} />}
+            {tab === "events" && <EventFeed onExplain={onExplain} />}
+            {tab === "incident" && <IncidentPanel alert={activeIncident} onExplain={onExplain} onMission={openMission} onCase={openCase} onClose={() => navigate("monitor", "alerts")} />}
+            {tab === "decisions" && <DecisionsPanel onExplain={onExplain} />}
+            {tab === "copilot" && <CopilotPanel onExplain={onExplain} />}
+            {tab === "missions" && <MissionControlPanel initialMissionId={missionId} />}
+            {tab === "playbooks" && <PlaybookRunsPanel />}
+            {tab === "twin" && <TwinPanel />}
+            {tab === "forecast" && <ForecastPanel />}
+            {tab === "analytics" && <AnalyticsPanel />}
+            {tab === "builder" && session.can("workflow.write") && <WorkflowBuilderPanel />}
+            {tab === "sources" && <SourcesPanel />}
+            {tab === "system" && <SystemPanel />}
+            {tab === "site" && <SitePanel initialSiteId={siteId} />}
+            {tab === "footage" && <VideoReviewPanel initialVideoId={videoId} initialAtS={videoAt} initialAnalysisId={analysisId} onOpenCase={openCase} onDirtyChange={setFootageDirty} />}
+            {tab === "cases" && <CasePanel initialCaseId={caseId} onOpenVideo={openVideo} onOpenMission={openMission} onPrepareEvidence={openPackage} onCompareEvidence={openComparison} />}
+            {tab === "evaluation" && <EvaluationPanel onOpenVideo={openVideo} onOpenCase={openCase} />}
+            {tab === "queue" && <ProcessingQueuePanel onOpenVideo={openVideo} />}
+            {tab === "inbox" && <OperatorInboxPanel onOpenCase={openCase} />}
+            {tab === "storage" && <StoragePanel />}
+            {tab === "camera" && <CameraSetupPanel initialSiteId={siteId} onOpenSite={id => { setSiteId(id); navigate("admin", "site"); }} />}
+            {tab === "compare" && <EvidenceComparePanel initialCaseId={caseId} onOpenCase={openCase} onOpenVideo={openVideo} onDirtyChange={setComparisonDirty} />}
+            {tab === "evidence" && <EvidencePackagePanel initialCaseId={caseId} initialPackageId={packageId} onOpenCase={openCase} />}
+            {tab === "search" && <SearchPanel onSelectResult={searchResult} />}
+            {tab === "objects" && <ObjectExplorerPanel onOpenFootage={(id, atS, version) => searchResult("video", id, atS, version)} />}
+            {tab === "quality" && <ReviewMetricsPanel />}
+          </ErrorBoundary>
+        </div>
+      </aside>
+    </main>
+    <ErrorBoundary label="Explanation"><ExplanationDrawer subject={explaining} onClose={closeDrawer} /></ErrorBoundary>
+    {workspace !== "review" && workspace !== "admin" && <footer className="timeline-strip"><span className="timeline-label">Timeline</span><ErrorBoundary label="Timeline"><Timeline /></ErrorBoundary></footer>}
+  </div>;
+}
+
+export default function App() { return <AuthGate><OperationsProvider><Console /></OperationsProvider></AuthGate>; }

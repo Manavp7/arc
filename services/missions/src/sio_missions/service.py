@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from sio_core import (
@@ -24,6 +24,7 @@ from sio_core import (
     SioService,
     get_pg_pool,
 )
+from sio_core.guard import principal_of
 from sio_schemas import (
     BusMessage,
     Mission,
@@ -56,6 +57,7 @@ class CommRequest(BaseModel):
     body: str
     kind: str = "message"
     ref: str | None = None
+    # Kept for existing clients; only the verified request principal establishes authorship.
     author: str | None = None
 
 
@@ -392,7 +394,8 @@ class MissionsService(SioService):
             return {"missions": [await self._render(dict(row)) for row in rows]}
 
         @app.post("/missions", tags=["missions"])
-        async def create(request: MissionRequest) -> dict[str, Any]:
+        async def create(request: MissionRequest, http_request: Request) -> dict[str, Any]:
+            actor = principal_of(http_request).subject
             objectives = [
                 MissionObjective(
                     description=str(item.get("description") or item),
@@ -429,7 +432,7 @@ class MissionsService(SioService):
             )
             await self._log_comm(
                 mission.mission_id,
-                author=mission.commander or "unknown",
+                author=actor,
                 kind="system",
                 body=f"Mission created: {mission.name}",
             )
@@ -437,6 +440,7 @@ class MissionsService(SioService):
                 "missions.created",
                 mission=mission.mission_id,
                 name=mission.name,
+                by=actor,
                 objectives=len(objectives),
                 zone=mission.zone_id,
             )
@@ -450,6 +454,7 @@ class MissionsService(SioService):
         async def transition(
             mission_id: str,
             to: str,
+            http_request: Request,
             by: str | None = None,
             force: bool = False,
         ) -> dict[str, Any]:
@@ -508,7 +513,8 @@ class MissionsService(SioService):
                 (str(requested), self.settings.tenant_id, mission_id),
             )
 
-            author = by or "unknown"
+            # Legacy `by` is accepted but cannot override the authenticated actor.
+            author = principal_of(http_request).subject
             await self._log_comm(
                 mission_id,
                 author=author,
@@ -559,7 +565,11 @@ class MissionsService(SioService):
 
         @app.post("/missions/{mission_id}/resources", tags=["missions"])
         async def assign(
-            mission_id: str, resource_id: str, by: str | None = None, role: str | None = None
+            mission_id: str,
+            resource_id: str,
+            http_request: Request,
+            by: str | None = None,
+            role: str | None = None,
         ) -> dict[str, Any]:
             """Commit a resource to a mission.
 
@@ -568,6 +578,7 @@ class MissionsService(SioService):
             two concurrent requests both see "not assigned" and both write, and dispatching the same drone to
             two fires is exactly the failure worth making impossible rather than unlikely.
             """
+            actor = principal_of(http_request).subject
             row = await self._load(mission_id)
             state = MissionState(str(row["state"]))
             if state in TERMINAL:
@@ -603,7 +614,7 @@ class MissionsService(SioService):
                     ON CONFLICT (tenant_id, mission_id, resource_id) DO UPDATE
                        SET released_ts = NULL, assigned_ts = now(), assigned_by = EXCLUDED.assigned_by
                     """,
-                    (self.settings.tenant_id, mission_id, resource_id, by, role),
+                    (self.settings.tenant_id, mission_id, resource_id, actor, role),
                 )
             except Exception as error:
                 # The index caught a race the check above could not. Reported as the same conflict, because
@@ -629,17 +640,20 @@ class MissionsService(SioService):
             )
             await self._log_comm(
                 mission_id,
-                author=by or "unknown",
+                author=actor,
                 kind="system",
                 body=f"{resource_id} assigned{f' as {role}' if role else ''}",
                 ref=resource_id,
             )
-            self.log.info("missions.assigned", mission=mission_id, resource=resource_id, by=by)
+            self.log.info("missions.assigned", mission=mission_id, resource=resource_id, by=actor)
             return await self._render(await self._load(mission_id))
 
         @app.delete("/missions/{mission_id}/resources/{resource_id}", tags=["missions"])
         async def release(
-            mission_id: str, resource_id: str, by: str | None = None
+            mission_id: str,
+            resource_id: str,
+            http_request: Request,
+            by: str | None = None,
         ) -> dict[str, Any]:
             released = await self.pool.execute(
                 """
@@ -666,7 +680,7 @@ class MissionsService(SioService):
             )
             await self._log_comm(
                 mission_id,
-                author=by or "unknown",
+                author=principal_of(http_request).subject,
                 kind="system",
                 body=f"{resource_id} released",
                 ref=resource_id,
@@ -674,7 +688,9 @@ class MissionsService(SioService):
             return await self._render(await self._load(mission_id))
 
         @app.post("/missions/{mission_id}/objectives", tags=["missions"])
-        async def add_objective(mission_id: str, request: ObjectiveRequest) -> dict[str, Any]:
+        async def add_objective(
+            mission_id: str, request: ObjectiveRequest, http_request: Request
+        ) -> dict[str, Any]:
             row = await self._load(mission_id)
             if MissionState(str(row["state"])) in TERMINAL:
                 raise HTTPException(
@@ -701,7 +717,7 @@ class MissionsService(SioService):
             )
             await self._log_comm(
                 mission_id,
-                author="unknown",
+                author=principal_of(http_request).subject,
                 kind="system",
                 body=f"Objective added: {objective.description}"
                 + (
@@ -715,7 +731,11 @@ class MissionsService(SioService):
 
         @app.post("/missions/{mission_id}/objectives/{objective_id}", tags=["missions"])
         async def complete_objective(
-            mission_id: str, objective_id: str, done: bool = True, by: str | None = None
+            mission_id: str,
+            objective_id: str,
+            http_request: Request,
+            done: bool = True,
+            by: str | None = None,
         ) -> dict[str, Any]:
             """Tick an objective by hand.
 
@@ -723,6 +743,7 @@ class MissionsService(SioService):
             judgement — "the area is safe" — is not something the platform can verify. Being explicit about which
             objectives it can and cannot check is more useful than pretending uniformity.
             """
+            actor = principal_of(http_request).subject
             row = await self._load(mission_id)
             state = MissionState(str(row["state"]))
             if state in TERMINAL:
@@ -754,7 +775,7 @@ class MissionsService(SioService):
             found["done"] = done
             found["progress"] = 1.0 if done else 0.0
             if done:
-                found["satisfied_by"] = [by or "a human"]
+                found["satisfied_by"] = [actor]
             else:
                 found.pop("satisfied_by", None)
             stored["objectives"] = objectives
@@ -765,7 +786,7 @@ class MissionsService(SioService):
             )
             await self._log_comm(
                 mission_id,
-                author=by or "unknown",
+                author=actor,
                 kind="system",
                 body=f"Objective {'met' if done else 'reopened'}: {found.get('description')}",
                 ref=objective_id,
@@ -773,7 +794,9 @@ class MissionsService(SioService):
             return await self._render(await self._load(mission_id), include_comms=True)
 
         @app.post("/missions/{mission_id}/comms", tags=["missions"])
-        async def add_comm(mission_id: str, request: CommRequest) -> dict[str, Any]:
+        async def add_comm(
+            mission_id: str, request: CommRequest, http_request: Request
+        ) -> dict[str, Any]:
             """Append to the comms log. Append is the only verb it has.
 
             The table refuses UPDATE and DELETE at the database level. A comms entry is testimony — somebody said
@@ -786,7 +809,7 @@ class MissionsService(SioService):
             await self._load(mission_id)
             comm_id = await self._log_comm(
                 mission_id,
-                author=request.author or "unknown",
+                author=principal_of(http_request).subject,
                 kind=request.kind,
                 body=request.body,
                 ref=request.ref,

@@ -14,6 +14,7 @@ from __future__ import annotations
 import ast
 import inspect
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -313,23 +314,42 @@ def test_the_generator_is_a_script_in_the_repository() -> None:
 
 
 def test_the_typescript_client_does_not_use_eventsource() -> None:
-    """`EventSource` is wrong here twice over.
+    """The SDK and console must use the same bearer-compatible named-frame reader.
 
-    It cannot send an Authorization header — which is why the console authenticates its stream by cookie, and why
-    a client holding a bearer token cannot use it at all. And `onmessage` fires only for frames with NO `event:`
-    name, so a reader using it receives nothing from a server that names its frames.
+    The executable chunk/frame and token regressions live in ``web/tests/reliability.test.mjs``.
+    This guard verifies that neither production caller silently stops using that tested parser.
     """
-    source = (TS / "src" / "client.ts").read_text()
-    assert "new EventSource" not in source
-    # Both frame types handled, which is the actual requirement.
-    assert 'startsWith("event:")' in source
-    assert 'startsWith("data:")' in source
+    sdk = (TS / "src" / "client.ts").read_text()
+    browser = (ROOT / "web" / "src" / "lib" / "stream.ts").read_text()
+    parser = (TS / "src" / "sse.ts").read_text()
+    for caller in (sdk, browser):
+        assert "new EventSource" not in caller
+        assert re.search(r"\breadSse\(\s*response\.body\s*[,)]", caller), (
+            "the caller must pass response.body to the shared SSE parser; reader options are allowed"
+        )
+    assert 'from "./sse.ts"' in sdk
+    assert 'from "../../../sdk/ts/src/sse"' in browser
+    assert 'field === "event"' in parser, "named SSE events must retain their event kind"
+    assert 'field === "data"' in parser, "data fields must be accumulated until a frame boundary"
+    assert 'event = "message"' in parser, "unnamed SSE events must remain supported"
 
 
 def test_the_typescript_stream_keeps_the_trailing_partial_line() -> None:
-    """A chunk boundary lands mid-line often enough that not doing this produces parse failures that look random."""
-    source = (TS / "src" / "client.ts").read_text()
-    assert "lines.pop()" in source, "the reader drops or corrupts frames split across chunks"
+    """The shared parser removes only complete lines, retaining bytes split across reads.
+
+    The Node regression exercises actual split chunks, CRLF and multiline data. This structural guard
+    complements it without requiring Node or frontend dependencies in the Python unit-test ring.
+    """
+    parser = (TS / "src" / "sse.ts").read_text()
+    assert "decoder.decode(result.value, { stream: true })" in parser
+    assert 'buffer.indexOf("\\n")' in parser, (
+        "only a complete newline-delimited line may be consumed"
+    )
+    assert "buffer.slice(0, newline)" in parser
+    assert "buffer = buffer.slice(newline + 1)" in parser, (
+        "the unread suffix must survive the next chunk"
+    )
+    assert "data.join(" in parser, "multiline SSE data must be dispatched as one frame"
 
 
 def test_the_typescript_quickstart_is_esm() -> None:

@@ -19,6 +19,7 @@ Three attacks, because the tenant reaches a query by three different paths:
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 import httpx
@@ -30,6 +31,85 @@ from sio_core.authz import EmbeddedPolicyEngine
 
 TENANT_A = "acme"
 TENANT_B = "globex"
+PRIVATE_MARKER = "ACME_ONLY_EVIDENCE_6f40a2"
+VIDEO_A = "vid_" + "a" * 32
+ANALYSIS_A = "ana_" + "a" * 32
+
+
+class DirectWorkbench:
+    """Real route handlers with tenant-keyed documents; no database/network dependency.
+
+    Each direct surface has an Acme-only sentinel, so returning an empty/error body cannot be
+    mistaken for positive coverage: the paired owner requests must retrieve that sentinel.
+    """
+
+    def __init__(self):
+        base = {
+            "revision": 1,
+            "created_at": "2026-09-11T10:00:00Z",
+            "updated_at": "2026-09-11T10:00:00Z",
+        }
+        self.records = {
+            (TENANT_A, "site", "site_acme_1"): {
+                **base,
+                "record_id": "site_acme_1",
+                "site_id": "site_acme_1",
+                "name": PRIVATE_MARKER,
+                "zones": [],
+                "cameras": [],
+            },
+            (TENANT_A, "video", VIDEO_A): {
+                **base,
+                "record_id": VIDEO_A,
+                "video_id": VIDEO_A,
+                "title": PRIVATE_MARKER,
+                "analysis_id": ANALYSIS_A,
+                "status": "completed",
+                "zones": [],
+                "rules": [],
+            },
+            (TENANT_A, "analysis", ANALYSIS_A): {
+                **base,
+                "record_id": ANALYSIS_A,
+                "analysis_id": ANALYSIS_A,
+                "video_id": VIDEO_A,
+                "status": "completed",
+                "model": {"mode": "motion", "name": PRIVATE_MARKER},
+                "events": [],
+                "detections": [],
+            },
+            (TENANT_A, "case", "case_acme_1"): {
+                **base,
+                "record_id": "case_acme_1",
+                "case_id": "case_acme_1",
+                "title": PRIVATE_MARKER,
+                "status": "open",
+                "verdict": "unreviewed",
+                "mission_ids": [],
+                "evidence_zone_ids": [],
+                "evidence": {"source": "recorded_file", "event": {"title": PRIVATE_MARKER}},
+                "notes": [],
+                "timeline": [],
+            },
+            (TENANT_A, "saved_search", "search_acme_1"): {
+                **base,
+                "record_id": "search_acme_1",
+                "name": PRIVATE_MARKER,
+                "owner": "user@acme",
+                "shared": False,
+                "query": {"q": PRIVATE_MARKER},
+            },
+        }
+
+    async def get(self, tenant, kind, record_id):
+        return deepcopy(self.records.get((tenant, kind, record_id)))
+
+    async def list(self, tenant, kind, limit=500):
+        return [
+            deepcopy(value)
+            for (owner, record_kind, _), value in self.records.items()
+            if owner == tenant and record_kind == kind
+        ][:limit]
 
 
 class StubDownstream(httpx.AsyncBaseTransport):
@@ -68,6 +148,7 @@ def api(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SIO_PG_CONNECT_TIMEOUT_S", "2")
 
     service = ApiService()
+    service.workbench = DirectWorkbench()
     return service.app, stub
 
 
@@ -106,6 +187,13 @@ def concrete(path: str) -> str:
         .replace("{zone_id}", "acme_zone")
         .replace("{run_id}", "run_acme_1")
         .replace("{session_id}", "ses_acme_1")
+        .replace("{source_id}", "src_acme_1")
+        .replace("{mission_id}", "mis_acme_1")
+        .replace("{case_id}", "case_acme_1")
+        .replace("{site_id}", "site_acme_1")
+        .replace("{video_id}", VIDEO_A)
+        .replace("{analysis_id}", ANALYSIS_A)
+        .replace("{frame_index}", "0")
         .replace("{target}", "occupancy")
         .replace("{path:path}", "acme/frame.jpg")
     )
@@ -116,8 +204,9 @@ def test_no_route_serves_a_request_carrying_another_tenants_id(api) -> None:
     """Tenant B asks for tenant A's resource by id, on every route that takes one.
 
     The check is not "did it 404" — a 404 would be fine, and so would a 403. The check is that nothing
-    returns tenant A's DATA. Since the stub downstream always answers 200, any 200 on a path naming another
-    tenant's resource means the API forwarded it without a tenant check, which is the leak.
+    returns tenant A's DATA. Successful forwarded routes must report the token tenant; direct
+    handlers must never return the foreign document sentinel. Paired owner requests below prove
+    the direct records exist and are accessible to the right tenant.
     """
     app, _ = api
     parameterised = [
@@ -129,7 +218,28 @@ def test_no_route_serves_a_request_carrying_another_tenants_id(api) -> None:
 
     headers = {"Authorization": f"Bearer {token_for(TENANT_B)}"}
     leaked: list[str] = []
-    served_ok = 0
+
+    # Only closures that actually call _forward are exercised by StubDownstream. Direct
+    # Workbench handlers have a separate positive/negative fixture test below. Counting them
+    # against a HTTP-stub success threshold turns every legitimate 404 into a false regression.
+    def handlers(routes):
+        for route in routes:
+            yield route
+            # FastAPI's current included routers remain nested until dispatch/OpenAPI expansion.
+            included = getattr(route, "original_router", None)
+            if included is not None:
+                yield from handlers(included.routes)
+
+    forwarding = {
+        (method, route.path)
+        for route in handlers(app.routes)
+        if "_forward"
+        in getattr(getattr(getattr(route, "endpoint", None), "__code__", None), "co_freevars", ())
+        for method in getattr(route, "methods", ())
+    }
+    forwarded_parameterised = set(parameterised) & forwarding
+    assert forwarded_parameterised, "no forwarding routes found; the classifier is wrong"
+    forwarded_ok = 0
     # `raise_server_exceptions=False` so a route whose datastore is unreachable becomes a 500 rather than
     # propagating out of the client and failing the test. A 500 is definitionally not a data leak, and this
     # test is a leak test — but without this it could only run where a database happens to be running, which
@@ -142,8 +252,11 @@ def test_no_route_serves_a_request_carrying_another_tenants_id(api) -> None:
             # A 200 is only acceptable if the downstream would have filtered by tenant itself — which is
             # true for the forwarding routes, since the downstream service scopes every query. The tenant
             # header is what proves the request was scoped to B and not to A.
+            assert PRIVATE_MARKER not in response.text, (
+                f"{method} {path} leaked another tenant document"
+            )
             if response.status_code == 200:
-                served_ok += 1
+                forwarded_ok += (method, path) in forwarded_parameterised
                 served = response.headers.get("x-sio-tenant")
                 if served != TENANT_B:
                     leaked.append(f"{method} {path} served as tenant {served!r}")
@@ -151,10 +264,59 @@ def test_no_route_serves_a_request_carrying_another_tenants_id(api) -> None:
     # A leak test that tolerates errors can pass by having every route fail, which would be the most
     # comfortable possible false negative: green, and proving nothing. This asserts the run actually got
     # answers out of a decent share of the routes it attacked.
-    assert served_ok >= len(parameterised) // 2, (
-        f"only {served_ok} of {len(parameterised)} routes returned 200, so this run barely tested anything. "
-        f"A leak test that passes because everything errored is worse than no leak test."
+    assert forwarded_ok >= len(forwarded_parameterised) // 2, (
+        f"only {forwarded_ok} of {len(forwarded_parameterised)} forwarding routes returned 200. "
+        "The downstream stub must exercise successful forwarding; direct workbench routes are "
+        "covered by paired owner/foreign-tenant document tests."
     )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/sites/site_acme_1",
+        "/api/cases/case_acme_1",
+        "/api/cases/case_acme_1/export",
+        "/api/review/videos/" + VIDEO_A,
+        "/api/review/videos/" + VIDEO_A + "/analysis?analysis_id=" + ANALYSIS_A,
+    ],
+)
+def test_direct_document_routes_serve_owner_and_refuse_foreign_ids(api, path):
+    """Positive control plus cross-tenant negative check over the actual new handlers."""
+    app, _ = api
+    with TestClient(app, raise_server_exceptions=False) as client:
+        own = client.get(path, headers={"Authorization": f"Bearer {token_for(TENANT_A)}"})
+        assert own.status_code == 200, own.text
+        assert PRIVATE_MARKER in own.text
+        foreign = client.get(path, headers={"Authorization": f"Bearer {token_for(TENANT_B)}"})
+        assert foreign.status_code == 404, foreign.text
+        assert PRIVATE_MARKER not in foreign.text
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/sites",
+        "/api/cases",
+        "/api/review/videos",
+        "/api/review/saved-searches",
+        "/api/review/search?kind=case",
+    ],
+)
+def test_direct_lists_and_search_ignore_forged_tenant_query_and_headers(api, path):
+    app, _ = api
+    with TestClient(app, raise_server_exceptions=False) as client:
+        own = client.get(path, headers={"Authorization": f"Bearer {token_for(TENANT_A)}"})
+        assert own.status_code == 200, own.text
+        assert PRIVATE_MARKER in own.text
+        separator = "&" if "?" in path else "?"
+        foreign = client.get(
+            path + separator + "tenant_id=" + TENANT_A,
+            headers={"Authorization": f"Bearer {token_for(TENANT_B)}", "X-Tenant-Id": TENANT_A},
+        )
+        assert foreign.status_code == 200, foreign.text
+        assert PRIVATE_MARKER not in foreign.text
+        assert foreign.headers["x-sio-tenant"] == TENANT_B
 
 
 def test_every_route_reports_the_tenant_it_served(api) -> None:

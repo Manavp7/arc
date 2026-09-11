@@ -15,9 +15,9 @@ import pytest
 
 REAL_BACKENDS = {
     "SIO_BUS_BACKEND": "redis",
-    "SIO_GRAPH_BACKEND": "neo4j",
+    "SIO_GRAPH_BACKEND": "postgres",
     "SIO_VECTOR_BACKEND": "pgvector",
-    "SIO_BLOB_BACKEND": "minio",
+    "SIO_BLOB_BACKEND": "file",
 }
 
 
@@ -27,7 +27,11 @@ def _use_real_backends() -> Iterator[None]:
     from sio_core.config import reset_settings
 
     previous = {key: os.environ.get(key) for key in REAL_BACKENDS}
-    os.environ.update(REAL_BACKENDS)
+    if os.environ.get("SIO_TEST_INFRA") != "1":
+        yield
+        return
+    for key, value in REAL_BACKENDS.items():
+        os.environ.setdefault(key, value)
     reset_settings()
     yield
     for key, value in previous.items():

@@ -337,7 +337,7 @@ class Subscription:
         from .app import get_hub
 
         hub = get_hub()
-        with hub.subscribe(topics=["events"]) as subscriber:
+        with hub.subscribe(topics=["events"], tenant_id=current_tenant()) as subscriber:
             while True:
                 message = await subscriber.queue.get()
                 if message.kind != "Event":
@@ -351,7 +351,7 @@ class Subscription:
         from .app import get_hub
 
         hub = get_hub()
-        with hub.subscribe(topics=["entities"]) as subscriber:
+        with hub.subscribe(topics=["entities"], tenant_id=current_tenant()) as subscriber:
             while True:
                 message = await subscriber.queue.get()
                 if message.kind != "Entity":

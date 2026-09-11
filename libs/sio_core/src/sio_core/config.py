@@ -95,28 +95,16 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _apply_profile(self) -> Settings:
-        """Let `SIO_PROFILE=gpu` set every seam at once — except the ones changed from their default.
+        """Apply profile values only to fields the operator did not explicitly supply.
 
-        The rule is **"still at its default"**, not `model_fields_set`, and finding out why cost a debugging
-        session worth recording: this repository ships a `.env` that explicitly lists EVERY field with its
-        default value, as documentation. So `model_fields_set` contains all 130 of them on every run, and a
-        profile gated on "was this field supplied?" could never apply anything at all. Pydantic was reporting
-        the truth; the truth just was not the question I meant to ask.
-
-        Comparing against the declared default asks the question I actually meant: has somebody *changed* this?
-        An operator who edits `SIO_LLM_PROVIDER=scripted` differs from the default and wins — which matters
-        because `SIO_PROFILE=gpu SIO_LLM_PROVIDER=scripted` is precisely how you test GPU wiring on a laptop
-        with no GPU.
-
-        The honest limitation: setting a seam explicitly TO its default value is indistinguishable from leaving
-        it alone, so the profile overrides it. That is the harmless direction, and distinguishing them would
-        need provenance tracking that pydantic-settings does not offer.
+        Explicit arguments and environment values always win, including when equal to a code
+        default. Remove individual selector lines from .env to inherit them from the profile.
         """
         if self.profile != "gpu":
             return self
         for field, value in GPU_PROFILE.items():
             declared = type(self).model_fields.get(field)
-            if declared is not None and getattr(self, field) == declared.default:
+            if declared is not None and field not in self.model_fields_set:
                 object.__setattr__(self, field, value)
         return self
 
@@ -150,17 +138,19 @@ class Settings(BaseSettings):
 
     # --- adapter selection (the swappable seams) ----------------------------
     bus_backend: BusBackend = "redis"
-    graph_backend: GraphBackend = "neo4j"
+    graph_backend: GraphBackend = "postgres"
     vector_backend: VectorBackend = "pgvector"
-    blob_backend: BlobBackend = "minio"
+    blob_backend: BlobBackend = "file"
     detector: DetectorKind = "auto"
     tracker: TrackerKind = "bytetrack"
-    embedder: EmbedderKind = "clip"
+    embedder: EmbedderKind = "hash"
     forecaster: ForecasterKind = "statsforecast"
-    llm_provider: LlmProvider = "ollama"
+    llm_provider: LlmProvider = "scripted"
     auth_mode: AuthMode = "dev"
     policy_engine: PolicyEngineKind = "embedded"
-    workflow_runner: WorkflowRunnerKind = "temporal"
+    workflow_runner: WorkflowRunnerKind = "inline"
+    workflow_service_token: str = ""
+    """Tenant-bound API bearer for background reports in Keycloak mode; never sent to the UI."""
     cep_runtime: CepRuntime = "native"
 
     # --- postgres -----------------------------------------------------------
@@ -202,6 +192,7 @@ class Settings(BaseSettings):
     minio_secure: bool = False
 
     # --- service ports ------------------------------------------------------
+    allinone_port: int = 8120
     api_port: int = 8000
     ingest_port: int = 8101
     perception_port: int = 8102
@@ -429,7 +420,7 @@ class Settings(BaseSettings):
     jwt_ttl_s: int = 86_400
     keycloak_url: str = "http://127.0.0.1:8080"
     keycloak_realm: str = "sio"
-    keycloak_client_id: str = "sio-api"
+    keycloak_client_id: str = "sio-console"
     opa_url: str = "http://127.0.0.1:8181"
     openfga_url: str = "http://127.0.0.1:8080"
     openfga_store_id: str = ""

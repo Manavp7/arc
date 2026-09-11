@@ -1,146 +1,240 @@
-/**
- * The console's session: one token, used by both transports.
- *
- * Phase 5 made a principal mandatory on every endpoint, which broke the console completely — every fetch
- * 401'd and the live map went blank. Two problems had to be solved, and only one of them is obvious.
- *
- * **`fetch` is easy**: attach an `Authorization` header.
- *
- * **`EventSource` cannot send headers.** The API is specified by browsers with no way to set them, so the
- * SSE feed the entire live map depends on cannot carry a bearer token. The options are a token in the query
- * string, a cookie, or abandoning `EventSource` for a `fetch`-based stream reader.
- *
- * A **cookie** is the choice here, and the query string is rejected for a specific reason rather than on
- * principle: URLs end up in access logs, in `Referer` headers and in browser history, so a token in a query
- * string is a credential written to three places nobody is auditing. The cookie is `SameSite=Strict` and
- * scoped to the app's own origin, and the middleware verifies it exactly as it verifies a header — same
- * signature check, same expiry, same algorithm assertion.
- *
- * **The dev issuer is the only source of tokens here.** In a Keycloak deployment the console redirects to
- * the identity provider and this module is replaced by an OIDC client; the shape of what it exposes —
- * `headers()`, `ensure()` — is what the rest of the app depends on, so that swap does not reach into the
- * panels.
- */
+/** Browser credentials stay in this tab and travel only in Authorization headers. */
+import { useSyncExternalStore } from "react";
 
-const TOKEN_KEY = "sio.token";
-const COOKIE_NAME = "sio_token";
+const STORAGE_KEY = "sio.session.v2";
+const TRANSACTION_KEY = "sio.oidc.transaction";
+const RENEW_MARGIN_S = 60;
 
-/** Renew this long before expiry, so a request never starts with a token that dies mid-flight. */
-const RENEW_MARGIN_S = 120;
-
+export interface AuthConfig {
+  mode: "dev" | "keycloak";
+  required: boolean;
+  oidc: null | {
+    issuer: string;
+    client_id: string;
+    authorization_endpoint: string;
+    token_endpoint: string;
+    logout_endpoint?: string | null;
+  };
+}
 export interface Session {
   token: string;
   subject: string;
   tenant: string;
   roles: string[];
+  clearance: number;
   expiresAt: number;
+  mode: "dev" | "keycloak";
+}
+interface StoredSession { token: string; refreshToken?: string; idToken?: string; mode: Session["mode"] }
+interface TokenResponse { access_token: string; refresh_token?: string; id_token?: string }
+interface Transaction { state: string; verifier: string; redirectUri: string; createdAt: number; issuer: string }
+
+export class SignInRequired extends Error {
+  constructor(message = "Your session has ended. Sign in to continue.") { super(message); this.name = "SignInRequired"; }
 }
 
 let current: Session | null = null;
+let credentials: StoredSession | null = null;
+let config: AuthConfig | null = null;
+let configRequest: Promise<AuthConfig> | null = null;
 let inflight: Promise<Session> | null = null;
+let initialization: Promise<void> | null = null;
+let generation = 0;
+const listeners = new Set<() => void>();
+const notify = () => listeners.forEach((listener) => listener());
+/** Observe committed identity changes (sign-in, renewal and sign-out). */
+export const subscribeSession = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
 
-function decodeExpiry(token: string): number {
+export function useSession(): Session | null { return useSyncExternalStore(subscribeSession, peek, () => null); }
+export function peek(): Session | null { return current; }
+
+export function claimsOf(token: string): Record<string, unknown> {
   try {
-    const body = token.split(".")[1];
-    if (!body) return 0;
-    const json = JSON.parse(atob(body.replace(/-/g, "+").replace(/_/g, "/")));
-    return typeof json.exp === "number" ? json.exp : 0;
-  } catch {
-    return 0;
+    const segment = (token.split(".")[1] ?? "").replace(/-/g, "+").replace(/_/g, "/");
+    const bytes = Uint8Array.from(atob(segment.padEnd(Math.ceil(segment.length / 4) * 4, "=")), (c) => c.charCodeAt(0));
+    return JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
+  } catch { return {}; }
+}
+function describe(stored: StoredSession): Session {
+  const claims = claimsOf(stored.token);
+  const realm = claims.realm_access as { roles?: unknown } | undefined;
+  const flat = Array.isArray(claims.roles) ? claims.roles.map(String) : typeof claims.roles === "string" ? claims.roles.split(",") : [];
+  const roles = [...new Set([...flat, ...(Array.isArray(realm?.roles) ? realm.roles.map(String) : [])].map((role) => role.trim().toLowerCase()))];
+  return { token: stored.token, subject: String(claims.preferred_username ?? claims.sub ?? "unknown"),
+    tenant: String(claims.tenant ?? claims.tenant_id ?? ""), roles,
+    clearance: Number(claims.clearance ?? 0), expiresAt: Number(claims.exp ?? 0), mode: stored.mode };
+}
+function persist(stored: StoredSession): Session {
+  const next = describe(stored);
+  if (!next.expiresAt || next.expiresAt <= Date.now() / 1000) throw new SignInRequired("The identity provider returned an expired or invalid access token.");
+  credentials = stored;
+  current = next;
+  window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+  notify();
+  return next;
+}
+export async function getConfig(): Promise<AuthConfig> {
+  if (config) return config;
+  if (configRequest) return configRequest;
+  configRequest = (async () => {
+    const response = await fetch("/auth/config");
+    if (!response.ok) throw new Error(`Sign-in service unavailable (HTTP ${response.status}). Retrying…`);
+    const result = await response.json() as AuthConfig;
+    if (!["dev", "keycloak"].includes(result.mode)) throw new Error("The API returned an unsupported authentication mode.");
+    config = result;
+    return result;
+  })().finally(() => { configRequest = null; });
+  return configRequest;
+}
+async function tokenRequest(endpoint: string, params: URLSearchParams): Promise<TokenResponse> {
+  const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: params });
+  if (!response.ok) {
+    if (response.status === 400 || response.status === 401) throw new SignInRequired();
+    throw new Error(`Identity provider unavailable (HTTP ${response.status}).`);
   }
+  return await response.json() as TokenResponse;
+}
+function base64url(bytes: Uint8Array): string { return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
+
+export async function signIn(profile = "operator"): Promise<void> {
+  const auth = await getConfig();
+  if (auth.mode === "dev") {
+    const allowed = ["viewer", "operator", "commander", "integrator", "ml_engineer", "admin"];
+    if (!allowed.includes(profile)) throw new Error("Unknown development role.");
+    const expected = generation;
+    const params = new URLSearchParams({ subject: "console", roles: profile, clearance: profile === "admin" ? "3" : profile === "commander" ? "2" : "1" });
+    const response = await fetch(`/auth/dev/token?${params}`, { method: "POST" });
+    if (!response.ok) throw new Error(`Could not sign in (HTTP ${response.status}).`);
+    const body = await response.json() as TokenResponse;
+    if (expected !== generation) return;
+    persist({ token: body.access_token, mode: "dev" });
+    return;
+  }
+  if (!auth.oidc) throw new Error("The API has no identity-provider configuration.");
+  const state = base64url(crypto.getRandomValues(new Uint8Array(32)));
+  const verifier = base64url(crypto.getRandomValues(new Uint8Array(48)));
+  const challenge = base64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
+  const redirectUri = `${window.location.origin}${window.location.pathname}`;
+  window.sessionStorage.setItem(TRANSACTION_KEY, JSON.stringify({ state, verifier, redirectUri, createdAt: Date.now(), issuer: auth.oidc.issuer } satisfies Transaction));
+  const target = new URL(auth.oidc.authorization_endpoint);
+  target.search = new URLSearchParams({ client_id: auth.oidc.client_id, response_type: "code", scope: "openid profile", redirect_uri: redirectUri, state, code_challenge: challenge, code_challenge_method: "S256" }).toString();
+  window.location.assign(target.toString());
 }
 
-function setCookie(token: string, expiresAt: number): void {
-  // SameSite=Strict: this cookie is only ever sent by the console to its own origin, so there is no
-  // cross-site request it should accompany. Not `Secure`, because the dev console runs on plain http —
-  // a production deployment terminates TLS and should add it.
-  const maxAge = Math.max(60, expiresAt - Math.floor(Date.now() / 1000));
-  document.cookie = `${COOKIE_NAME}=${token}; Path=/; Max-Age=${maxAge}; SameSite=Strict`;
+async function initializeOnce(): Promise<void> {
+  // Remove credentials left by the old browser client. The new reader needs no JS-written cookie.
+  window.localStorage.removeItem("sio.token");
+  document.cookie = "sio_token=; Path=/; Max-Age=0; SameSite=Strict";
+  const auth = await getConfig();
+  const url = new URL(window.location.href);
+  const rawTransaction = window.sessionStorage.getItem(TRANSACTION_KEY);
+  if (url.searchParams.has("code") || url.searchParams.has("error")) {
+    const state = url.searchParams.get("state");
+    const code = url.searchParams.get("code");
+    const callbackError = url.searchParams.get("error");
+    const transaction = rawTransaction ? JSON.parse(rawTransaction) as Transaction : null;
+    window.sessionStorage.removeItem(TRANSACTION_KEY);
+    for (const key of ["code", "state", "session_state", "iss", "error", "error_description"]) url.searchParams.delete(key);
+    window.history.replaceState({}, "", url.toString());
+    if (!transaction || transaction.state !== state || Date.now() - transaction.createdAt > 600_000 || transaction.issuer !== auth.oidc?.issuer) {
+      throw new SignInRequired("The sign-in response could not be verified. Start sign-in again.");
+    }
+    if (callbackError || !code || !auth.oidc) throw new SignInRequired("Sign-in was cancelled or declined.");
+    const expected = generation;
+    const body = await tokenRequest(auth.oidc.token_endpoint, new URLSearchParams({ grant_type: "authorization_code", client_id: auth.oidc.client_id, code, code_verifier: transaction.verifier, redirect_uri: transaction.redirectUri }));
+    if (expected === generation) persist({ token: body.access_token, refreshToken: body.refresh_token, idToken: body.id_token, mode: "keycloak" });
+    return;
+  }
+  const raw = window.sessionStorage.getItem(STORAGE_KEY);
+  if (!raw) return;
+  try {
+    const stored = JSON.parse(raw) as StoredSession;
+    if (stored.mode !== auth.mode) { clear(); return; }
+    credentials = stored;
+    current = describe(stored);
+    await ensure();
+    notify();
+  } catch (error) { clear(); if (!(error instanceof SignInRequired)) throw error; }
+}
+export async function initialize(): Promise<void> {
+  if (!initialization) initialization = initializeOnce().finally(() => { initialization = null; });
+  return initialization;
 }
 
-/**
- * Obtain a session, reusing a valid one.
- *
- * Concurrent callers share one request. Without that, the console's first render fires five parallel loads
- * and mints five tokens — harmless but wasteful, and it makes the audit trail read as five sign-ins.
- */
-export async function ensure(): Promise<Session> {
-  const now = Math.floor(Date.now() / 1000);
-  if (current && current.expiresAt - RENEW_MARGIN_S > now) return current;
+/** Reuse a session or renew it. Signing in is always an explicit operator action. */
+export async function ensure(forceRefresh = false): Promise<Session> {
+  if (current && !forceRefresh && current.expiresAt > Date.now() / 1000 + RENEW_MARGIN_S) return current;
   if (inflight) return inflight;
-
+  if (!credentials || !current) throw new SignInRequired("Sign in to open the console.");
+  const expected = generation;
+  const existing = credentials;
+  const identity = current;
   inflight = (async () => {
-    const stored = window.localStorage.getItem(TOKEN_KEY);
-    if (stored) {
-      const expiresAt = decodeExpiry(stored);
-      if (expiresAt - RENEW_MARGIN_S > now) {
-        const session = describe(stored, expiresAt);
-        current = session;
-        setCookie(stored, expiresAt);
-        return session;
-      }
+    const auth = await getConfig();
+    let next: StoredSession;
+    if (existing.mode === "dev") {
+      const params = new URLSearchParams({ subject: identity.subject, roles: identity.roles.join(","), clearance: String(identity.clearance) });
+      const response = await fetch(`/auth/dev/token?${params}`, { method: "POST" });
+      if (!response.ok) { if (response.status === 401 || response.status === 403) throw new SignInRequired(); throw new Error(`Session renewal failed (HTTP ${response.status}).`); }
+      const body = await response.json() as TokenResponse;
+      next = { token: body.access_token, mode: "dev" };
+    } else {
+      if (!auth.oidc || !existing.refreshToken) throw new SignInRequired();
+      const body = await tokenRequest(auth.oidc.token_endpoint, new URLSearchParams({ grant_type: "refresh_token", client_id: auth.oidc.client_id, refresh_token: existing.refreshToken }));
+      next = { token: body.access_token, refreshToken: body.refresh_token ?? existing.refreshToken, idToken: body.id_token ?? existing.idToken, mode: "keycloak" };
     }
-
-    // The dev issuer. A Keycloak deployment replaces this module with an OIDC client.
-    const response = await fetch(
-      "/auth/dev/token?subject=console&roles=operator,commander&clearance=2",
-      { method: "POST" },
-    );
-    if (!response.ok) {
-      throw new Error(
-        `could not obtain a token (HTTP ${response.status}). ` +
-          "Is the API running, and is SIO_AUTH_MODE=dev?",
-      );
-    }
-    const body = (await response.json()) as { access_token: string };
-    const expiresAt = decodeExpiry(body.access_token);
-    window.localStorage.setItem(TOKEN_KEY, body.access_token);
-    setCookie(body.access_token, expiresAt);
-    const session = describe(body.access_token, expiresAt);
-    current = session;
-    return session;
-  })().finally(() => {
-    inflight = null;
-  });
-
+    if (expected !== generation) throw new SignInRequired();
+    return persist(next);
+  })().catch((error: unknown) => {
+    if (expected === generation && (error instanceof SignInRequired || (current?.expiresAt ?? 0) <= Date.now() / 1000)) clear();
+    throw error;
+  }).finally(() => { if (expected === generation) inflight = null; });
   return inflight;
 }
-
-function describe(token: string, expiresAt: number): Session {
-  try {
-    const body = token.split(".")[1] ?? "";
-    const claims = JSON.parse(atob(body.replace(/-/g, "+").replace(/_/g, "/")));
-    return {
-      token,
-      subject: String(claims.sub ?? "unknown"),
-      tenant: String(claims.tenant ?? ""),
-      roles: Array.isArray(claims.roles) ? claims.roles.map(String) : [],
-      expiresAt,
-    };
-  } catch {
-    return { token, subject: "unknown", tenant: "", roles: [], expiresAt };
-  }
-}
-
-/** Authorization header for `fetch`. Empty when there is no session yet. */
-export function headers(): Record<string, string> {
-  return current ? { Authorization: `Bearer ${current.token}` } : {};
-}
-
-/** The current session without minting one, for UI that wants to show who it is acting as. */
-export function peek(): Session | null {
-  return current;
-}
-
-/**
- * Forget the session.
- *
- * Clears both stores, because clearing one and not the other leaves a cookie that authenticates SSE while
- * `fetch` behaves as though signed out — a split state that presents as "the map updates but nothing else
- * works", which is a genuinely confusing bug to be handed.
- */
+export function headers(): Record<string, string> { return current ? { Authorization: `Bearer ${current.token}` } : {}; }
 export function clear(): void {
+  generation += 1;
   current = null;
-  window.localStorage.removeItem(TOKEN_KEY);
-  document.cookie = `${COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Strict`;
+  credentials = null;
+  inflight = null;
+  window.sessionStorage.removeItem(STORAGE_KEY);
+  window.sessionStorage.removeItem(TRANSACTION_KEY);
+  window.localStorage.removeItem("sio.token");
+  document.cookie = "sio_token=; Path=/; Max-Age=0; SameSite=Strict";
+  notify();
+}
+export async function signOut(): Promise<void> {
+  const idToken = credentials?.idToken;
+  const mode = current?.mode;
+  clear();
+  if (mode !== "keycloak" || !config?.oidc?.logout_endpoint) return;
+  const target = new URL(config.oidc.logout_endpoint);
+  target.searchParams.set("client_id", config.oidc.client_id);
+  target.searchParams.set("post_logout_redirect_uri", `${window.location.origin}${window.location.pathname}`);
+  if (idToken) target.searchParams.set("id_token_hint", idToken);
+  window.location.assign(target.toString());
+}
+
+/** Presentation hints only. Server policy also checks tenant, zone, clearance and current policy. */
+export function can(action: string): boolean {
+  if (!current || current.expiresAt <= Date.now() / 1000) return false;
+  if (current.roles.includes("admin")) return true;
+  if (action === "notifications.write") return true;
+  const rules: Record<string, string[]> = {
+    "storage.read": ["integrator"], "storage.write": [],
+    "review.write": ["operator", "commander", "integrator", "ml_engineer"],
+    "case.write": ["operator", "commander"], "site.write": ["integrator"],
+    "alerts.write": ["operator", "commander"], "decision.approve": ["commander"], "decision.reject": ["operator", "commander"],
+    "decisions.write": ["operator", "commander", "service"], "workflow.execute": ["commander"], "workflow.write": ["commander", "service"],
+    "mission.read": ["viewer", "operator", "analyst", "commander"],
+    "mission.write": ["operator", "commander"], "mission.assign": ["commander"],
+    "integration.write": ["integrator"], "integration.read": ["integrator", "commander"],
+    "copilot.ask": ["operator", "commander", "ml_engineer", "integrator", "service"],
+    "timeline.write": ["operator", "commander", "ml_engineer", "integrator", "service"],
+    "forecasts.write": ["operator", "commander", "ml_engineer", "service"], "events.write": ["operator", "commander", "ml_engineer", "service"],
+    "simulation.write": ["viewer", "operator", "commander", "ml_engineer", "integrator", "service"], "model.write": ["ml_engineer"],
+  };
+  if (["decision.approve", "workflow.execute"].includes(action) && current.clearance < 2) return false;
+  const roles = rules[action];
+  return roles ? roles.some((role) => current!.roles.includes(role)) : action.endsWith(".read");
 }

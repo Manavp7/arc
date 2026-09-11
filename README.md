@@ -1,280 +1,101 @@
 # SIO — Spatial Intelligence OS
 
-An AI operating system for understanding, tracking, predicting and orchestrating the
-physical world. SIO ingests heterogeneous real-world signals (cameras, GPS, IoT, drones,
-satellite, public APIs), fuses them into a single live world model (a spatiotemporal
-knowledge graph), reasons over it (events, prediction, simulation, decisions, agents), and
-exposes it through a natural-language copilot, autonomous agents, durable workflows and a
-live digital twin.
+SIO is a site-operations prototype: ingest observations, maintain a live world model, detect incidents, investigate evidence, and coordinate an approved response. The bundled logistics yard uses simulated data.
 
-One reusable platform, not many vertical products. Smart city, ports, warehouses, disaster
-response, industrial safety — each is a *configuration* of the same substrate.
+The operator console groups work into **Monitor**, **Footage & cases**, **Investigate**, **Respond**, and **Administration**. An alert opens an incident workspace with its location, affected entities, recorded sequence, available camera evidence, response options, and missions in the same zone.
 
-> Full product definition: [`docs/PRD.md`](docs/PRD.md).
-> Architecture and the swappable-seam map: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+The [recorded review workflow](docs/REVIEW_WORKFLOW.md) connects batch MP4 upload, durable processing jobs, polygon entry/dwell rules, retained analysis, an operator inbox with shift handovers, and cases with bounded evidence packages. [Versioned rule presets](docs/RULE_PRESETS.md) apply across recordings through explicit zone mapping and a reviewed preview. Cases support [multiple immutable evidence sources](docs/CASE_ATTACHMENTS.md), and the [personal notification bell](docs/NOTIFICATIONS.md) tracks assignments, deadlines, analysis and exports in the app. An [evaluation lab](docs/EVALUATION_LAB.md) compares retained runs against frozen human labels and opens [human-observation cases](docs/CASE_ANNOTATIONS.md) from frozen annotations or evaluated misses. [Side-by-side footage review](docs/EVIDENCE_COMPARISON.md) preserves exact analyses and reviewer-declared alignment across attached recordings. Administration includes site planning, measured camera-readiness checks, storage inventory and protected cleanup. A host operator can create and verify a coordinated [database/media backup and isolated restore](docs/REVIEW_BACKUPS.md). [Video review limits](docs/VIDEO_REVIEW.md) describe motion versus ONNX analysis, private originals and interrupted-job recovery.
 
-**Status:** Phase 3 complete. Real ONNX detection feeds tracking and multi-sensor fusion; zone
-membership fires events through a declarative rule engine; forecasts carry intervals whose coverage has
-been measured against held-out history; and the console scrubs and replays the recorded past.
-See [Roadmap](#roadmap).
+[Analysis profiles](docs/ANALYSIS_PROFILES.md) select motion or a compatible locally configured ONNX detector, confidence threshold and 1/2 fps sampling; queued runs pin those settings and model hashes through retries. [Private bookmarks](docs/REVIEW_BOOKMARKS.md) retain personal notes against an exact analysis. [Footage navigation](docs/FOOTAGE_NAVIGATION.md) adds keyboard transport, speed controls, approximate protected-playback frame steps and saved sample thumbnails. Recordings remain limited to 180 seconds and 100 MiB. These controls neither install models nor establish live-camera accuracy.
 
----
+## Current scope
 
-## Quickstart
+[Recorded object and movement tools](docs/RECORDED_INSIGHTS.md) search local tracks by class, zone, confidence and clip time, open exact saved samples, and calculate finite directional crossings and sampled occupancy. Immutable movement snapshots preserve their configuration and model provenance and export to CSV.
 
-Primary supported platform is **macOS (Apple Silicon) via Homebrew, no Docker**.
-Linux (Ubuntu 24.04+) is additionally supported for CI and verification.
+The repository contains 20 Python services, shared schema/runtime/SDK libraries, a React console, a TypeScript SDK, infrastructure migrations, and regression/integration tests. It is an actively developed prototype, not a completed production deployment.
 
-```bash
-git clone https://github.com/Manavp7/arc.git sio && cd sio
+Implemented paths include Redis streaming, PostgreSQL/PostGIS/pgvector storage, tracking/fusion, rules and alerts, forecasting, decision approval, inline playbooks, mission control, historical replay, source configuration/testing, and operational status. Authentication supports explicit development sign-in and a browser OIDC authorization-code flow with PKCE.
 
-just setup      # brew/apt dependencies, uv sync, npm install, .env, db + graph + bucket init
-just doctor     # verify every dependency, port and datastore — read this if anything fails
-just services   # postgres, redis, neo4j, minio (+ temporal, grafana, ollama)
-just models     # ~45 MB of ONNX weights (detection, segmentation, ReID, CLIP), checksummed
-just dev        # all services + web, in an mprocs TUI
-just demo       # seeds the yard if needed, runs a scripted incident, narrates what to look at
+The following limits are deliberate and visible:
 
-open http://localhost:5173
+- The default yard is **simulated**. A connected real source is labelled separately.
+- The default copilot is a **scripted router**, and default hash embeddings do **not** provide semantic similarity. Configure and install real models explicitly.
+- Workflow actions default to **dry run**. No physical gate/drone command adapter is included. Turning dry run off does not create one.
+- Workflow execution is **inline**. Temporal is not implemented; selecting it fails configuration instead of silently using a different runner.
+- Kafka, Qdrant, DeepStream, TimesFM, and Cosmos adapters are stubs. The GPU profile is an extension map, not a working GPU deployment.
+- Domain services serve one deployment tenant and reject requests from other tenants. API streams, history, and media are tenant-scoped. A general shared multi-tenant production deployment requires further work.
+- Source configuration changes, including enable/disable, are persisted and require an ingestion restart. Connection tests read a sample without publishing it.
+- Real camera hardware, live identity-provider deployments, production load, and physical effects require deployment-specific validation.
+
+## Local setup
+
+Python 3.12–3.13, Node 22+, `uv`, and `just` are required. On macOS, bootstrap installs PostgreSQL 17 to match current Homebrew PostGIS/pgvector packages. Linux uses PostgreSQL 16 packages. No Docker is required.
+
+```sh
+just setup
+just dev-lite
 ```
 
-`just demo` prints a timestamped walkthrough naming which panel to open and when — see
-[docs/DEMO.md](docs/DEMO.md) for the five-minute script, including what to say if it is slow.
-Run it once before showing anyone: the first question to the copilot loads two gigabytes of model
-weights, so a cold answer takes ~17 s and a warm one ~7 s.
+Open [the console](http://localhost:5173). In development mode, choose a role and sign in explicitly. Operator can investigate and manage missions; commander can approve responses; integrator can configure sources; administrator is available for local development checks.
 
-```bash
-just demo-reset   # clear the working state (keeps all history) so the demo can be re-run
-just e2e          # the end-to-end rings against the running platform
+The default install uses **PostgreSQL + Redis**, the PostgreSQL graph adapter, filesystem blobs, inline workflows, scripted copilot, and hash embeddings. `dev-lite` runs all consumers in one process while retaining their service endpoints. It reduces process overhead; its memory use still depends on the enabled models and workload.
+
+```sh
+just doctor                 # dependency, schema, extension and port checks
+just services               # start default PostgreSQL + Redis dependencies
+just dev                    # full process profile using the same supervisor
+just dev-tui                # optional mprocs interface with the same service set
+just stop                   # stop the supervised application processes
 ```
 
-Low-RAM machine? `just dev-lite` runs every consumer in a single process.
-Cleaning up: `just stop` (processes) and `just clean` (all local state under `.sio/`).
+If another PostgreSQL version already occupies port 5432, configure `SIO_PG_PORT` and compatible database credentials. An installed extension package is insufficient when it targets a different server major version. Doctor reports this mismatch; do not repoint an existing database directory at a different PostgreSQL major version.
 
----
+`just setup-full` installs optional tools. Neo4j, MinIO, Ollama, and Grafana remain optional deployment choices. Preserve existing `.env` choices when changing profiles.
 
-## What you get
+## Real models and sources
 
-| Layer | Modules |
-|---|---|
-| **Analytics** | dwell/throughput/utilisation with their distribution *shape* named, an explainable risk index, H3 heatmaps aggregated server-side for privacy, Markdown reports, provisioned Grafana dashboards |
-| **What-if** | counterfactual projections seeded from the live world: gate closure, dock breakdown, fire spread with wind, flooding, drone battery, route severance |
-| **Copilot & agents** | natural-language interface over the world model, MCP server, autonomous agents with human-on-the-loop approval |
-| **Reasoning & action** | event/CEP engine + anomaly detection, forecasting, what-if simulation, OR-Tools decisions, durable Temporal playbooks, alert intelligence |
-| **World model** | entity/relationship graph (bitemporal), append-only timeline, embeddings + semantic search |
-| **Perception & fusion** | ONNX YOLO26 detection/segmentation, ReID, OCR, ByteTrack tracking, EKF multi-sensor fusion, PostGIS/H3 spatial engine |
-| **Data platform** | pluggable connectors, Redis Streams bus, Postgres/PostGIS/pgvector, MinIO object store |
-| **Governance** | JWT authn (dev issuer or Keycloak), RBAC+ABAC with generated Rego, PII redaction on by default, append-only audit, enforced multi-tenancy, explanations on every answer |
+```sh
+just models                 # download the ONNX model assets (~186 MB)
+just models --llm           # additionally pull the configured local LLM; needs running Ollama
+```
 
-Everything is explainable by default: copilot answers, events, alerts and decisions all
-carry an evidence chain (sources, confidence, timeline, related entities, alternatives).
+Select the desired adapters explicitly, for example `SIO_LLM_PROVIDER=ollama` and `SIO_EMBEDDER=clip`, and restart the affected services. Missing dependencies or unavailable models must be resolved before trusting their output.
 
----
+In **Administration → Sources**, configure a camera or sensor, save it, test its connection, inspect a safe sample, and restart ingestion to apply changes. Camera credentials stay in the server-side source configuration with restrictive file permissions; listings mask secrets. Real camera buffers are private until perception finishes processing/redaction and publishes a ready-frame reference.
 
-## Design rules
+See [connector options](docs/CONNECTORS.md), [model details](docs/MODELS.md), and [operations and authentication](docs/OPERATIONS.md).
 
-1. **Platform over product.** Every feature is a reusable primitive.
-2. **Explainable by default.** No black-box decisions.
-3. **Real-time first.** A streaming nervous system, not batch jobs.
-4. **Swappable seams.** Every external engine sits behind a port with at least two
-   adapters, so the CPU-first local stack becomes a GPU/production stack by changing
-   environment variables — never code. See [`docs/GPU_SWAP.md`](docs/GPU_SWAP.md).
-5. **Governance as runtime.** Privacy, RBAC/ABAC, audit and lineage are enforced in the
-   pipeline, not documented in a wiki.
-6. **Infra-free unit tests.** `just check` runs on a laptop with nothing installed but
-   Python and Node.
+## Verification
 
-### CPU-first, and genuinely fast
+```sh
+just check                  # lint, formatting, core types, unit tests, web build, schemas
+npm test --prefix web       # SDK transport, state/replay and authentication regressions
+just test-infra             # requires configured live datastores
+```
 
-The entire perception stack is **ONNX Runtime only — no PyTorch, no PaddlePaddle, no
-TensorFlow**. YOLO26-nano runs detection in ~25 ms/frame on a laptop CPU, and the whole
-model set (detection + segmentation + ReID + CLIP) is about 45 MB. The GPU swap is an
-execution-provider string, not a dependency matrix.
+The connected acceptance scenario uses real service handlers, rules, PostgreSQL persistence, authentication, approval, and historical replay in a rollback-only database transaction:
 
----
+```sh
+SIO_TEST_INFRA=1 uv run --no-sync pytest tests/integration/test_operator_acceptance.py
+```
+
+Its sensor input is authored test data; it does not verify a physical camera, gate, drone, or a live LLM. Other model evaluations include synthetic fixtures and scripted answers. Test definitions and passing builds are not production accuracy measurements.
+
+`just check` requires installed frontend dependencies. Services beyond the shared core are covered by runtime tests; the current mypy gate checks the core/schema libraries.
+
+See the [local verification record](docs/VERIFICATION.md) for executed checks, browser observations and remaining limits.
 
 ## Repository map
 
-```
-libs/sio_schemas   versioned data contracts (observation → detection → track → entity → …)
-libs/sio_core      ports & adapters, service runtime, telemetry, explanations
-libs/sio_sdk       Python SDK
-services/*         one uv project per service, each a bus consumer/producer with /health
-web/               React + Vite + MapLibre + deck.gl live map, timeline, copilot, alerts
-infra/             Postgres SQL, Neo4j constraints, Grafana dashboards, rules, policies, site
-scripts/           bootstrap, doctor, service control, seeding, model fetch, demo
-tests/             unit (no infra) · integration (live infra) · e2e (scenarios) · eval
-docs/              PRD, architecture, deployment, governance, GPU swap, models, demo
-```
-
-## Measuring it
-
-```bash
-just eval     # a scorecard: detection mAP, tracking HOTA, copilot accuracy, event precision/recall
-just bench    # 10 -> 50 events/s, latency percentiles, time to first insight
-```
-
-`just eval` **reports rather than gates** — except on a floor. A quality metric wired as pass/fail gets
-disabled the first time it drops 0.01, so each one declares a floor set well below where it sits and the
-scorecard prints the headroom. `just bench` measures time-to-first-insight on the causal chain, by trace id:
-the interval between an observation entering the bus and a *conclusion* coming back out.
-
-Every recipe is listed in [docs/RECIPES.md](docs/RECIPES.md), generated by `just recipes` and checked by a test
-so it cannot go stale.
-
-## Roadmap
-
-| Phase | Content | State |
-|---|---|---|
-| 0 | Foundations: workspace, schemas, core ports, bootstrap, datastores, Justfile, CI | **done** (macOS sign-off pending) |
-| 1 | Skeleton that boots: ingest simulator → api → live map | **done** |
-| 2 | Perception → tracking → fusion → world model + semantic search | **done** |
-| 3 | Spatial engine, events + anomalies, forecasting, timeline replay | **done** |
-| 4 | Copilot + MCP, workflows, decisions, agents, alerts, the console panels | **done** |
-| 4.7 | **Ship checkpoint** — `just demo`, `docs/DEMO.md`, quickstart re-verified, e2e smoke | **done** |
-| 5 | Governance enforced: authn/authz, PII redaction, immutable audit, multi-tenancy | **done** |
-| 6 | Simulation (M11), analytics (M19), mission control (M17) and the developer platform (M22: SDKs, webhooks, plugins, no-code builder) | **done** |
-| 7 | Real connectors (RTSP/STAC/MAVLink/MQTT/SQL/traffic), the 3D twin, and `SIO_PROFILE=gpu` | **done** |
-| 8 | Evaluation harnesses (mAP/HOTA/copilot), performance benchmarks, docs | — |
-
-## Talking to it from your own code
-
-```python
-from sio_sdk import SioClient
-
-async with SioClient() as sio:
-    for entity in await sio.entities(limit=10):
-        print(entity.label, entity.state.zone_id)
-
-    print(await sio.ask("What is on site right now?"))
-```
-
-Typed returns, token renewal, an SSE `subscribe()` that reconnects, and errors that carry the reason the API
-gave. `just sdk-demo` runs the quickstart; [docs/SDK.md](docs/SDK.md) explains what it absorbs and why.
-
-Outbound, `services/webhooks` posts signed deliveries to your endpoint with retries and a delivery log — see
-[services/webhooks/README.md](services/webhooks/README.md), which covers why a body-only signature can be
-replayed for ever.
-
-## Connecting it to real sources
-
-Nine connectors ship: a real RTSP camera, an MQTT broker, Sentinel-2 via Earth Search, MAVLink drone telemetry, a
-SQL query, a CSV export, a traffic feed, Open-Meteo, and the synthetic yard.
-
-```json
-{ "connectors": [{ "source_id": "gate-a", "kind": "camera_rtsp",
-                   "modality": "video", "options": { "url": "rtsp://...", "publish_fps": 2 } }] }
-```
-
-Each is behind an optional extra and looks its dependency up at `start()`, so a default install stays fast and a
-misconfiguration says `uv pip install 'sio-ingest[rtsp]'` rather than `ModuleNotFoundError`. The SQL connector is
-read-only, enforced before it opens a connection. See [docs/CONNECTORS.md](docs/CONNECTORS.md), which documents
-every option and — more usefully — why each default is what it is.
-
-## Seeing what a camera actually covers
-
-The **twin** tab is a Cesium view of the site. A 3D view of a flat yard is mostly a worse 2D map — what it adds
-is that **a camera's field of view is a volume and the map can only draw its shadow**, so two cameras that
-overlap at head height but not at ground level look identical on the map and obviously different here.
-
-It is lazy-loaded: 4.5MB of Cesium arrives when you open the tab and never otherwise, so the entry bundle stays
-at 275kB. See [docs/GPU_SWAP.md](docs/GPU_SWAP.md) for the production overlay — `SIO_PROFILE=gpu` flips every
-seam at once, and the suite passes under it.
-
-## Running an operation
-
-The **missions** tab is Mission Control: create a mission, commit resources to it, watch it, replay it.
-
-The part that makes it belong in a spatial platform rather than a task tracker is that **objectives complete
-themselves**. Give an objective a zone and it is met when an *assigned* resource is observed there:
-
-```
-Objective met: Reach the north lane — observed Worker 15 in lane_north
-```
-
-Only assigned resources count, because a forklift wandering through does not satisfy "get eyes on the fuel
-store" — and a busy yard that completes objectives by accident looks like success. An objective with no zone
-stays a human judgement, and says so.
-
-A resource can be committed to one mission at a time, enforced by a partial unique index rather than a service
-check: dispatching the same drone to two fires is exactly what slips through a read-then-write under
-concurrency. The comms log is append-only at the database level, because an entry is testimony and testimony
-that can be edited afterwards is worth nothing in the review that follows a bad outcome. And a finished mission
-is a *record* — its objectives stop being editable, and it stops claiming to be "waiting on" anything.
-
-See [services/missions/README.md](services/missions/README.md).
-
-## Composing it without writing code
-
-The **builder** tab composes the activities the platform already has into a new response — trigger, conditions,
-steps — and the JSON it writes is executed by the *same* engine as the Python playbooks, with the same retries,
-compensation, cooldowns and run records. Adding a new activity is still a code change, deliberately: dispatching
-a drone is code, and a builder that pretended otherwise ends up with a JSON file containing a Python expression.
-
-Validation is the product. It reports every problem at once, each naming the valid options — `there is no
-activity called 'launch_missile'` followed by the eight that exist — because a validator revealing one problem
-per attempt turns a five-minute task into twenty. A cycle comes back as `a → c → b → a`, and it is refused
-because compensation runs in reverse order and a cycle has no order to reverse.
-
-## Extending it without changing it
-
-Four extension points, discovered through Python entry points — connectors, rules, copilot tools and agents.
-Install a package; the platform picks it up.
-
-```bash
-just plugin-demo    # installs examples/plugin_demo: a tide gauge connector + a flood-warning rule
-```
-
-Verified end to end: an out-of-tree rule firing on data from an out-of-tree connector, with **no file under
-`services/` or `libs/` naming either** — which a test asserts, so "no core changes" is a check rather than a
-claim.
-
-[docs/PLUGINS.md](docs/PLUGINS.md) leads with the three conventions that cost me three attempts, each of which
-failed *silently*: the rule loaded, reported enabled, and matched nothing.
-
-## Governance
-
-Authentication is required by default, every authorisation decision is audited, personal data is redacted
-unless the caller holds both a role and an explicit scope, faces and plates are blurred before any frame
-reaches storage, and nothing acts in the physical world without a human approving it.
-
-```bash
-# what is actually switched on in a running deployment, including what is NOT
-curl -s localhost:8118/governance/posture -H "Authorization: Bearer $TOKEN" | jq
-```
-
-[docs/GOVERNANCE.md](docs/GOVERNANCE.md) covers the model, the regulatory posture, and a
-**"what is not protected"** section — because a governance document that lists only what is protected is a
-marketing document.
-
-Optional providers, both verified against the same test suite:
-
-```bash
-just keycloak                                   # then SIO_AUTH_MODE=keycloak just dev
-just opa                                        # then SIO_POLICY_ENGINE=opa just dev
-```
-
-The Rego is **generated** from the same rule table the embedded engine evaluates (`just policies`), and a
-conformance test runs 810 principal × action × context combinations through both engines and asserts they
-agree. It found a bug nothing else would have.
-
-## Known limitations
-
-Stated deliberately, because a reader who discovers these for themselves reasonably assumes they were
-missed. Each is a choice with a reason.
-
-| | |
+| Directory | Purpose |
 |---|---|
-| **The yard is simulated.** | Real connectors (RTSP, MQTT, MAVLink, STAC) sit behind the same ports, but the demo drives a physics simulation so the incident is reproducible and the perception path still runs on genuinely rendered frames. |
-| **Playbook steps are dry-run by default.** | They record what they *would* have done. A workflow engine that can only be exercised by actually closing a gate is one nobody exercises. `SIO_WORKFLOW_DRY_RUN=false` to arm it. |
-| **Fire detection is a colour-and-motion heuristic.** | It runs on the real rendered camera frames, so the detection is genuine; the detector is simple. A trained model drops in behind the same port. |
-| **The copilot is a 3 B local model.** | 95 % tool selection and 81 % argument accuracy on this repo's own 25-question fixture (`docs/MODELS.md` has the numbers and the four models that lost). Restraint — not calling a tool for "hello" — is handled in code, because the best candidate still queried the database to answer a greeting one in three times. |
-| **Keycloak and OPA are optional.** | The dev default is a signed local JWT and a permissive policy, both tested. Production wiring is documented, not demonstrated. Phase 5 enforces it. |
-| **Single tenant in the demo.** | Every table and query is tenant-scoped; the demo runs one. |
-| **Forecast intervals can be too wide to act on.** | The prediction service says so rather than narrowing them, which would be inventing confidence. A summary reading "effectively the whole range" is the system being honest, not broken. |
-| **No list virtualisation in the console.** | The event feed and alert inbox render a capped window and state the total. Fine at demo scale, a real cost at ten thousand rows. |
-| **macOS is the supported target.** | Linux (Ubuntu 24.04+) is verified in CI. Windows is not addressed. |
+| `web/` | Operator console: map, incident workspace, replay, missions, sources, health |
+| `services/` | Ingestion, perception, world model, reasoning, operations, API and integrations |
+| `libs/` | Shared Python schemas, runtime, adapters and SDK |
+| `sdk/ts/` | Shared browser/TypeScript transport and contracts |
+| `infra/` | Database migrations, site geometry, rules, policy and optional infrastructure |
+| `tests/` | Unit, integration, scenario and model evaluation tests |
+| `scripts/` | Setup, supervision, diagnostics, seeding and verification |
+| `docs/` | Product requirements, architecture, integration and operating notes |
 
-## Licence
-
-Apache-2.0. Model licences are tracked per-model in [`docs/MODELS.md`](docs/MODELS.md).
+The [PRD](docs/PRD.md) describes intended scope and includes future requirements. Older phase notes are historical design material; they are not completion evidence.

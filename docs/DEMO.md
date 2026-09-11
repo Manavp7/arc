@@ -201,10 +201,10 @@ Type a workflow with a deliberate mistake in it — an activity that does not ex
 
 Do not skip past this; it is a short and good answer.
 
-> Every request carries a signed token, every route maps to a policy action, and every denial is written to
-> an append-only audit table that Postgres itself refuses to let anyone update. The demo runs with a local
-> issuer so there is no login screen in the way — Keycloak and OPA drop in behind the same interfaces, and
-> the wiring is documented.
+> The console starts with explicit sign-in. The development issuer offers labelled test roles; a configured
+> Keycloak deployment uses browser authorization code with PKCE. Governed requests and streams verify signed
+> tokens, and authorization decisions enter the audit trail. Domain services reject other deployment tenants.
+> Provider registration and background machine credentials require their own deployment verification.
 
 If they push: `curl` any endpoint without a token in front of them. The refusal names the action and the
 role required, rather than saying 403.
@@ -273,7 +273,8 @@ Say these before you are asked. They are all deliberate.
   because the best candidate still queried the database to answer a greeting one time in three.
 - **Keycloak and OPA are optional.** The dev default is a signed local JWT and a permissive policy, both
   tested. Production wiring is documented, not demonstrated.
-- **Single tenant in the demo.** Every table and query is tenant-scoped; the demo runs one.
+- **Single deployment tenant.** Domain services reject other tenant tokens; shared multi-tenant operation
+  is not established by this demo.
 - **The 3D twin's mast height is a guess.** The source table records a camera's position and its ground
   coverage, not how high it is mounted, so the frustum apex assumes 8 m. The caption on screen says so —
   somebody judging whether a camera clears a container stack needs to know which part is data.

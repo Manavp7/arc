@@ -9,9 +9,10 @@ too. A governance document that lists only what is protected is a marketing docu
 
 ## The one-line summary
 
-Authentication is required by default, every authorisation decision is audited, personal data is redacted
-unless the caller holds both a role and an explicit scope, faces and plates are blurred before any frame
-reaches storage, and nothing acts in the physical world without a human approving it.
+Authentication is required by default and authorization decisions are audited. The browser uses explicit
+sign-in and bearer-authenticated requests and streams. Raw camera buffers are private until perception
+processes them; optional originals require a separate media permission. This build records response intent
+and supports approvals, but includes no physical gate or drone command adapter.
 
 Check any running deployment for yourself:
 
@@ -28,8 +29,8 @@ It reports what is **actually** switched on, including a `weaknesses` list that 
 | | |
 |---|---|
 | where it lives | `libs/sio_core/src/sio_core/authn.py` |
-| installed by | the shared service runtime, so all fifteen services get it and none opts in |
-| public paths | `/health`, `/metrics`, `/auth/dev/token`, and the docs. Nothing else. |
+| installed by | the shared service runtime, so all HTTP services get it and none opts in |
+| public paths | Health aliases, metrics, `/auth/config`, development token issuance, documentation, and favicon paths listed in `sio_core.authn.PUBLIC_PATHS` |
 
 **A principal is established by middleware before any route runs.** Authentication is not something a
 handler does, so there is no handler that can omit it. This is the whole fix for what the build plan called
@@ -57,22 +58,50 @@ quietly appeared in a production deployment would be a complete authentication b
 ### Keycloak
 
 ```bash
-just keycloak            # starts Keycloak and imports infra/keycloak/realm-sio.json
-SIO_AUTH_MODE=keycloak just dev
+just keycloak            # optional Docker/Podman provider and Python verification extra
+SIO_AUTH_MODE=keycloak SIO_KEYCLOAK_CLIENT_ID=sio-console SIO_OIDC_AUDIENCE=sio-api just dev
 ```
 
-`KeycloakOidcAuth` verifies RS256 against the published JWKS, with discovery cached and refreshed on an
-unknown key id — which is how key rotation actually presents itself. The refresh is rate-limited to 30 s, so
-a stream of invalid tokens cannot become a denial-of-service against the identity provider.
+The local bootstrap imports a development realm and reconciles its managed public `sio-console` client
+on every run. Existing containers, users, passwords, role assignments and other clients are retained.
+The browser client requires authorization code with PKCE S256; password grants, implicit flow and service
+accounts are disabled. Its only login and logout redirects are `http://localhost:5173/` and
+`http://127.0.0.1:5173/`, with matching web origins. `sio-api` remains a separate confidential API client.
 
-Claims map to the same `Principal` as the dev issuer, through the same function. Two mappings would drift,
-and the drift would be a permissions difference between dev and production.
+The console access token contains the `sio-api` audience. Attribute mappers carry the assigned user's
+`tenant`, `clearance`, `pii_scope` and `zones`; the realm-role mapper exposes only already assigned roles
+within the browser client's allowed role scope. It does not grant commander or administrator roles.
+The development fixture has operator, commander and zoned test users, with passwords matching usernames.
+These local credentials and HTTP settings must not be used for production.
+
+`just keycloak` installs the optional `keycloak` Python dependency group. For an existing provider, install
+it with `uv sync --extra keycloak`, then configure `SIO_OIDC_DISCOVERY_URL`, `SIO_OIDC_AUDIENCE` and
+`SIO_KEYCLOAK_CLIENT_ID` as described in [Operating the console](OPERATIONS.md#authentication).
+Existing `.env` files that still select `SIO_KEYCLOAK_CLIENT_ID=sio-api` must select `sio-console` for browser
+sign-in; the bootstrap prints a command with that override. Nondefault console ports or paths require matching
+explicit redirects, logout URLs and web origins.
+A custom `KEYCLOAK_PORT` is printed in the bootstrap's discovery-URL instruction. If the existing local
+provider's administrator credentials changed, set `KEYCLOAK_ADMIN` and `KEYCLOAK_ADMIN_PASSWORD` for the helper.
+
+The `sio-console` client is package-managed: rerunning bootstrap restores its mappers, role scope and redirect
+allowlist. Put deployment-specific customization in a separately named client. The helper never assigns roles
+to existing users and never resets existing passwords.
+
+`KeycloakOidcAuth` verifies RS256 signatures, issuer, audience, expiry and required tenant claims against the
+provider's discovery/JWKS endpoints. JWT verification is local: logout ends the browser session and provider
+refresh session, but an already copied access token can remain valid until expiry. There is no per-request
+introspection or revocation lookup.
+
+Fixture contract tests verify client configuration and idempotent reconciliation. Browser tests use a mock
+provider. Live provider registration, login, refresh and logout remain deployment-specific verification.
+See the [Keycloak administration guide](https://www.keycloak.org/docs/latest/server_admin/) for provider setup.
 
 ### Service identities
 
-Work with no user behind it — an agent observing on a timer, the copilot's tool belt, a workflow dispatching
-a step — authenticates with a short-lived token carrying the `service` role and a subject like
-`service:agents`.
+In development, background work uses short-lived signed tokens with a `service` role and a subject such as
+`service:agents`. This local issuer is not an OIDC machine-identity integration. In Keycloak mode, background
+workflow reports require `SIO_WORKFLOW_SERVICE_TOKEN`; other background integrations need deployment-specific
+machine credentials before they can be considered operational.
 
 Three deliberate choices: **ten minutes** rather than the life of the process, because a long-lived token is
 a credential with no revocation; **the `service` role rather than `admin`**, because giving internal calls
@@ -169,12 +198,14 @@ nobody learns it happened.
 
 ## Multi-tenancy
 
-`tenant_id` comes from the verified token, is bound to a contextvar for the request, and reaches every SQL
-query, every Cypher statement, every bus consumer filter and every vector search. A `?tenant_id=` query
-parameter or an `X-Tenant-Id` header is **data, not authority**.
+The API binds `tenant_id` from the verified principal for its queries, replay sessions and stream subscribers.
+Domain services still include deployment-scoped state, so their middleware rejects tokens from any other
+deployment tenant before handlers run. Deploy separate domain-service stacks per tenant until those stores
+and internal calls support shared tenancy end to end. A `?tenant_id=` parameter or `X-Tenant-Id` header does
+not change the authenticated tenant.
 
-Every response carries `x-sio-tenant`, so a cross-tenant bug is visible in a curl rather than only by
-inspecting SQL.
+Successful governed HTTP responses include `x-sio-tenant` and `x-sio-principal`; public health routes are
+exempt. WebSockets authenticate before acceptance and bind the same tenant context.
 
 **This is the one control whose failure is invisible.** A cross-tenant read does not error, does not look
 unusual in a log, and returns plausible data. So `tests/unit/test_tenant_isolation.py` is adversarial rather
@@ -189,7 +220,7 @@ forged, unsigned, expired and tenant-less tokens.
 | | |
 |---|---|
 | text | `libs/sio_core/src/sio_core/pii.py`, applied at the response boundary |
-| pixels | `services/perception/src/sio_perception/redact.py`, applied before storage |
+| pixels | `services/perception/src/sio_perception/redact.py`, applied before private real-camera buffers are promoted to retrievable media |
 
 ### Redaction is on by default
 
@@ -236,8 +267,10 @@ The fixes are invariants rather than tuned thresholds: no phone number has fewer
 
 ### Faces and plates
 
-Blurred **before** the frame reaches object storage. Order matters: storing first and redacting later means
-an unblurred frame exists in the store, and "we deleted it afterwards" is not a privacy posture.
+Real camera bytes are first buffered under `pending/`, which the media API rejects. Perception applies the
+configured blurring pass, writes processed media under a tenant-qualified key and publishes `frames.ready`.
+The world model skips private buffers and indexes only the processed reference. Storage administrators can
+still access buffers directly; this is an application-access boundary, not encryption or absence of raw bytes.
 
 `SIO_RETAIN_RAW=true` additionally keeps the unblurred original under a `raw/` prefix, reachable only through
 `media.raw`, which requires a role **and** the `pii_scope` claim. It is off by default, and the posture
@@ -320,17 +353,19 @@ The honest list. Each is a known gap, not an oversight.
 
 - **The dev signing secret is in settings** and is the same in every checkout. `SIO_AUTH_MODE=dev` is for
   development. The posture endpoint reports this as a weakness.
-- **No revocation in dev mode.** A leaked dev token is valid until it expires. Keycloak provides revocation.
+- **Access-token revocation is not checked per request.** A copied dev or OIDC access token can remain valid
+  until expiry; browser logout clears local credentials and requests provider logout.
 - **No rate limiting.** A valid token can be used as fast as the platform will answer.
 - **No field-level encryption at rest.** Postgres and MinIO are encrypted only if the underlying volumes are.
 - **Presidio is optional**, so a default install detects structured identifiers and not names or addresses.
-- **The console holds its token in `localStorage` and a cookie.** The cookie is `SameSite=Strict`; neither is
-  `HttpOnly`, because the SSE transport needs the cookie and the fetch path needs the value. A production
-  deployment should front this with an OIDC session and `HttpOnly`.
+- **Browser tokens are readable by same-origin JavaScript.** Access and refresh credentials live in tab-scoped
+  `sessionStorage`; API calls and streams send Authorization headers. They are cleared on logout. An XSS
+  vulnerability could still read them; this is not an HttpOnly server-session architecture.
 - **No mutual TLS between services.** Internal traffic is plain HTTP on loopback.
 - **OpenFGA relationship checks are modelled but not wired** (`infra/openfga/model.fga`), so
   "user X may view camera Y because it is assigned to mission Z" is expressible and not enforced.
-- **Single region, single tenant in the demo**, though every query is tenant-scoped.
+- **One deployment tenant per domain-service stack.** Middleware rejects other tenant identities while shared
+  service storage and background calls are being made fully request-scoped.
 
 ---
 

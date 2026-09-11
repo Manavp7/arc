@@ -240,7 +240,9 @@ def test_forecast_series_falls_back_rather_than_failing() -> None:
 
 @pytest.mark.skipif(not StatsForecastForecaster().available(), reason="statsforecast not installed")
 def test_autoets_produces_intervals_on_a_seasonal_series() -> None:
-    values = [20 + 5 * math.sin(index * math.pi / 6) for index in range(48)]
+    values = [
+        20 + 5 * math.sin(index * math.pi / 6) + 0.2 * math.sin(index * 1.7) for index in range(48)
+    ]
     result = StatsForecastForecaster(season_length=12).forecast(series_of(values), horizon=6)
     assert result.model_name == "autoets"
     assert len(result.points) == 6
@@ -792,3 +794,58 @@ def test_a_flat_series_is_not_called_uninformative_for_being_flat() -> None:
     assert _battery_forecast(lo=0.0, hi=100.0)._interval_is_uninformative(
         _battery_forecast(lo=0.0, hi=100.0).points[-1]
     )
+
+
+@pytest.mark.parametrize(
+    "envelope",
+    [
+        (20.0, float("nan"), float("nan")),
+        (float("inf"), 19.0, 21.0),
+        (20.0, 22.0, 23.0),
+        (20.0, 21.0, 19.0),
+    ],
+)
+def test_invalid_autoets_intervals_use_an_explicit_finite_fallback(monkeypatch, envelope):
+    import pandas as pd
+    from statsforecast import StatsForecast
+
+    centre, lo, hi = envelope
+    monkeypatch.setattr(
+        StatsForecast,
+        "forecast",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "AutoETS": [centre] * 6,
+                "AutoETS-lo-90": [lo] * 6,
+                "AutoETS-hi-90": [hi] * 6,
+            }
+        ),
+    )
+    series = series_of([20 + 5 * math.sin(index * math.pi / 6) for index in range(48)])
+    result = forecast_series(series, horizon=6, season_length=12)
+    assert result.model_name == "drift"
+    assert len(result.points) == 6
+    assert any("invalid prediction intervals" in note for note in result.notes)
+    assert all(
+        math.isfinite(point.value)
+        and math.isfinite(point.lo)
+        and math.isfinite(point.hi)
+        and point.lo <= point.value <= point.hi
+        for point in result.points
+    )
+
+
+@pytest.mark.skipif(not StatsForecastForecaster().available(), reason="statsforecast not installed")
+def test_noiseless_seasonal_series_does_not_publish_nan_intervals():
+    values = [20 + 5 * math.sin(index * math.pi / 6) for index in range(48)]
+    result = forecast_series(series_of(values), horizon=6, season_length=12)
+    assert result.points
+    assert all(
+        math.isfinite(point.value)
+        and math.isfinite(point.lo)
+        and math.isfinite(point.hi)
+        and point.lo <= point.value <= point.hi
+        for point in result.points
+    )
+    if result.model_name == "drift":
+        assert any("invalid prediction intervals" in note for note in result.notes)

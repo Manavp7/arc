@@ -166,12 +166,12 @@ class InlineRunner:
                     activity(context, spec.step_id, **spec.arguments),
                     timeout=spec.timeout_s,
                 )
-                return (
-                    True,
-                    output if isinstance(output, dict) else {"result": output},
-                    None,
-                    attempt,
-                )
+                result = output if isinstance(output, dict) else {"result": output}
+                if result.get("error"):
+                    # A reported failure is not a successful side effect. Keep its evidence in the
+                    # step output; callers can retry thrown transient errors instead of caching them.
+                    return False, result, str(result["error"]), attempt
+                return True, result, None, attempt
             except TimeoutError:
                 # Named separately from other failures: a timeout means the step MAY HAVE ACTED, which is
                 # why activities are idempotent on a run-and-step key. Retrying without that would
@@ -227,10 +227,12 @@ class InlineRunner:
                 )
                 continue
             try:
-                await asyncio.wait_for(
+                output = await asyncio.wait_for(
                     activity(context, f"{spec.step_id}:compensate", **spec.arguments),
                     timeout=spec.timeout_s,
                 )
+                if isinstance(output, dict) and output.get("error"):
+                    raise RuntimeError(str(output["error"]))
                 outcome.compensated.append(spec.step_id)
                 step = next((s for s in run.steps if s.step_id == spec.step_id), None)
                 if step is not None:
@@ -272,15 +274,17 @@ class RunLedger:
     def __init__(self, *, keep: int = 100) -> None:
         self.keep = keep
         self.runs: list[WorkflowRun] = []
-        self._last_started: dict[tuple[str, str], float] = {}
+        self._last_started: dict[tuple[str | None, str, str], float] = {}
+        self._suppressed_by_tenant: dict[str | None, int] = {}
         self.suppressed = 0
 
-    def may_start(self, playbook: Playbook, subject: str) -> bool:
-        key = (playbook.name, subject)
+    def may_start(self, playbook: Playbook, subject: str, *, tenant_id: str | None = None) -> bool:
+        key = (tenant_id, playbook.name, subject)
         last = self._last_started.get(key)
         now = time.monotonic()
         if last is not None and now - last < playbook.cooldown_s:
             self.suppressed += 1
+            self._suppressed_by_tenant[tenant_id] = self._suppressed_by_tenant.get(tenant_id, 0) + 1
             return False
         self._last_started[key] = now
         return True
@@ -289,16 +293,26 @@ class RunLedger:
         self.runs.append(run)
         del self.runs[: max(0, len(self.runs) - self.keep)]
 
-    def get(self, run_id: str) -> WorkflowRun | None:
-        return next((run for run in self.runs if run.run_id == run_id), None)
+    def get(self, run_id: str, *, tenant_id: str | None = None) -> WorkflowRun | None:
+        return next(
+            (
+                run
+                for run in self.runs
+                if run.run_id == run_id and (tenant_id is None or run.tenant_id == tenant_id)
+            ),
+            None,
+        )
 
-    def describe(self, limit: int = 10) -> dict[str, Any]:
+    def describe(self, limit: int = 10, *, tenant_id: str | None = None) -> dict[str, Any]:
         """Recent runs. The limit is a parameter because a fixed ten hid the only fire response among
         fifteen dwell escalations, and the run someone is looking for is rarely the most recent."""
+        runs = [run for run in self.runs if tenant_id is None or run.tenant_id == tenant_id]
         return {
-            "runs": len(self.runs),
-            "suppressed_by_cooldown": self.suppressed,
-            "by_playbook": _counted(run.playbook for run in self.runs),
+            "runs": len(runs),
+            "suppressed_by_cooldown": self.suppressed
+            if tenant_id is None
+            else self._suppressed_by_tenant.get(tenant_id, 0),
+            "by_playbook": _counted(run.playbook for run in runs),
             "recent": [
                 {
                     "run_id": run.run_id,
@@ -311,7 +325,7 @@ class RunLedger:
                         for step in run.steps
                     ],
                 }
-                for run in reversed(self.runs[-limit:])
+                for run in reversed(runs[-limit:])
             ],
         }
 

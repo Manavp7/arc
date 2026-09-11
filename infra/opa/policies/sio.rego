@@ -4,7 +4,7 @@
 #
 # Hand-editing this file would recreate the exact problem it exists to prevent: two
 # implementations of one policy, drifting, until dev allows what production denies.
-# Generated 2026-07-25 from 32 rules.
+# Generated 2026-09-11 from 38 rules.
 
 package sio.authz
 
@@ -41,6 +41,12 @@ known_action if input.action == "simulation.write"
 known_action if input.action == "pii.view"
 known_action if input.action == "media.raw"
 known_action if input.action == "media.read"
+known_action if input.action == "notifications.write"
+known_action if input.action == "storage.write"
+known_action if input.action == "storage.read"
+known_action if input.action == "review.write"
+known_action if input.action == "case.write"
+known_action if input.action == "site.write"
 known_action if input.action == "alerts.write"
 known_action if input.action == "decisions.write"
 known_action if input.action == "agents.write"
@@ -226,6 +232,139 @@ allow if {
 	tenant_matches
 }
 
+# Mark only the authenticated recipient's visible in-app notifications as read
+allow if {
+	authenticated
+	input.action == "notifications.write"
+	not startswith(input.action, "admin.")
+	input.action != "policy.write"
+	input.action != "tenant.create"
+	input.action != "decision.approve"
+	input.action != "decision.reject"
+	input.action != "workflow.execute"
+	input.action != "simulation.inject"
+	input.action != "simulation.write"
+	input.action != "pii.view"
+	input.action != "media.raw"
+	input.action != "media.read"
+	tenant_matches
+}
+
+# Manage recorded-media retention, archival and explicit permanent cleanup
+allow if {
+	authenticated
+	input.action == "storage.write"
+	not startswith(input.action, "admin.")
+	input.action != "policy.write"
+	input.action != "tenant.create"
+	input.action != "decision.approve"
+	input.action != "decision.reject"
+	input.action != "workflow.execute"
+	input.action != "simulation.inject"
+	input.action != "simulation.write"
+	input.action != "pii.view"
+	input.action != "media.raw"
+	input.action != "media.read"
+	input.action != "notifications.write"
+	some role in ["admin"]
+	role in input.principal.roles
+	tenant_matches
+}
+
+# Inspect recorded-media storage usage and retention eligibility
+allow if {
+	authenticated
+	input.action == "storage.read"
+	not startswith(input.action, "admin.")
+	input.action != "policy.write"
+	input.action != "tenant.create"
+	input.action != "decision.approve"
+	input.action != "decision.reject"
+	input.action != "workflow.execute"
+	input.action != "simulation.inject"
+	input.action != "simulation.write"
+	input.action != "pii.view"
+	input.action != "media.raw"
+	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	some role in ["admin", "integrator"]
+	role in input.principal.roles
+	tenant_matches
+}
+
+# Upload recorded footage, configure image zones and review rules, and run analysis
+allow if {
+	authenticated
+	input.action == "review.write"
+	not startswith(input.action, "admin.")
+	input.action != "policy.write"
+	input.action != "tenant.create"
+	input.action != "decision.approve"
+	input.action != "decision.reject"
+	input.action != "workflow.execute"
+	input.action != "simulation.inject"
+	input.action != "simulation.write"
+	input.action != "pii.view"
+	input.action != "media.raw"
+	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	some role in ["operator", "commander", "integrator", "ml_engineer", "admin"]
+	role in input.principal.roles
+	tenant_matches
+}
+
+# Assign incident ownership, append investigation notes and record review outcomes
+allow if {
+	authenticated
+	input.action == "case.write"
+	not startswith(input.action, "admin.")
+	input.action != "policy.write"
+	input.action != "tenant.create"
+	input.action != "decision.approve"
+	input.action != "decision.reject"
+	input.action != "workflow.execute"
+	input.action != "simulation.inject"
+	input.action != "simulation.write"
+	input.action != "pii.view"
+	input.action != "media.raw"
+	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	some role in ["operator", "commander", "admin"]
+	role in input.principal.roles
+	tenant_matches
+}
+
+# Commission site geometry and camera calibration
+allow if {
+	authenticated
+	input.action == "site.write"
+	not startswith(input.action, "admin.")
+	input.action != "policy.write"
+	input.action != "tenant.create"
+	input.action != "decision.approve"
+	input.action != "decision.reject"
+	input.action != "workflow.execute"
+	input.action != "simulation.inject"
+	input.action != "simulation.write"
+	input.action != "pii.view"
+	input.action != "media.raw"
+	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	some role in ["integrator", "admin"]
+	role in input.principal.roles
+	tenant_matches
+}
+
 # Acknowledging and resolving is an operator's job
 allow if {
 	authenticated
@@ -241,6 +380,12 @@ allow if {
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	input.action != "site.write"
 	some role in ["operator", "commander", "admin"]
 	role in input.principal.roles
 	tenant_matches
@@ -261,6 +406,12 @@ allow if {
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	input.action != "site.write"
 	input.action != "alerts.write"
 	some role in ["service", "operator", "commander", "admin"]
 	role in input.principal.roles
@@ -282,6 +433,12 @@ allow if {
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	input.action != "site.write"
 	input.action != "alerts.write"
 	input.action != "decisions.write"
 	some role in ["service", "admin"]
@@ -304,6 +461,12 @@ allow if {
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	input.action != "site.write"
 	input.action != "alerts.write"
 	input.action != "decisions.write"
 	input.action != "agents.write"
@@ -327,6 +490,12 @@ allow if {
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	input.action != "site.write"
 	input.action != "alerts.write"
 	input.action != "decisions.write"
 	input.action != "agents.write"
@@ -351,6 +520,12 @@ allow if {
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	input.action != "site.write"
 	input.action != "alerts.write"
 	input.action != "decisions.write"
 	input.action != "agents.write"
@@ -376,6 +551,12 @@ allow if {
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	input.action != "site.write"
 	input.action != "alerts.write"
 	input.action != "decisions.write"
 	input.action != "agents.write"
@@ -402,6 +583,12 @@ allow if {
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	input.action != "site.write"
 	input.action != "alerts.write"
 	input.action != "decisions.write"
 	input.action != "agents.write"
@@ -428,6 +615,12 @@ allow if {
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	input.action != "site.write"
 	input.action != "alerts.write"
 	input.action != "decisions.write"
 	input.action != "agents.write"
@@ -454,6 +647,12 @@ allow if {
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	input.action != "site.write"
 	input.action != "alerts.write"
 	input.action != "decisions.write"
 	input.action != "agents.write"
@@ -482,6 +681,12 @@ allow if {
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	input.action != "site.write"
 	input.action != "alerts.write"
 	input.action != "decisions.write"
 	input.action != "agents.write"
@@ -511,6 +716,12 @@ allow if {
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	input.action != "site.write"
 	input.action != "alerts.write"
 	input.action != "decisions.write"
 	input.action != "agents.write"
@@ -541,6 +752,12 @@ allow if {
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	input.action != "site.write"
 	input.action != "alerts.write"
 	input.action != "decisions.write"
 	input.action != "agents.write"
@@ -573,6 +790,12 @@ allow if {
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	input.action != "site.write"
 	input.action != "alerts.write"
 	input.action != "decisions.write"
 	input.action != "agents.write"
@@ -606,6 +829,12 @@ allow if {
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	input.action != "site.write"
 	input.action != "alerts.write"
 	input.action != "decisions.write"
 	input.action != "agents.write"
@@ -640,6 +869,12 @@ allow if {
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	input.action != "site.write"
 	input.action != "alerts.write"
 	input.action != "decisions.write"
 	input.action != "agents.write"
@@ -675,6 +910,12 @@ allow if {
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	input.action != "site.write"
 	input.action != "alerts.write"
 	input.action != "decisions.write"
 	input.action != "agents.write"
@@ -711,6 +952,12 @@ allow if {
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	input.action != "site.write"
 	input.action != "alerts.write"
 	input.action != "decisions.write"
 	input.action != "agents.write"
@@ -748,6 +995,12 @@ allow if {
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	input.action != "site.write"
 	input.action != "alerts.write"
 	input.action != "decisions.write"
 	input.action != "agents.write"
@@ -786,6 +1039,12 @@ allow if {
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	input.action != "site.write"
 	input.action != "alerts.write"
 	input.action != "decisions.write"
 	input.action != "agents.write"
@@ -825,6 +1084,12 @@ allow if {
 	input.action != "pii.view"
 	input.action != "media.raw"
 	input.action != "media.read"
+	input.action != "notifications.write"
+	input.action != "storage.write"
+	input.action != "storage.read"
+	input.action != "review.write"
+	input.action != "case.write"
+	input.action != "site.write"
 	input.action != "alerts.write"
 	input.action != "decisions.write"
 	input.action != "agents.write"

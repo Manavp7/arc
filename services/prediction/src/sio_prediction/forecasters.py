@@ -243,12 +243,30 @@ class StatsForecastForecaster:
             ts = series.end + timedelta(seconds=series.bucket_s * step)
             lo = float(row[lo_column]) if lo_column in row else None
             hi = float(row[hi_column]) if hi_column in row else None
-            if lo is not None and hi is not None and lo > hi:
-                lo, hi = hi, lo  # the schema rejects an inverted interval, and rightly
+            centre = float(row[centre_column])
+            if (
+                not math.isfinite(centre)
+                or lo is None
+                or hi is None
+                or not math.isfinite(lo)
+                or not math.isfinite(hi)
+                or not lo <= centre <= hi
+            ):
+                # Degenerate fits can return NaN intervals without raising (for example a
+                # perfectly noiseless seasonal series). Do not publish those as usable forecasts;
+                # forecast_series will use the explicitly labelled empirical fallback instead.
+                return ForecastResult(
+                    points=[],
+                    model_name=self.name,
+                    interval_level=level,
+                    notes=[
+                        "AutoETS returned nonfinite or invalid prediction intervals; forecast rejected"
+                    ],
+                )
             points.append(
                 ForecastPoint(
                     ts=ts,
-                    value=round(float(row[centre_column]), 4),
+                    value=round(centre, 4),
                     lo=round(lo, 4) if lo is not None else None,
                     hi=round(hi, 4) if hi is not None else None,
                 )

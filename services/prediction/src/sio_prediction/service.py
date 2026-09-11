@@ -7,6 +7,7 @@ deploy — which is exactly when someone is watching.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import datetime, timedelta
 from typing import Any
@@ -21,6 +22,7 @@ from .series import GapPolicy, Series, bucketise, counts_per_bucket
 from .targets import (
     SPECS,
     TargetForecast,
+    TargetSpec,
     build,
     congestion_from_occupancy,
     time_to_threshold,
@@ -150,6 +152,15 @@ class PredictionService(SioService):
             seconds=round(self._last_cycle_s, 2),
         )
 
+    async def _build_target(
+        self, spec: TargetSpec, series: Series, **kwargs: Any
+    ) -> TargetForecast:
+        # Model fitting/backtesting (including first-use compilation) must not block HTTP,
+        # Redis reads or other consumers sharing the dev-lite event loop.
+        return await asyncio.to_thread(
+            build, spec, series, level=self.settings.forecast_interval_level, **kwargs
+        )
+
     async def _forecast_all(self, made_at: datetime) -> list[Forecast]:
         forecasts: list[Forecast] = []
         for target in await self._site_forecasts(made_at):
@@ -183,7 +194,7 @@ class PredictionService(SioService):
         if series is None or len(series) < 5:
             self._skipped_short_history += 1
             return []
-        target = build(spec, series, level=self.settings.forecast_interval_level)
+        target = await self._build_target(spec, series)
         return (
             [target.to_forecast(self.settings.tenant_id, made_at=made_at)] if target.points else []
         )
@@ -259,9 +270,7 @@ class PredictionService(SioService):
             if series is None or len(series) < 5:
                 self._skipped_short_history += 1
                 continue
-            target = build(
-                spec, series, level=self.settings.forecast_interval_level, zone_id=zone_id
-            )
+            target = await self._build_target(spec, series, zone_id=zone_id)
             if not target.points:
                 continue
             forecast = target.to_forecast(self.settings.tenant_id, made_at=made_at)
@@ -324,10 +333,9 @@ class PredictionService(SioService):
                     self._skipped_short_history += 1
                     continue
                 is_device_metric = metric == "battery_pct"
-                target = build(
+                target = await self._build_target(
                     spec,
                     series,
-                    level=self.settings.forecast_interval_level,
                     # A battery belongs to the device, not to whatever zone it is flying over: keying it
                     # by zone produced "battery:lane_north", which reads as a property of the lane.
                     zone_id=None if is_device_metric else zones.get(source_id),
@@ -516,8 +524,8 @@ class PredictionService(SioService):
                 )
                 if series is None:
                     continue
-                measured = backtest(
-                    series, horizon=5, level=level, season_length=spec.season_buckets
+                measured = await asyncio.to_thread(
+                    backtest, series, horizon=5, level=level, season_length=spec.season_buckets
                 )
                 results.append(
                     {

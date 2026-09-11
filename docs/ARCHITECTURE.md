@@ -40,7 +40,7 @@ flowchart TB
   subgraph L3 [Data platform]
     ingest[Connectors]
     bus[Redis Streams bus]
-    lake[Postgres + MinIO]
+    lake[Postgres + filesystem blobs]
   end
   govern[Security · governance · explainability]
 
@@ -63,7 +63,8 @@ flowchart TB
 
 Every external engine sits behind a Protocol in `sio_core.ports`, and services obtain
 implementations from `sio_core.registry`. **No service imports an adapter.** That rule is what
-makes the PRD's CPU→GPU swap matrix a configuration change, and it is enforced mechanically by
+makes implemented adapters replaceable through configuration. Several GPU adapters remain
+explicitly unimplemented; a port alone does not establish engine compatibility. The import boundary is enforced by
 `tests/unit/test_architecture.py`, which walks the AST of `services/` and fails the build on a
 forbidden import.
 
@@ -80,7 +81,7 @@ forbidden import.
 | `LLM` | `OllamaLLM`, `OpenAICompatLLM`, `ScriptedLLM` | `SIO_LLM_PROVIDER` | Phase 4 |
 | `PolicyEngine` | `EmbeddedPolicyEngine`, `OpaPolicyEngine`, `OpenFgaPolicyEngine` | `SIO_POLICY_ENGINE` | Phase 5 |
 | `AuthProvider` | `DevJwtAuth`, `KeycloakOidcAuth` | `SIO_AUTH_MODE` | Phase 5 |
-| `WorkflowRunner` | `TemporalRunner`, `InlineRunner` | `SIO_WORKFLOW_RUNNER` | Phase 4 |
+| `WorkflowRunner` | `InlineRunner`; `TemporalRunner` placeholder | `SIO_WORKFLOW_RUNNER` | inline active; Temporal rejects selection until implemented |
 
 Every port has an in-memory or file-backed adapter. That is not a testing convenience bolted on
 afterwards — it is why the unit ring needs no infrastructure, why `just check` passes on a
@@ -106,7 +107,7 @@ sequenceDiagram
   Cam->>Ing: frame + thermal reading
   Ing->>Bus: raw.frames / raw.iot
   Bus->>Perc: consume
-  Perc->>Bus: detections (fire, smoke)
+  Perc->>Bus: detections + frames.ready after redaction
   Bus->>Trk: consume
   Trk->>Bus: tracks
   Bus->>Fus: consume
@@ -115,10 +116,13 @@ sequenceDiagram
   Bus->>Ev: consume
   Ev->>Bus: event fire_detected (+ explanation)
   Bus->>WF: consume
-  WF->>WF: dispatch drone · notify · close gate · incident · report
+  WF->>WF: dry-run plan · incident · authenticated report read
   Bus->>Al: consume
   Al->>Al: score, dedup, group, escalate
 ```
+
+Physical drone/gate adapters are not implemented. Approval records an operator's choice; it does
+not itself execute a workflow or stamp the decision as physically executed.
 
 One `trace_id` is attached at the frame and travels the whole way, including into the audit
 log. That is what makes an explanation reconstructible after the fact rather than a
@@ -147,10 +151,10 @@ change shows up as a schema diff in the pull request.
 | Store | Holds | Why |
 |---|---|---|
 | Postgres + PostGIS | structured data, spatial geometry, timeline, audit, measurements | one transactional store for facts, and real spatial predicates |
-| pgvector (same DB) | 512-d embeddings for frames, entities, ReID, agent memory | a semantic search that also filters by tenant/type/zone is one query, not two round trips |
-| Neo4j | entity/relationship graph | expressive multi-hop traversal for the copilot |
+| pgvector (same DB) | 512-d embeddings for frames, entities, ReID, agent memory | semantic retrieval requires a semantic model; default hash embeddings are deterministic placeholders |
+| Postgres graph adapter (default), optional Neo4j | entity/relationship graph | default reuses the existing database; Neo4j is an optional engine |
 | Redis Streams | the bus, plus the timeline tail | consumer groups, replayable history, one process |
-| MinIO | frames, clips, masks, reports | immutable object storage, S3-compatible |
+| Filesystem (default), optional MinIO | frames, clips, masks, reports | local storage by default; MinIO adds S3-compatible storage |
 
 Conventions in SQL: `tenant_id` leads every primary key and index (an index that does not would
 make cross-tenant scans cheap); `payload jsonb` stores the canonical object losslessly while
@@ -171,14 +175,15 @@ The base class supplies what no service should re-implement:
 - structured logs with the message's `trace_id` bound for the handler's duration;
 - `/health` reporting dependency checks, the active adapter per port, consumer lag and counters;
 - `/metrics` for Prometheus;
-- at-least-once consumption with an idempotency cache, so redelivery is harmless;
+- at-least-once consumption with deduplication marked after successful handling; handlers still
+  need idempotent side effects if they can fail partway through processing;
 - **dead-letter on domain errors, retry on unexpected ones** — a malformed payload will fail
   identically forever, so it moves aside; a database blip should be retried;
 - `XAUTOCLAIM` recovery of messages stranded by a crashed consumer;
 - a periodic `tick()` for work that is not message-driven;
 - graceful shutdown that drains in flight work and closes adapters.
 
-Ports: API 8000, web 5173, services 8101–8118 (see `.env.example`). One consumer group per
+Ports: API 8000, web 5173, services 8101–8119, lightweight aggregate health 8120 (see `.env.example`). One consumer group per
 service (`cg.<name>`), so adding a service never steals another's messages and scaling one out
 shares its group.
 
@@ -188,7 +193,7 @@ No Docker, on either platform.
 
 - **macOS (supported):** Homebrew formulae, started with `brew services`.
 - **Linux (additive, for CI and verification):** apt for Postgres and Redis; Neo4j, MinIO and
-  the Temporal CLI install as user-owned files under `.sio/`, because those packages assume
+  optional engine tools install as user-owned files under `.sio/`, because those packages assume
   systemd and system-wide ownership — which would make `just clean` a lie.
 
 `scripts/supervisor.py` runs the process set with tiered startup (API and world model before
@@ -198,8 +203,8 @@ Profiles: `full`, `core`, `lite` (every consumer in one process, for low-RAM mac
 
 ## 8. Testing rings
 
-1. **unit** — no infrastructure, runs anywhere, must stay under a minute. Includes the
-   architecture fitness test and the shell portability guard.
+1. **unit** — no external infrastructure. Includes architecture, portability and lifecycle
+   checks; process/listener tests require local socket and child-process permissions.
 2. **integration** (`-m infra`) — the real datastores. The graph contract runs against *both*
    Neo4j and Postgres, which is how three Postgres-adapter bugs were caught that the in-memory
    adapter could not have surfaced.
@@ -226,12 +231,21 @@ quietly looking normal.
 
 ## 10. Security posture (Phase 5)
 
-Authentication is always on: `DevJwtAuth` issues locally signed tokens for development, and
-`KeycloakOidcAuth` is a configuration flip. Authorisation goes through a `PolicyEngine`, where
+The default requires authentication. `DevJwtAuth` offers explicitly labelled local identities;
+Keycloak mode uses the configured issuer and a public PKCE browser client. The console keeps
+tokens in session storage, refreshes expiring sessions, and sends bearer credentials on HTTP
+and streaming reads. Keycloak must be configured and validated in its target environment.
+The API gateway scopes request reads by identity; domain services reject identities outside
+their configured deployment tenant. This is a single-tenant service deployment, not a claim
+that arbitrary multi-tenant routing works throughout the stack.
+
+Authorisation goes through a `PolicyEngine`, where
 the embedded evaluator interprets the same policy documents that `infra/opa/policies/*.rego`
-express — so the tested default and the production engine cannot drift apart in meaning. PII
-redaction (Presidio for text, face/plate blurring for media) happens *in the pipeline*, before
-media reaches storage. Face recognition is off by default and gated behind both a feature flag
+express; their equivalence still needs verification when policies change. PII
+redaction (Presidio for text, face/plate blurring for media) happens in the perception pipeline.
+Incoming camera bytes are stored under a private pending prefix, blocked from media serving
+and indexing. Perception promotes successfully processed media and emits `frames.ready`.
+Face recognition is off by default and gated behind both a feature flag
 and policy.
 
 See [`GOVERNANCE.md`](GOVERNANCE.md).

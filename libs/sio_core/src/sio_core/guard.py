@@ -22,13 +22,16 @@ enforced. `action_for` maps method plus path to an action, so a new route is gov
 
 from __future__ import annotations
 
+import asyncio
 import re
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import HTTPConnection
 
 from .authn import (
     ANONYMOUS,
@@ -50,8 +53,20 @@ log = get_logger("sio.guard")
 #: Derived rather than hand-annotated per handler. A decorator on each route is a list somebody will forget
 #: to extend, and a forgotten entry is an unenforced endpoint that looks enforced — the worst of both.
 RESOURCE_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("/api/notifications", "notifications"),
+    ("/api/review/storage", "storage"),
+    ("/api/case-inbox", "case"),
+    ("/api/camera-setups", "site"),
+    ("/api/evidence-packages", "case"),
+    ("/api/review", "review"),
+    ("/api/cases", "case"),
+    ("/api/sites", "site"),
     # Longest first: `/api/spatial` must be tested before `/api`.
     ("/api/missions", "mission"),
+    ("/api/sources", "integration"),
+    ("/api/system", "system"),
+    ("/sources", "integration"),
+    ("/ws", "events"),
     ("/api/webhooks", "integration"),
     ("/api/analytics", "analytics"),
     ("/api/simulations", "simulation"),
@@ -157,6 +172,8 @@ def action_for(method: str, path: str) -> str:
     Suffix first, because it is more specific: `/decisions/{id}/approve` must be `decision.approve` and not
     `decisions.write`.
     """
+    if path.startswith(("/media/raw/", "/api/media/raw/")):
+        return "media.raw"
     for suffix, action in ACTION_SUFFIXES:
         if path.endswith(suffix):
             return action
@@ -177,7 +194,7 @@ def is_public(path: str) -> bool:
     )
 
 
-def _bearer(request: Request) -> str | None:
+def bearer_token(request: HTTPConnection) -> str | None:
     header = request.headers.get("authorization") or ""
     if header.lower().startswith("bearer "):
         return header[7:].strip()
@@ -227,7 +244,7 @@ class GovernanceMiddleware(BaseHTTPMiddleware):
             request.state.principal = ANONYMOUS
             return await call_next(request)
 
-        token = _bearer(request)
+        token = bearer_token(request)
         if not token:
             self.anonymous += 1
             # 401 and not a default principal. Falling back to a default tenant on a missing token is how
@@ -267,7 +284,15 @@ class GovernanceMiddleware(BaseHTTPMiddleware):
                 principal,
                 action,
                 resource=path,
-                context={"zone_id": request.query_params.get("zone_id")},
+                context={
+                    "zone_id": request.query_params.get("zone_id"),
+                    # Domain services still include deployment-scoped state. Until
+                    # every adapter is request-scoped, reject other tenant tokens
+                    # rather than answering from the deployment's default tenant.
+                    "tenant_id": self.settings.tenant_id
+                    if self.service and self.service != "api"
+                    else principal.tenant_id,
+                },
             )
             if self.audit is not None:
                 await self.audit(decision, request)
@@ -364,6 +389,31 @@ def install_governance(
     """
     settings = settings or get_settings()
     install_dev_token_route(app, settings)
+
+    @app.get("/auth/config", tags=["auth"])
+    async def auth_config() -> dict[str, Any]:
+        issuer = settings.oidc_discovery_url.removesuffix(
+            "/.well-known/openid-configuration"
+        ).rstrip("/")
+        oidc = None
+        if settings.auth_mode == "keycloak":
+            endpoint = f"{issuer}/protocol/openid-connect"
+            oidc = {
+                "issuer": issuer,
+                "discovery_url": settings.oidc_discovery_url,
+                "client_id": settings.keycloak_client_id,
+                "authorization_endpoint": f"{endpoint}/auth",
+                "token_endpoint": f"{endpoint}/token",
+                "logout_endpoint": f"{endpoint}/logout",
+            }
+        return {"mode": settings.auth_mode, "required": settings.auth_required, "oidc": oidc}
+
+    app.add_middleware(
+        WebSocketGovernanceMiddleware,
+        authenticator=authenticator or build_authenticator(settings),
+        settings=settings,
+        audit=audit,
+    )
     app.add_middleware(
         GovernanceMiddleware,
         authenticator=authenticator,
@@ -385,8 +435,63 @@ __all__ = [
     "RESOURCE_PREFIXES",
     "GovernanceMiddleware",
     "action_for",
+    "bearer_token",
     "install_dev_token_route",
     "install_governance",
     "is_public",
     "principal_of",
 ]
+
+
+class WebSocketGovernanceMiddleware:
+    """Apply the HTTP identity and policy contract to WebSockets, including GraphQL."""
+
+    def __init__(
+        self, app: Any, *, authenticator: Authenticator, settings: Settings, audit: Any = None
+    ) -> None:
+        self.app = app
+        self.authenticator = authenticator
+        self.settings = settings
+        self.audit = audit
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] != "websocket":
+            await self.app(scope, receive, send)
+            return
+        connection = HTTPConnection(scope)
+        origin = connection.headers.get("origin")
+        if origin:
+            same_origin = f"{connection.url.scheme.replace('ws', 'http')}://{connection.url.netloc}"
+            if origin not in self.settings.cors_origin_list and origin != same_origin:
+                await send({"type": "websocket.close", "code": 4403})
+                return
+        principal = ANONYMOUS
+        if self.settings.auth_required:
+            token = bearer_token(connection)
+            if not token:
+                await send({"type": "websocket.close", "code": 4401})
+                return
+            try:
+                principal = await self.authenticator.principal_from(token)
+            except PolicyDenied:
+                await send({"type": "websocket.close", "code": 4401})
+                return
+            decision = authorise(
+                principal, action_for("GET", connection.url.path), resource=connection.url.path
+            )
+            if self.audit:
+                await self.audit(decision, connection)
+            if not decision.allowed:
+                await send({"type": "websocket.close", "code": 4403})
+                return
+        scope.setdefault("state", {})["principal"] = principal
+        from .tenancy import tenant_scope
+
+        with tenant_scope(principal.tenant_id or self.settings.tenant_id):
+            try:
+                remaining = (
+                    max(0.001, principal.expires_at - time.time()) if principal.expires_at else None
+                )
+                await asyncio.wait_for(self.app(scope, receive, send), timeout=remaining)
+            except TimeoutError:
+                await send({"type": "websocket.close", "code": 4401, "reason": "session expired"})

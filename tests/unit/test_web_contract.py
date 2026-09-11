@@ -238,18 +238,43 @@ def test_the_heatmap_is_drawn_beneath_the_entities() -> None:
 
 
 def test_every_rail_tab_has_a_panel() -> None:
-    """A tab with no panel renders an empty rail and looks like a broken feature.
+    """Every declared tab is reachable from one workspace and renders a panel.
 
-    The tab list and the render block are separate literals in the same file, so adding one and forgetting the
-    other is a one-line mistake with no compiler complaint.
+    The grouped navigation replaces the old flat RailTab array. Check exact coverage against both
+    type unions so a missing workspace, orphaned tab, duplicate entry or empty panel still fails.
     """
     app = (WEB / "App.tsx").read_text()
-    tabs = re.search(r"\[\s*((?:\s*\"[a-z]+\",?\s*)+)\]\s*as RailTab\[\]", app)
-    assert tabs, "could not find the tab list in App.tsx"
-    names = re.findall(r'"([a-z]+)"', tabs.group(1))
-    assert len(names) >= 7, f"expected at least seven tabs, found {names}"
-    for name in names:
+    declared_tabs = re.search(r"type RailTab\s*=([^;]+);", app)
+    declared_workspaces = re.search(r"type Workspace\s*=([^;]+);", app)
+    sections = re.search(r"const SECTIONS\b.*?=\s*\{(.*?)\n\};", app, re.DOTALL)
+    assert declared_tabs and declared_workspaces and sections, (
+        "the grouped navigation declarations are missing"
+    )
+    tab_names = set(re.findall(r'"([a-z]+)"', declared_tabs.group(1)))
+    workspace_names = set(re.findall(r'"([a-z]+)"', declared_workspaces.group(1)))
+    groups = re.findall(r"(\w+)\s*:\s*\{[^{}]*tabs\s*:\s*\[([^]]*)\]", sections.group(1))
+    assert {name for name, _ in groups} == workspace_names, (
+        "every workspace needs a navigation group"
+    )
+    reachable: list[str] = []
+    for workspace, entries in groups:
+        names = re.findall(r'"([a-z]+)"', entries)
+        assert names, f"the {workspace!r} workspace has no tabs"
+        reachable.extend(names)
+    assert len(tab_names) >= 7, f"expected the operator panels, found {sorted(tab_names)}"
+    assert set(reachable) == tab_names, (
+        "navigation must cover every declared tab without unknown entries"
+    )
+    assert len(reachable) == len(set(reachable)), "a tab must belong to exactly one workspace"
+    for name in reachable:
         assert f'tab === "{name}"' in app, f"the {name!r} tab has no panel rendered for it"
+    rail = re.search(r'<nav className="tabs".*?</nav>', app, re.DOTALL)
+    assert rail and "SECTIONS[workspace].tabs" in rail.group(0), (
+        "the rail must use the selected workspace"
+    )
+    assert ".map(" in rail.group(0) and "navigate(workspace, name)" in rail.group(0), (
+        "permitted tab buttons must use the shared navigation guard"
+    )
 
 
 def test_the_analytics_tab_exists_and_is_wired() -> None:

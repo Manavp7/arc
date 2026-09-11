@@ -7,9 +7,7 @@
     uv run python scripts/supervisor.py --list             # show the process table
     uv run python scripts/supervisor.py --stop             # stop a detached run
 
-``just dev`` prefers mprocs when it is installed (the PRD's choice, and a nicer TUI), but the
-platform must be runnable on a machine that does not have it — including CI, where there is no
-terminal to attach to. So this supervisor exists and is the thing the e2e tests drive.
+``just dev`` always uses this supervisor. ``just dev-tui`` is the optional mprocs view.
 
 What it does beyond "start some processes":
 
@@ -73,8 +71,7 @@ class ProcessSpec:
     cwd: Path = REPO_ROOT
     env: dict[str, str] = field(default_factory=dict)
     optional: bool = False
-    """Optional processes log a warning and are skipped when their entry point is missing —
-    which is how this file stays useful while services are still being built."""
+    """Only explicitly optional auxiliary processes may be skipped when missing."""
 
     @property
     def module(self) -> str | None:
@@ -83,22 +80,8 @@ class ProcessSpec:
         return None
 
 
-def service_exists(name: str) -> bool:
-    """Whether a service's package is actually present.
-
-    The process table lists services from the whole roadmap, including ones a later phase will add. Launching
-    a module that does not exist wastes the supervisor's three restart attempts on a `ModuleNotFoundError`,
-    reports the tier as unhealthy, and buries the real startup output under three tracebacks — every single
-    boot.
-
-    Checked against the filesystem rather than by import, because importing a service pulls in its whole
-    dependency graph and this runs before anything is up.
-    """
-    return (REPO_ROOT / "services" / name / "src" / f"sio_{name}").is_dir()
-
-
 def python_service(
-    name: str, port: int, tier: int, *, optional: bool = True, args: Sequence[str] = ()
+    name: str, port: int, tier: int, *, optional: bool = False, args: Sequence[str] = ()
 ) -> ProcessSpec:
     return ProcessSpec(
         name=name,
@@ -121,14 +104,14 @@ def build_process_table(profile: str, ports: dict[str, int], web_port: int) -> l
         command=[sys.executable, "-m", "sio_api"],
         tier=1,
         health_port=ports.get("api", 8000),
-        optional=True,
+        optional=False,
     )
     web = ProcessSpec(
         name="web",
         command=["npm", "run", "dev", "--", "--port", str(web_port), "--strictPort"],
         tier=4,
         cwd=REPO_ROOT / "web",
-        optional=True,
+        optional=False,
     )
 
     world_tier = [
@@ -162,42 +145,20 @@ def build_process_table(profile: str, ports: dict[str, int], web_port: int) -> l
     ]
     ingest = python_service("ingest", ports.get("ingest", 8101), 3)
 
-    # Drop services whose package does not exist yet.
-    #
-    # `missions` sits in this table for a phase that has not been built, and every boot spent three restart
-    # attempts on it before giving up — which also made the tier report unhealthy and pushed the real startup
-    # output off the screen. Filtering here means the table can name the whole roadmap without the supervisor
-    # pretending to run it.
-    def present(specs: list[ProcessSpec]) -> list[ProcessSpec]:
-        keep, absent = [], []
-        for spec in specs:
-            if spec.name == "web" or service_exists(spec.name):
-                keep.append(spec)
-            else:
-                absent.append(spec.name)
-        if absent:
-            print(
-                f"  note: not yet built, so not started: {', '.join(sorted(absent))}",
-                flush=True,
-            )
-        return keep
-
-    world_tier = present(world_tier)
-    pipeline_tier = present(pipeline_tier)
-    reasoning_tier = present(reasoning_tier)
-
     if profile == "core":
         return [api, *world_tier[:1], ingest, web]
     if profile == "lite":
-        # One process hosting every consumer: ~300 MB instead of ~5 GB.
+        # Consumers share one interpreter; actual memory depends on selected models and load.
         return [
             api,
             ProcessSpec(
                 name="allinone",
                 command=[sys.executable, "-m", "sio_core.allinone"],
                 tier=2,
-                optional=True,
+                health_port=ports.get("allinone", 8120),
+                optional=False,
             ),
+            python_service("mcp", ports.get("mcp", 8112), 3, args=("--http",)),
             ingest,
             web,
         ]
@@ -221,6 +182,7 @@ class Supervisor:
         }
         self.stopping = asyncio.Event()
         self.started_at = time.monotonic()
+        self.failed = False
 
     # ------------------------------------------------------------------- utilities
     def say(self, name: str, message: str) -> None:
@@ -229,11 +191,7 @@ class Supervisor:
         print(f"{prefix} | {message}", flush=True)
 
     def entry_point_exists(self, spec: ProcessSpec) -> bool:
-        """Is this process actually runnable yet?
-
-        Services arrive over several phases; a process table that refuses to start because a
-        Phase 4 service does not exist would make the repo unusable in Phase 1.
-        """
+        """Check that the selected profile's dependencies are installed before launch."""
         if spec.name == "web":
             return (REPO_ROOT / "web" / "package.json").exists() and (
                 REPO_ROOT / "web" / "node_modules"
@@ -255,17 +213,31 @@ class Supervisor:
 
         deadline = time.monotonic() + timeout_s
         url = f"http://127.0.0.1:{spec.health_port}/health"
+        last_diagnostic = "no HTTP response"
         async with httpx.AsyncClient(timeout=2.0) as client:
             while time.monotonic() < deadline:
                 if self.stopping.is_set():
                     return False
                 process = self.processes.get(spec.name)
                 if process is not None and process.returncode is not None:
+                    self.say(
+                        spec.name,
+                        f"exited before readiness; inspect {LOG_DIR / (spec.name + '.log')}",
+                    )
                     return False
                 with contextlib.suppress(Exception):
                     response = await client.get(url)
-                    if response.status_code == 200:
-                        payload = response.json()
+                    payload = response.json()
+                    last_diagnostic = json.dumps(
+                        {
+                            "http_status": response.status_code,
+                            "status": payload.get("status"),
+                            "checks": payload.get("checks"),
+                            "failures": payload.get("failures"),
+                        },
+                        sort_keys=True,
+                    )
+                    if response.status_code == 200 and payload.get("status") == "ok":
                         self.say(
                             spec.name,
                             f"healthy on :{spec.health_port} (status={payload.get('status', '?')})",
@@ -273,7 +245,8 @@ class Supervisor:
                         return True
                 await asyncio.sleep(0.4)
         self.say(
-            spec.name, f"did not become healthy on :{spec.health_port} within {timeout_s:.0f}s"
+            spec.name,
+            f"did not become healthy on :{spec.health_port} within {timeout_s:.0f}s: {last_diagnostic}",
         )
         return False
 
@@ -289,7 +262,7 @@ class Supervisor:
     async def start(self, spec: ProcessSpec) -> bool:
         if not self.entry_point_exists(spec):
             if spec.optional:
-                self.say(spec.name, "not built yet — skipping")
+                self.say(spec.name, "optional entry point missing — skipping")
                 return True
             self.say(spec.name, "entry point missing")
             return False
@@ -385,6 +358,8 @@ class Supervisor:
                 spec.name,
                 f"not restarting: {count} failures already. see .sio/logs/{spec.name}.log",
             )
+            self.failed = True
+            self.stopping.set()
             return
         self.restarts[spec.name] = count + 1
         backoff = min(30.0, 2.0**count)
@@ -405,8 +380,11 @@ class Supervisor:
                 break
             batch = [spec for spec in self.specs if spec.tier == tier]
             print(f"\n=== tier {tier}: {', '.join(spec.name for spec in batch)} ===", flush=True)
-            for spec in batch:
-                await self.start(spec)
+            starts = [await self.start(spec) for spec in batch]
+            if not all(starts):
+                self.failed = True
+                await self.shutdown()
+                return 1
             # Only wait on processes that actually launched. Health-waiting a service that was
             # skipped as "not built yet" would add 30 seconds per phase-pending service.
             launched = [spec for spec in batch if spec.name in self.processes]
@@ -416,16 +394,19 @@ class Supervisor:
             ]
             if unhealthy:
                 print(f"!!! unhealthy in tier {tier}: {', '.join(unhealthy)}", flush=True)
+                self.failed = True
+                await self.shutdown()
+                return 1
 
         self._write_state()
         running = [name for name, p in self.processes.items() if p.returncode is None]
         if not running:
             print(
-                "\nnothing to run: none of this profile's services are built yet.\n"
-                "  see the roadmap in README.md, or try:  just doctor\n",
+                "\nnothing to run: no processes matched this profile/selection.\n"
+                "  check --only names or run: just doctor\n",
                 flush=True,
             )
-            return 0
+            return 1
         print(
             f"\n{len(running)} processes running: {', '.join(running)}\n"
             f"logs: .sio/logs/  ·  stop: just stop (or Ctrl-C)\n",
@@ -434,7 +415,7 @@ class Supervisor:
 
         await self.stopping.wait()
         await self.shutdown()
-        return 0
+        return 1 if self.failed else 0
 
     async def shutdown(self) -> None:
         print("\nstopping...", flush=True)
@@ -692,13 +673,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--only", default="", help="comma-separated subset of service names")
     args = parser.parse_args(argv)
 
-    if args.stop:
-        return stop_detached()
-
     from sio_core.config import get_settings
 
     cfg = get_settings()
-    cfg.ensure_dirs()
+    # Resolve .env consistently for start and stop, including calls outside the Justfile.
+    global STATE_DIR, LOG_DIR, RUN_DIR, SUPERVISOR_STATE
+    STATE_DIR = cfg.data_dir if cfg.data_dir.is_absolute() else REPO_ROOT / cfg.data_dir
+    LOG_DIR = STATE_DIR / "logs"
+    RUN_DIR = STATE_DIR / "run"
+    SUPERVISOR_STATE = RUN_DIR / "supervisor.json"
+    if args.stop:
+        return stop_detached()
+    if not args.list:
+        cfg.ensure_dirs()
     ports = {
         name: cfg.port_for(name)
         for name in (
@@ -721,6 +708,8 @@ def main(argv: list[str] | None = None) -> int:
             "missions",
             "analytics",
             "governance",
+            "webhooks",
+            "allinone",
         )
     }
     specs = build_process_table(args.profile, ports, cfg.web_port)

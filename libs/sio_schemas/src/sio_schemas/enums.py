@@ -14,6 +14,7 @@ class Topic(StrEnum):
     """
 
     RAW_FRAMES = "raw.frames"
+    FRAMES_READY = "frames.ready"
     RAW_GPS = "raw.gps"
     RAW_IOT = "raw.iot"
     RAW_AUDIO = "raw.audio"

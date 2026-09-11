@@ -54,6 +54,7 @@ PUBLIC_PATHS: tuple[str, ...] = (
     "/api/health",
     "/metrics",
     "/auth/dev/token",
+    "/auth/config",
     "/docs",
     "/redoc",
     "/openapi.json",
@@ -361,7 +362,10 @@ class KeycloakOidcAuth:
                 "keycloak auth needs python-jose: uv sync --extra keycloak",
             ) from exc
 
-        header = jose_jwt.get_unverified_header(token)
+        try:
+            header = jose_jwt.get_unverified_header(token)
+        except Exception as exc:
+            raise PolicyDenied("authenticate", "token", "malformed bearer token") from exc
         kid = header.get("kid")
         await self._refresh_jwks()
         if kid not in self._jwks:

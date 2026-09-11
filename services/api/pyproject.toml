@@ -7,6 +7,10 @@ license = { text = "Apache-2.0" }
 dependencies = [
     "sio-core",
     "sio-schemas",
+    "sio-perception",
+    "opencv-python-headless>=4.10",
+    "numpy>=2.0",
+    "pillow>=11.0",
     "strawberry-graphql[fastapi]>=0.250",
 ]
 
@@ -20,3 +24,4 @@ packages = ["src/sio_api"]
 [tool.uv.sources]
 sio-core = { workspace = true }
 sio-schemas = { workspace = true }
+sio-perception = { workspace = true }

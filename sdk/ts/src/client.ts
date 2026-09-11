@@ -1,26 +1,13 @@
-/**
- * A typed TypeScript client for the SIO API (PRD M22, Phase 6).
- *
- * The types come from `./generated/api.d.ts`, generated from the running API's OpenAPI schema, which is itself
- * generated from the Pydantic models the Python SDK returns. So the two clients cannot disagree about a field
- * name without one of them failing to build.
- *
- * That matters because this platform shipped the alternative: a hand-written TypeScript type describing what its
- * author *believed* the API returned. The API changed, the console read a field that no longer existed, and
- * nothing failed — `undefined` renders as nothing rather than as an error. A silently blank panel is the worst
- * possible failure mode, because it looks like "no data" rather than "wrong code".
- *
- * What generation cannot produce is the streaming helper: **SSE is not expressible in OpenAPI**. That is
- * hand-written below, and it is where the interesting bug lives.
- */
+/** Shared HTTP client for the console and integrations.
+ * Query shapes come from OpenAPI; serialized response contracts live in contracts.ts.
+ * Credentials are supplied by an identity provider, or minted for development callers. */
 
-import type { components, paths } from "./generated/api.d.ts";
+import { readSse } from "./sse.ts";
+import type { paths } from "./generated/api.d.ts";
 
-export type Entity = components["schemas"]["Entity"];
-export type Event = components["schemas"]["Event"];
-export type Alert = components["schemas"]["Alert"];
-export type Decision = components["schemas"]["Decision"];
-
+import type { Alert, Decision, Entity, SioEvent } from "./contracts.ts";
+export type { Alert, Decision, Entity };
+export type Event = SioEvent;
 /** Query parameters for an endpoint, taken from the generated schema rather than restated. */
 type Query<P extends keyof paths> = paths[P] extends { get: { parameters: { query?: infer Q } } }
   ? Q
@@ -30,6 +17,8 @@ export interface SioClientOptions {
   url?: string;
   /** A token from your identity provider. Omit in dev and one is minted. */
   token?: string;
+  /** Supply/renew credentials externally; never fall back to the dev issuer in this mode. */
+  tokenProvider?: (forceRefresh: boolean) => Promise<string>;
   subject?: string;
   roles?: string[];
   clearance?: number;
@@ -46,12 +35,12 @@ export interface SioClientOptions {
 export class SioApiError extends Error {
   constructor(
     readonly status: number,
-    readonly detail: string,
+    readonly detail: string | Record<string, unknown>,
     readonly url: string,
     readonly action?: string,
     readonly rule?: string,
   ) {
-    super(`${status}: ${detail}`);
+    super(typeof detail === "string" ? detail : String(detail.message ?? `HTTP ${status}`));
     this.name = "SioApiError";
   }
 
@@ -88,7 +77,10 @@ export class SioClient {
    * The in-flight promise is shared, so five concurrent requests on a cold client mint **one** token rather than
    * five — which is wasteful and makes the audit trail read as five separate sign-ins.
    */
-  async authenticate(): Promise<string> {
+  async authenticate(forceRefresh = false): Promise<string> {
+    if (this.options.tokenProvider) return this.options.tokenProvider(forceRefresh);
+    if (this.options.token) return this.options.token;
+    if (forceRefresh) { this.token = ""; this.expiresAt = 0; }
     if (this.token && Date.now() < this.expiresAt - RENEW_MARGIN_MS) return this.token;
     if (this.minting) return this.minting;
 
@@ -129,7 +121,7 @@ export class SioClient {
   async request<T>(
     method: string,
     path: string,
-    init: { query?: Record<string, unknown>; body?: unknown } = {},
+    init: { query?: Record<string, unknown>; body?: unknown; raw?: RequestInit } = {},
   ): Promise<T> {
     for (const attempt of [1, 2]) {
       const query = new URLSearchParams();
@@ -138,20 +130,22 @@ export class SioClient {
       }
       const suffix = query.toString() ? `?${query}` : "";
       const response = await this.fetchImpl(`${this.url}${path}${suffix}`, {
+        ...init.raw,
         method,
-        headers: {
-          Authorization: `Bearer ${await this.authenticate()}`,
+        headers: new Headers({
           ...(init.body === undefined ? {} : { "content-type": "application/json" }),
-        },
-        body: init.body === undefined ? undefined : JSON.stringify(init.body),
+          ...Object.fromEntries(new Headers(init.raw?.headers)),
+          Authorization: `Bearer ${await this.authenticate(attempt > 1)}`,
+        }),
+        body: init.body === undefined ? init.raw?.body : JSON.stringify(init.body),
       });
 
       if (response.status === 401 && attempt === 1) {
-        this.token = "";
-        this.expiresAt = 0;
+        if (this.options.token && !this.options.tokenProvider) throw await errorFrom(response);
         continue;
       }
       if (!response.ok) throw await errorFrom(response);
+      if (response.status === 204) return undefined as T;
       return (await response.json()) as T;
     }
     throw new Error("unreachable");
@@ -172,7 +166,7 @@ export class SioClient {
   }
 
   async entity(entityId: string): Promise<Entity> {
-    return this.request<Entity>("GET", `/api/entities/${entityId}`);
+    return this.request<Entity>("GET", `/api/entities/${encodeURIComponent(entityId)}`);
   }
 
   async events(query: Query<"/api/events"> = {}): Promise<Event[]> {
@@ -205,7 +199,7 @@ export class SioClient {
    * not a back door.
    */
   async approve(decisionId: string, optionId?: string): Promise<unknown> {
-    return this.request("POST", `/api/decisions/${decisionId}/approve`, {
+    return this.request("POST", `/api/decisions/${encodeURIComponent(decisionId)}/approve`, {
       body: { option_id: optionId, approved_by: this.options.subject ?? "sdk" },
     });
   }
@@ -246,74 +240,41 @@ export class SioClient {
    *       console.log(message.kind, message.payload);
    *     }
    *
-   * **The part generation cannot give you, and the part that has a bug worth knowing about.**
-   *
-   * `EventSource` is the obvious tool and it is wrong here for two reasons. First, it cannot send an
-   * `Authorization` header — which is why the console authenticates its stream by cookie, and why an SDK that
-   * takes a bearer token cannot use it at all. Second, and more insidiously:
-   *
-   * > **`EventSource.onmessage` fires only for frames with no `event:` name.**
-   *
-   * A reader that handles only `onmessage` receives *nothing* from a server that names its frames. This
-   * platform's console shipped exactly that, and it presented as a live map that never updated — no error, no
-   * warning, just a map that was always empty. The reader below handles both named and unnamed frames.
-   *
-   * A malformed frame is skipped rather than thrown, because a caller inside `for await` cannot recover from an
-   * exception mid-loop and the next frame is almost certainly fine.
+   * Uses the same bearer-authenticated SSE parser as the browser console.
+   * Malformed JSON frames are skipped; interrupted connections retry with bounded backoff.
    */
   async *subscribe(
     ...topics: string[]
   ): AsyncGenerator<StreamMessage, void, undefined> {
     const query = topics.length ? `?topics=${encodeURIComponent(topics.join(","))}` : "";
     let backoff = 500;
+    let forceRefresh = false;
 
     for (;;) {
       try {
         const response = await this.fetchImpl(`${this.url}/stream${query}`, {
-          headers: { Authorization: `Bearer ${await this.authenticate()}` },
+          headers: { Authorization: `Bearer ${await this.authenticate(forceRefresh)}` },
         });
         if (!response.ok || !response.body) throw await errorFrom(response);
 
         backoff = 500;
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        let frameName = "";
-
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-
-          // Split on newlines, keeping the trailing partial line. A chunk boundary lands mid-line often
-          // enough that not doing this produces intermittent JSON parse failures — the kind that look random.
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-
-          for (const line of lines) {
-            const trimmed = line.trimEnd();
-            if (trimmed.startsWith("event:")) {
-              frameName = trimmed.slice(6).trim();
-            } else if (trimmed.startsWith("data:")) {
-              const raw = trimmed.slice(5).trim();
-              if (!raw) continue;
-              try {
-                const payload = JSON.parse(raw) as Record<string, unknown>;
-                yield {
-                  kind: String(payload.kind ?? frameName ?? "unknown"),
-                  payload: (payload.payload ?? payload) as Record<string, unknown>,
-                  raw: payload,
-                };
-              } catch {
-                continue;
-              }
-            } else if (trimmed === "") {
-              frameName = "";
-            }
-          }
+        forceRefresh = false;
+        for await (const frame of readSse(response.body)) {
+          try {
+            const payload = JSON.parse(frame.data) as Record<string, unknown>;
+            yield {
+              kind: String(payload.kind ?? frame.event ?? "unknown"),
+              payload: (payload.payload ?? payload) as Record<string, unknown>,
+              raw: payload,
+            };
+          } catch { /* One malformed frame must not tear down the stream. */ }
         }
+
       } catch (error) {
-        if (error instanceof SioApiError && error.isPermissionError) throw error;
+        if (error instanceof SioApiError) {
+          if (error.isPermissionError || (error.isAuthError && (this.options.token || forceRefresh))) throw error;
+          if (error.isAuthError) forceRefresh = true;
+        }
       }
 
       // Reconnect with backoff. A stream that gives up on the first network blip is one every caller has to
@@ -340,12 +301,12 @@ export interface CopilotAnswer {
 }
 
 async function errorFrom(response: Response): Promise<SioApiError> {
-  let detail = response.statusText;
+  let detail: string | Record<string, unknown> = response.statusText;
   let action: string | undefined;
   let rule: string | undefined;
   try {
     const body = (await response.json()) as Record<string, unknown>;
-    if (typeof body.detail === "string") detail = body.detail;
+    if (typeof body.detail === "string" || (body.detail && typeof body.detail === "object")) detail = body.detail as string | Record<string, unknown>;
     if (typeof body.action === "string") action = body.action;
     if (typeof body.rule === "string") rule = body.rule;
   } catch {

@@ -13,7 +13,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import * as session from "../lib/session";
+import { useSioStore } from "../store";
 import { api } from "../lib/api";
+import { mergeAlertSnapshot } from "../lib/snapshot";
 import type { Alert } from "../types";
 import { fromAlert, type Explainable } from "./ExplanationDrawer";
 
@@ -35,7 +38,7 @@ function ageOf(iso: string): string {
   return `${(seconds / 3600).toFixed(1)}h`;
 }
 
-export function AlertsPanel({ onExplain }: { onExplain: (subject: Explainable) => void }) {
+export function AlertsPanel({ onExplain, onInvestigate }: { onExplain: (subject: Explainable) => void; onInvestigate?: (alert: Alert) => void }) {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [groups, setGroups] = useState<
     Array<{ kind: string; count: number; max_score: number; alerts?: Alert[] }>
@@ -45,40 +48,35 @@ export function AlertsPanel({ onExplain }: { onExplain: (subject: Explainable) =
   const [busy, setBusy] = useState<string | null>(null);
   /** Alerts this operator has just acted on, kept visible so their own action does not vanish. */
   const justActed = useRef<Set<string>>(new Set());
+  const loadGeneration = useRef(0);
 
   const load = useCallback(async () => {
+    const run = ++loadGeneration.current;
+    const alertsAtStart = new Map(useSioStore.getState().alerts.map(alert => [alert.alert_id, alert]));
     try {
       const state = filter === "live" ? undefined : filter;
       const response = await api.alertInbox({ state, limit: 100 });
-      // "live" is open + escalated, which the API cannot express in one state filter. Filtering here keeps
-      // the default view free of resolved noise without inventing a server-side pseudo-state.
-      const rows =
-        filter === "live"
-          ? response.alerts.filter(
-              (alert) =>
-                alert.state === "open" ||
-                alert.state === "escalated" ||
-                // Keep what this operator just acknowledged. Dropping it on the next poll made their own
-                // action visible for about four seconds and then vanish, which reads as the click having
-                // failed. It leaves on the poll after they navigate away.
-                justActed.current.has(alert.alert_id),
-            )
-          : response.alerts;
+      if (run !== loadGeneration.current) return;
+      const store = useSioStore.getState();
+      const merged = mergeAlertSnapshot(response.alerts, store.alerts, alertsAtStart);
+      store.setAlerts(merged);
+      const rows = merged.filter(alert => filter === "live"
+        ? alert.state === "open" || alert.state === "escalated" || justActed.current.has(alert.alert_id)
+        : alert.state === filter);
       setAlerts(rows);
       setGroups(response.groups ?? []);
       setError(null);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      if (run === loadGeneration.current) setError(cause instanceof Error ? cause.message : String(cause));
     }
   }, [filter]);
-
   useEffect(() => {
     // Switching filter is a deliberate change of view, so the "keep what I just acted on" set is dropped:
     // carrying it over would leak acknowledged rows into a filter that explicitly excludes them.
     justActed.current.clear();
     void load();
     const timer = window.setInterval(() => void load(), REFRESH_MS);
-    return () => window.clearInterval(timer);
+    return () => { loadGeneration.current += 1; window.clearInterval(timer); };
   }, [load]);
 
   const act = useCallback(
@@ -94,6 +92,7 @@ export function AlertsPanel({ onExplain }: { onExplain: (subject: Explainable) =
         // Reconcile against what the server said, rather than assuming. A row that shows "acknowledged"
         // when the write failed is worse than one that did not appear to respond.
         justActed.current.add(updated.alert_id);
+        useSioStore.getState().upsertAlert(updated);
         setAlerts((current) =>
           current.map((row) => (row.alert_id === updated.alert_id ? updated : row)),
         );
@@ -110,7 +109,7 @@ export function AlertsPanel({ onExplain }: { onExplain: (subject: Explainable) =
   const explain = useCallback(
     (alert: Alert) =>
       onExplain(
-        fromAlert(alert, [
+        fromAlert(alert, session.can("alerts.write") ? [
           ...(alert.state === "open" || alert.state === "escalated"
             ? [{ label: "Acknowledge", onClick: () => void act(alert, "ack"), primary: true }]
             : []),
@@ -120,7 +119,7 @@ export function AlertsPanel({ onExplain }: { onExplain: (subject: Explainable) =
           ...(alert.state === "open"
             ? [{ label: "Escalate", onClick: () => void act(alert, "escalate"), danger: true }]
             : []),
-        ]),
+        ] : []),
       ),
     [act, onExplain],
   );
@@ -194,9 +193,9 @@ export function AlertsPanel({ onExplain }: { onExplain: (subject: Explainable) =
           <li
             key={alert.alert_id}
             className={`alert-row sev-${alert.severity} state-${alert.state}`}
-            onClick={() => explain(alert)}
+            onClick={() => onInvestigate ? onInvestigate(alert) : explain(alert)}
             onKeyDown={(event) => {
-              if (event.key === "Enter") explain(alert);
+              if (event.key === "Enter" && event.target === event.currentTarget) { if (onInvestigate) onInvestigate(alert); else explain(alert); }
             }}
             tabIndex={0}
             role="button"
@@ -229,10 +228,11 @@ export function AlertsPanel({ onExplain }: { onExplain: (subject: Explainable) =
               </div>
             </div>
             <div className="alert-actions" onClick={(event) => event.stopPropagation()}>
+              <button type="button" onClick={() => explain(alert)}>why?</button>
               {(alert.state === "open" || alert.state === "escalated") && (
                 <button
                   type="button"
-                  disabled={busy === alert.alert_id}
+                  disabled={busy === alert.alert_id || !session.can("alerts.write")}
                   onClick={() => void act(alert, "ack")}
                   title="Acknowledge — stops the escalation timer"
                 >
@@ -242,7 +242,7 @@ export function AlertsPanel({ onExplain }: { onExplain: (subject: Explainable) =
               {alert.state === "open" && (
                 <button
                   type="button"
-                  disabled={busy === alert.alert_id}
+                  disabled={busy === alert.alert_id || !session.can("alerts.write")}
                   onClick={() => void act(alert, "escalate")}
                   title="Escalate now"
                 >
@@ -252,7 +252,7 @@ export function AlertsPanel({ onExplain }: { onExplain: (subject: Explainable) =
               {alert.state !== "resolved" && (
                 <button
                   type="button"
-                  disabled={busy === alert.alert_id}
+                  disabled={busy === alert.alert_id || !session.can("alerts.write")}
                   onClick={() => void act(alert, "resolve")}
                   title="Resolve"
                 >

@@ -61,21 +61,12 @@ def test_a_deliberately_changed_seam_survives_the_profile(pristine_env: None) ->
     assert settings.bus_backend == "kafka"
 
 
-def test_the_profile_rule_is_default_comparison_not_fields_set(pristine_env: None) -> None:
-    """The bug that cost a debugging session, pinned.
-
-    This repository ships a `.env` listing EVERY field with its default value, as documentation. So
-    `model_fields_set` contains all ~130 fields on every run, and a profile gated on "was this supplied?" could
-    never apply anything. Pydantic was reporting the truth; the truth was not the question I meant to ask.
-
-    Asserted through behaviour: a `Settings` built with every profile field explicitly passed at its default
-    must still take the profile, which is only true under the default-comparison rule.
-    """
+def test_explicit_defaults_override_profile(pristine_env: None) -> None:
+    """An operator's explicit selection is respected, even when it equals a code default."""
     at_defaults = {field: Settings.model_fields[field].default for field in GPU_PROFILE}
     settings = Settings(_env_file=None, profile="gpu", **at_defaults)
-    assert settings.bus_backend == "kafka", (
-        "the profile did not apply to a field passed at its default — the rule has regressed to fields_set"
-    )
+    for field, expected in at_defaults.items():
+        assert getattr(settings, field) == expected
 
 
 def test_every_profile_value_is_legal_for_its_seam() -> None:
@@ -425,10 +416,10 @@ def test_the_registry_selects_the_compat_adapter_under_the_gpu_profile(pristine_
     assert llm.url == "http://127.0.0.1:8001/v1"
 
 
-def test_the_registry_still_selects_ollama_by_default(pristine_env: None) -> None:
+def test_the_registry_selects_scripted_demo_by_default(pristine_env: None) -> None:
     from sio_core import get_llm
 
-    assert type(get_llm(Settings(_env_file=None))).__name__ == "OllamaLLM"
+    assert type(get_llm(Settings(_env_file=None))).__name__ == "ScriptedLLM"
 
 
 # --- the stubs ----------------------------------------------------------------------------------------

@@ -96,7 +96,7 @@ bootstrap_macos_datastores() {
   macos_brew_install "${SIO_BREW_POSTGIS}"
   macos_brew_install "${SIO_BREW_PGVECTOR}"
   macos_brew_install "${SIO_BREW_REDIS}"
-  if [ "${PROFILE}" != "minimal" ]; then
+  if [ "${PROFILE}" = "full" ]; then
     macos_brew_install "${SIO_BREW_NEO4J}"
     macos_brew_install "${SIO_BREW_MINIO}"
     macos_brew_install "${SIO_BREW_TEMPORAL}"
@@ -167,7 +167,7 @@ install_temporal_binary() {
     chmod +x "${SIO_BIN_DIR}/temporal" 2>/dev/null || true
     ok "temporal cli installed under .sio/bin"
   else
-    warn "temporal cli download failed; workflows will fall back to SIO_WORKFLOW_RUNNER=inline"
+    warn "temporal cli download failed; use SIO_WORKFLOW_RUNNER=inline (Temporal execution is not implemented)"
   fi
 }
 
@@ -183,7 +183,7 @@ install_ollama_linux() {
 bootstrap_linux_datastores() {
   have apt-get || die "this Linux path expects apt-get (Debian/Ubuntu)"
   linux_apt_install "${SIO_APT_POSTGRES}" "${SIO_APT_POSTGIS}" "${SIO_APT_PGVECTOR}" "${SIO_APT_REDIS}"
-  if [ "${PROFILE}" != "minimal" ]; then
+  if [ "${PROFILE}" = "full" ]; then
     linux_install_neo4j
     install_minio_binary
     install_temporal_binary
@@ -232,5 +232,5 @@ install_python_deps
 install_web_deps
 
 log "bootstrap complete"
-info "next:  just services    # start postgres, redis, neo4j, minio"
+info "next:  just services    # start postgres and redis"
 info "then:  just doctor      # verify everything, including datastore initialisation"

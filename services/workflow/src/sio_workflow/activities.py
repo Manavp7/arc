@@ -46,6 +46,7 @@ class ActivityContext:
     The demo default for anything that would touch a real gate or a real drone. A workflow engine that can
     only be tested by actually closing a gate is a workflow engine nobody tests.
     """
+    bearer_token: str = ""
     client: httpx.AsyncClient | None = None
     #: Effects recorded per idempotency key, so a retry returns the first result rather than acting again.
     ledger: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -80,7 +81,8 @@ def idempotent(function: Any) -> Any:
             log.info("workflow.activity_replayed", activity=function.__name__, key=key)
             return recorded
         result = await function(context, step_id, **arguments)
-        context.ledger[key] = result
+        if not result.get("error"):
+            context.ledger[key] = result
         return result
 
     wrapper.__name__ = function.__name__
@@ -111,7 +113,9 @@ async def dispatch_drone(
     return {
         "dispatched": False,
         "zone_id": zone,
-        "note": "no drone command interface in this build; the step is recorded as attempted",
+        "effect": "unsupported",
+        "error": "no drone command interface in this build",
+        "note": "no drone command interface in this build; no dispatch occurred",
         "ts": utc_now().isoformat(),
     }
 
@@ -120,9 +124,12 @@ async def dispatch_drone(
 async def recall_drone(context: ActivityContext, step_id: str, **arguments: Any) -> dict[str, Any]:
     """Undo a dispatch: bring the drone back."""
     return {
-        "recalled": True,
+        "recalled": False,
         "zone_id": arguments.get("zone_id") or context.zone_id,
         "dry_run": context.dry_run,
+        "effect": "dry_run" if context.dry_run else "unsupported",
+        "would": "recall the patrol drone",
+        "error": None if context.dry_run else "no drone command interface in this build",
     }
 
 
@@ -138,7 +145,10 @@ async def notify_security(
         f"{context.zone_id or 'the yard'}.",
     )
     return {
-        "notified": team,
+        "team": team,
+        "notified": False,
+        "effect": "dry_run" if context.dry_run else "recorded_intent",
+        "note": "recorded in the workflow event feed; no external notification was sent",
         "message": message,
         "channel": "event_feed",
         "dry_run": context.dry_run,
@@ -158,6 +168,8 @@ async def close_gate(context: ActivityContext, step_id: str, **arguments: Any) -
         "closed": False,
         "dry_run": context.dry_run,
         "note": "no gate actuator in this build; the intent is recorded",
+        "effect": "dry_run" if context.dry_run else "unsupported",
+        "error": None if context.dry_run else "no gate actuator in this build",
         "would": f"close {gate}",
     }
 
@@ -170,7 +182,14 @@ async def open_gate(context: ActivityContext, step_id: str, **arguments: Any) ->
     blocked and no incident record says why.
     """
     gate = arguments.get("gate_id") or _nearest_gate(context.zone_id)
-    return {"gate_id": gate, "reopened": True, "dry_run": context.dry_run}
+    return {
+        "gate_id": gate,
+        "reopened": False,
+        "dry_run": context.dry_run,
+        "effect": "dry_run" if context.dry_run else "unsupported",
+        "would": f"reopen {gate}",
+        "error": None if context.dry_run else "no gate actuator in this build",
+    }
 
 
 @idempotent
@@ -182,6 +201,8 @@ async def create_incident(
     incident_id = f"inc_{context.run_id[-8:]}_{step_id}"
     return {
         "incident_id": incident_id,
+        "effect": "dry_run" if context.dry_run else "workflow_record",
+        "note": "incident details are stored in this workflow step; no external incident was opened",
         "kind": kind,
         "zone_id": context.zone_id,
         "trigger_event": context.trigger_event_id,
@@ -202,8 +223,9 @@ async def close_incident(
     """
     return {
         "incident_id": arguments.get("incident_id", f"inc_{context.run_id[-8:]}"),
-        "resolved": True,
-        "reason": "the response was rolled back",
+        "resolved": False,
+        "effect": "dry_run" if context.dry_run else "recorded_intent",
+        "reason": "the response was rolled back; no external incident was changed",
         "dry_run": context.dry_run,
     }
 
@@ -220,13 +242,22 @@ async def generate_report(
     started = time.perf_counter()
     events: list[dict[str, Any]] = []
     try:
+        if not context.bearer_token:
+            raise ValueError("no API credential configured for this report")
         client = await context.http()
         response = await client.get(
-            f"{context.api_url}/api/events", params={"limit": 20}, timeout=6.0
+            f"{context.api_url}/api/events",
+            params={"limit": 20},
+            headers={"Authorization": f"Bearer {context.bearer_token}"},
+            timeout=6.0,
         )
-        if response.status_code == 200:
-            events = response.json()
-    except httpx.HTTPError as exc:
+        response.raise_for_status()
+        events = response.json()
+        if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
+            raise ValueError("events API returned an invalid event list")
+        if any(event.get("tenant_id") != context.tenant_id for event in events):
+            raise ValueError("events API returned data outside the workflow tenant")
+    except (httpx.HTTPError, ValueError) as exc:
         # An optional step, so this is recorded and the run continues. It is still reported: a report that
         # silently contained nothing would be worse than a missing one.
         return {
@@ -238,8 +269,11 @@ async def generate_report(
     relevant = [
         event
         for event in events
-        if event.get("zone_id") == context.zone_id
-        or context.trigger_event_id in (event.get("event_id"), None)
+        if (context.zone_id is not None and event.get("zone_id") == context.zone_id)
+        or (
+            context.trigger_event_id is not None
+            and event.get("event_id") == context.trigger_event_id
+        )
     ][:10]
     return {
         "report": {

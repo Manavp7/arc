@@ -12,6 +12,7 @@
  */
 
 import { Component, type ReactNode, Suspense, lazy } from "react";
+import { useSioStore } from "../store";
 
 // The dynamic import. Everything Cesium is behind this arrow function and nothing else references TwinView.
 const TwinView = lazy(() => import("./TwinView"));
@@ -46,6 +47,13 @@ class TwinBoundary extends Component<
 }
 
 export function TwinPanel() {
+  const replayAt = useSioStore(state => state.replayAt);
+  if (replayAt) return <div className="twin-fallback" role="status">
+    <strong>3D coverage is available in LIVE.</strong>
+    <p className="muted">You are investigating {new Date(replayAt).toLocaleString()}. The 2D map and event feed show this historical instant.</p>
+    <p className="muted">Camera coverage geometry is not versioned for replay. Return to LIVE to open the 3D scene.</p>
+    <button className="ghost" onClick={() => useSioStore.getState().returnToLive()}>Return to LIVE</button>
+  </div>;
   return (
     <TwinBoundary>
       <Suspense

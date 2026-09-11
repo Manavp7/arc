@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
 from typing import Any
@@ -19,11 +20,11 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from sio_core import MessageContext, SioService, describe_error, get_blob, get_pg_pool
-from sio_core.authn import ServiceIdentity
+from sio_core.guard import bearer_token, principal_of
 from sio_core.telemetry import set_trace_id
 from sio_core.tenancy import current_tenant
 from sio_schemas import (
@@ -45,6 +46,7 @@ from .timeline import (
     TimelineReader,
     plan_replay,
 )
+from .workbench_store import WorkbenchConflict, WorkbenchStore
 
 
 class AlertsResponse(BaseModel):
@@ -97,15 +99,31 @@ class ApiService(SioService):
         self.replays = ReplayRegistry()
         self.blob = get_blob(self.settings)
         self.hub = StreamHub(self.bus)
+        self.workbench = WorkbenchStore(self.pool)
+        self.video_review: Any = None
+        self.evidence_packages: Any = None
+        self.notifications: Any = None
         global _hub
         _hub = self.hub
 
     async def setup(self) -> None:
         await self.pool.open()
+        if self.video_review:
+            await self.video_review.start()
+        if self.evidence_packages:
+            await self.evidence_packages.start()
+        if self.notifications:
+            await self.notifications.start()
         await self.hub.start()
         self.log.info("api.ready", port=self.port, base_url=self.settings.api_base_url)
 
     async def teardown(self) -> None:
+        if self.notifications:
+            await self.notifications.close()
+        if self.video_review:
+            await self.video_review.close()
+        if self.evidence_packages:
+            await self.evidence_packages.close()
         await self.hub.stop()
 
     async def on_message(
@@ -155,6 +173,42 @@ class ApiService(SioService):
         self._register_stream(app)
         self._register_media(app)
         self._register_graphql(app)
+        from .operations import install_operations_routes
+
+        install_operations_routes(app, self.settings)
+        from .camera_commissioning import install_camera_commissioning_routes
+        from .case_inbox import install_inbox_routes
+        from .cases import install_case_routes
+        from .evaluations import install_evaluation_routes
+        from .evidence_comparison import install_evidence_comparison_routes
+        from .evidence_packages import install_evidence_package_routes
+        from .notifications import install_notification_routes
+        from .recorded_insights import install_recorded_insight_routes
+        from .review_bookmarks import install_review_bookmark_routes
+        from .rule_presets import install_rule_preset_routes
+        from .sites import install_site_routes
+        from .video_review import install_video_routes
+
+        @app.exception_handler(WorkbenchConflict)
+        async def revision_conflict(request: Request, error: WorkbenchConflict) -> JSONResponse:
+            return JSONResponse(status_code=409, content={"detail": str(error)})
+
+        install_case_routes(app, self.settings, self.workbench, self.pool)
+        install_evidence_comparison_routes(app, self.workbench, self.pool)
+        install_site_routes(app, self.settings, self.workbench)
+        self.video_review = install_video_routes(app, self.settings, self.workbench)
+        install_inbox_routes(app, self.workbench, self.pool)
+        install_evaluation_routes(app, self.workbench)
+        install_rule_preset_routes(app, self.workbench)
+        install_review_bookmark_routes(app, self.workbench)
+        install_recorded_insight_routes(app, self.workbench)
+        install_camera_commissioning_routes(app, self.settings, self.workbench, self.pool)
+        self.evidence_packages = install_evidence_package_routes(
+            app, self.settings, self.workbench, self.pool
+        )
+        self.notifications = install_notification_routes(
+            app, self.settings, self.workbench, self.pool
+        )
 
     # ----------------------------------------------------------------------- REST
     def _register_rest(self, api: APIRouter) -> None:
@@ -229,6 +283,19 @@ class ApiService(SioService):
                 limit=limit,
                 offset=offset,
             )
+
+        @api.get("/events/{event_id}", response_model=Event)
+        async def get_event(event_id: str, request: Request) -> Event:
+            row = await self.pool.fetchrow(
+                "SELECT payload FROM events WHERE tenant_id = %s AND event_id = %s",
+                (current_tenant(), event_id),
+            )
+            if not row:
+                raise HTTPException(404, "Event not found")
+            event = Event.model_validate(row["payload"])
+            if not principal_of(request).may_see_zone(event.zone_id):
+                raise HTTPException(403, "Your zone access does not permit this event")
+            return event
 
         @api.get("/timeline", response_model=list[Event])
         async def timeline(
@@ -315,17 +382,22 @@ class ApiService(SioService):
             }
 
         @api.get("/replay/{replay_id}/stream")
-        async def stream_replay(replay_id: str) -> StreamingResponse:
+        async def stream_replay(request: Request, replay_id: str) -> StreamingResponse:
             """Stream reconstructed frames over SSE at the planned rate."""
-            session = self.replays.get(replay_id)
+            session = self.replays.get(replay_id, tenant_id=current_tenant())
             if session is None:
                 raise HTTPException(
                     status_code=404, detail=f"unknown or expired replay {replay_id!r}"
                 )
 
+            expires_at = principal_of(request).expires_at
+
             async def frames() -> AsyncIterator[bytes]:
                 try:
                     async for frame in self.timeline.replay_frames(session):
+                        if expires_at and time.time() >= expires_at:
+                            session.cancelled = True
+                            return
                         yield f"event: ReplayFrame\ndata: {json.dumps(frame)}\n\n".encode()
                     yield b"event: ReplayComplete\ndata: {}\n\n"
                 except asyncio.CancelledError:
@@ -342,11 +414,11 @@ class ApiService(SioService):
 
         @api.delete("/replay/{replay_id}")
         async def cancel_replay(replay_id: str) -> dict[str, Any]:
-            return {"cancelled": self.replays.cancel(replay_id)}
+            return {"cancelled": self.replays.cancel(replay_id, tenant_id=current_tenant())}
 
         @api.get("/replay")
         async def list_replays() -> dict[str, Any]:
-            return self.replays.describe()
+            return self.replays.describe(tenant_id=current_tenant())
 
         @api.get("/spatial/nearby")
         async def nearby(
@@ -397,8 +469,6 @@ class ApiService(SioService):
         #
         # Used only as a FALLBACK when a request arrives with no user token — an internal caller, a
         # background task. Forwarding a user's request uses the user's token; see the note in `_forward`.
-        identity = ServiceIdentity("api", self.settings)
-
         async def _forward(
             service: str,
             port: int,
@@ -411,22 +481,13 @@ class ApiService(SioService):
             # coroutine. ASYNC109 flags `timeout=` on an async def because callers reasonably expect the
             # latter.
             http_timeout_s: float = 15.0,
-            request: Request | None = None,
+            request: Request,
         ) -> Any:
             import httpx
 
             url = f"http://127.0.0.1:{port}{path}"
-            # THE CALLER'S TOKEN IS PROPAGATED, not replaced with the API's own.
-            #
-            # This is the difference between a proxy and a confused deputy. Substituting a service identity
-            # would make every downstream audit row read `service:api` — losing the only fact that matters
-            # after an incident, which is which person did it — and would scope the downstream query to the
-            # API's tenant rather than the caller's, which is a cross-tenant leak wearing a proxy costume.
-            #
-            # The service identity is the fallback, for the internal callers that legitimately have no user
-            # behind them.
-            inbound = request.headers.get("authorization") if request is not None else None
-            headers = {"Authorization": inbound} if inbound else identity.headers()
+            token = bearer_token(request)
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
             try:
                 async with httpx.AsyncClient(timeout=http_timeout_s) as client:
                     response = await client.request(
@@ -458,6 +519,43 @@ class ApiService(SioService):
                     detail=f"the {service} service is not reachable: {describe_error(exc)}",
                 ) from exc
 
+        @api.get("/sources", tags=["ingest"])
+        async def sources(request: Request) -> Any:
+            return await _forward("ingest", self.settings.ingest_port, "/sources", request=request)
+
+        @api.put("/sources/{source_id}", tags=["ingest"])
+        async def save_source(request: Request, source_id: str, body: dict[str, Any]) -> Any:
+            return await _forward(
+                "ingest",
+                self.settings.ingest_port,
+                f"/sources/{source_id}",
+                method="PUT",
+                body=body,
+                request=request,
+            )
+
+        @api.post("/sources/{source_id}/test", tags=["ingest"])
+        async def test_source(request: Request, source_id: str) -> Any:
+            return await _forward(
+                "ingest",
+                self.settings.ingest_port,
+                f"/sources/{source_id}/test",
+                method="POST",
+                http_timeout_s=25.0,
+                request=request,
+            )
+
+        @api.post("/sources/{source_id}/enabled", tags=["ingest"])
+        async def enable_source(request: Request, source_id: str, body: dict[str, Any]) -> Any:
+            return await _forward(
+                "ingest",
+                self.settings.ingest_port,
+                f"/sources/{source_id}/enabled",
+                method="POST",
+                body=body,
+                request=request,
+            )
+
         @api.get(
             "/alerts",
             tags=["alerts"],
@@ -485,7 +583,9 @@ class ApiService(SioService):
 
         @api.get("/alerts/{alert_id}", tags=["alerts"])
         async def alert_detail(request: Request, alert_id: str) -> Any:
-            return await _forward("alerts", self.settings.alerts_port, f"/alerts/{alert_id}")
+            return await _forward(
+                "alerts", self.settings.alerts_port, f"/alerts/{alert_id}", request=request
+            )
 
         @api.post("/alerts/{alert_id}/ack", tags=["alerts"])
         async def acknowledge_alert(
@@ -603,7 +703,9 @@ class ApiService(SioService):
 
         @api.get("/forecasts/latest", tags=["prediction"])
         async def latest_forecasts(request: Request) -> Any:
-            return await _forward("prediction", self.settings.prediction_port, "/forecasts/latest")
+            return await _forward(
+                "prediction", self.settings.prediction_port, "/forecasts/latest", request=request
+            )
 
         @api.get("/workflow/runs", tags=["workflow"])
         async def workflow_runs(request: Request, limit: int = Query(20, le=200)) -> Any:
@@ -795,15 +897,19 @@ class ApiService(SioService):
 
         @api.get("/workflow/playbooks", tags=["workflow"])
         async def workflow_playbooks(request: Request) -> Any:
-            return await _forward("workflow", self.settings.workflow_port, "/workflow/playbooks")
+            return await _forward(
+                "workflow", self.settings.workflow_port, "/workflow/playbooks", request=request
+            )
 
         @api.get("/agents", tags=["agents"])
         async def agents(request: Request) -> Any:
-            return await _forward("agents", self.settings.agents_port, "/agents")
+            return await _forward("agents", self.settings.agents_port, "/agents", request=request)
 
         @api.get("/agents/cycles", tags=["agents"])
         async def agent_cycles(request: Request) -> Any:
-            return await _forward("agents", self.settings.agents_port, "/agents/cycles")
+            return await _forward(
+                "agents", self.settings.agents_port, "/agents/cycles", request=request
+            )
 
         @api.post("/simulations", tags=["simulation"])
         async def run_simulation(request: Request, body: dict[str, Any]) -> Any:
@@ -918,6 +1024,7 @@ class ApiService(SioService):
 
         @api.get("/search/frames")
         async def search_frames(
+            request: Request,
             q: str,
             limit: int = Query(default=12, le=50),
             source_id: str | None = None,
@@ -928,21 +1035,14 @@ class ApiService(SioService):
             same model that embedded the frames. Two implementations would drift, and a search that
             embeds its query differently from its index returns confident nonsense.
             """
-            import httpx
-
-            url = f"http://127.0.0.1:{self.settings.worldmodel_port}/search/frames"
-            try:
-                async with httpx.AsyncClient(timeout=20.0) as client:
-                    response = await client.get(
-                        url, params={"q": q, "limit": limit, "source_id": source_id}
-                    )
-                    response.raise_for_status()
-                    return dict(response.json())
-            except Exception as exc:
-                raise HTTPException(
-                    status_code=503,
-                    detail=f"semantic search unavailable (is the worldmodel service running?): {exc}",
-                ) from exc
+            return await _forward(
+                "worldmodel",
+                self.settings.worldmodel_port,
+                "/search/frames",
+                params={"q": q, "limit": limit, "source_id": source_id},
+                http_timeout_s=20.0,
+                request=request,
+            )
 
         @api.get("/measurements")
         async def measurements(
@@ -962,13 +1062,16 @@ class ApiService(SioService):
     # --------------------------------------------------------------------- stream
     def _register_stream(self, app: FastAPI) -> None:
         @app.get("/stream", tags=["stream"])
-        async def stream(topics: str | None = None) -> StreamingResponse:
+        async def stream(request: Request, topics: str | None = None) -> StreamingResponse:
             """Server-Sent Events: live entities, events, alerts, decisions, forecasts."""
             wanted = [t.strip() for t in topics.split(",")] if topics else None
 
+            tenant_id = current_tenant()
+            expires_at = principal_of(request).expires_at
+
             async def generator() -> Any:
-                with self.hub.subscribe(wanted) as subscriber:
-                    async for frame in self.hub.events(subscriber):
+                with self.hub.subscribe(wanted, tenant_id=tenant_id) as subscriber:
+                    async for frame in self.hub.events(subscriber, expires_at=expires_at):
                         yield frame
 
             return StreamingResponse(
@@ -989,10 +1092,33 @@ class ApiService(SioService):
             await socket.accept()
             wanted = [t.strip() for t in topics.split(",")] if topics else None
             try:
-                with self.hub.subscribe(wanted) as subscriber:
-                    while True:
-                        message = await subscriber.queue.get()
-                        await socket.send_text(message.model_dump_json(by_alias=True))
+                with self.hub.subscribe(wanted, tenant_id=current_tenant()) as subscriber:
+                    receiver = asyncio.create_task(socket.receive())
+                    pending_message = None
+                    try:
+                        while True:
+                            pending_message = asyncio.create_task(subscriber.queue.get())
+                            done, _ = await asyncio.wait(
+                                (receiver, pending_message), return_when=asyncio.FIRST_COMPLETED
+                            )
+                            if receiver in done:
+                                incoming = receiver.result()
+                                if incoming["type"] == "websocket.disconnect":
+                                    return
+                                receiver = asyncio.create_task(socket.receive())
+                            if pending_message in done:
+                                message = pending_message.result()
+                                await socket.send_text(message.model_dump_json(by_alias=True))
+                            else:
+                                pending_message.cancel()
+                                with contextlib.suppress(asyncio.CancelledError):
+                                    await pending_message
+                    finally:
+                        for task in (receiver, pending_message):
+                            if task is not None:
+                                task.cancel()
+                                with contextlib.suppress(asyncio.CancelledError):
+                                    await task
             except WebSocketDisconnect:
                 return
             except Exception as exc:
@@ -1013,6 +1139,17 @@ class ApiService(SioService):
             Presigned URLs bypass authorisation, and Phase 5 puts every read behind the same policy
             check. Routing media through here now means that change is a middleware, not a redesign.
             """
+            # Ingest buffers are never browser media. Tenant-qualified keys are
+            # scoped here; legacy simulator keys belong only to the deployment tenant.
+            parts = key.split("/")
+            if ".." in parts or key.startswith(("pending/", "/")):
+                raise HTTPException(status_code=404, detail="media not available")
+            candidate = key.removeprefix("raw/")
+            if candidate.startswith("tenants/"):
+                if candidate.split("/", 2)[1] != current_tenant():
+                    raise HTTPException(status_code=404, detail="media not available")
+            elif current_tenant() != self.settings.tenant_id:
+                raise HTTPException(status_code=404, detail="media not available")
             try:
                 data = await self.blob.get(key)
             except Exception as exc:
@@ -1027,7 +1164,7 @@ class ApiService(SioService):
             return Response(
                 content=data,
                 media_type=content_type,
-                headers={"Cache-Control": "public, max-age=3600"},
+                headers={"Cache-Control": "private, no-store"},
             )
 
     # -------------------------------------------------------------------- graphql

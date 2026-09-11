@@ -26,6 +26,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import * as session from "../lib/session";
 import { api, explainError } from "../lib/api";
 import { useSioStore } from "../store";
 
@@ -92,9 +93,10 @@ const STATE_GLYPH: Record<string, string> = {
   aborted: "✕",
 };
 
-export function MissionControlPanel() {
+export function MissionControlPanel({ initialMissionId }: { initialMissionId?: string }) {
   const [missions, setMissions] = useState<Mission[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialMissionId ?? null);
+  useEffect(() => { if (initialMissionId) setSelectedId(initialMissionId); }, [initialMissionId]);
   const [detail, setDetail] = useState<Mission | null>(null);
   const [status, setStatus] = useState("");
   const [statusKind, setStatusKind] = useState<"ok" | "bad" | "busy">("ok");
@@ -383,7 +385,7 @@ export function MissionControlPanel() {
 
       {/* ------------------------------------------------------------------ create */}
       {!creating && (
-        <button className="primary" onClick={() => setCreating(true)}>
+        <button className="primary" disabled={!session.can("mission.write")} onClick={() => setCreating(true)}>
           New mission
         </button>
       )}
@@ -450,7 +452,7 @@ export function MissionControlPanel() {
           <div className="builder-row">
             <button
               className="primary"
-              disabled={!name.trim()}
+              disabled={!name.trim() || !session.can("mission.write")}
               onClick={() => void create()}
             >
               Create as draft
@@ -527,7 +529,7 @@ export function MissionControlPanel() {
 
           <div className="builder-row mission-actions">
             {detail.legal_transitions.map((to) => (
-              <button key={to} className="ghost" onClick={() => void move(to)}>
+              <button key={to} className="ghost" disabled={!session.can("mission.assign")} onClick={() => void move(to)}>
                 {to === "active" && !detail.started_ts ? "start" : to}
               </button>
             ))}
@@ -558,7 +560,7 @@ export function MissionControlPanel() {
                 completing is blocked.{" "}
                 <button
                   className="ghost danger"
-                  onClick={() => void move("completed", true)}
+                  disabled={!session.can("mission.assign")} onClick={() => void move("completed", true)}
                 >
                   complete anyway
                 </button>{" "}
@@ -585,7 +587,7 @@ export function MissionControlPanel() {
                     checked={Boolean(objective.done)}
                     // A finished mission's objectives are a record, not a worklist. The service refuses the
                     // write; disabling the box means the operator is not invited to try.
-                    disabled={terminal}
+                    disabled={terminal || !session.can("mission.write")}
                     onChange={(event) =>
                       void tick(objective.objective_id, event.target.checked)
                     }
@@ -624,7 +626,7 @@ export function MissionControlPanel() {
                 <span className="resource-name">{labelFor(resource)}</span>
                 <button
                   className="ghost danger"
-                  onClick={() => void release(resource)}
+                  disabled={!session.can("mission.write")} onClick={() => void release(resource)}
                 >
                   release
                 </button>
@@ -638,7 +640,7 @@ export function MissionControlPanel() {
             Commit a resource
             <select
               value=""
-              disabled={terminal}
+              disabled={terminal || !session.can("mission.assign")}
               onChange={(event) => {
                 void assign(event.target.value);
                 event.target.value = "";
@@ -702,7 +704,7 @@ export function MissionControlPanel() {
             </label>
             <button
               className="ghost"
-              disabled={!comm.trim()}
+              disabled={!comm.trim() || !session.can("mission.write")}
               onClick={() => void send()}
             >
               append

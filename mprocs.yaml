@@ -1,4 +1,4 @@
-# Process layout for `just dev` when mprocs is installed (PRD §10).
+# Process layout for the explicit `just dev-tui` command (PRD §10).
 #
 # mprocs gives each service its own scrollable pane, which is the nicest way to watch a
 # streaming pipeline on a laptop. Everything here mirrors scripts/supervisor.py, which is the
@@ -41,7 +41,7 @@ procs:
   copilot:
     shell: uv run --no-sync python -m sio_copilot
   mcp:
-    shell: uv run --no-sync python -m sio_mcp
+    shell: uv run --no-sync python -m sio_mcp --http
   agents:
     shell: uv run --no-sync python -m sio_agents
   workflow:
@@ -50,6 +50,8 @@ procs:
     shell: uv run --no-sync python -m sio_alerts
   missions:
     shell: uv run --no-sync python -m sio_missions
+  webhooks:
+    shell: uv run --no-sync python -m sio_webhooks
   analytics:
     shell: uv run --no-sync python -m sio_analytics
 
@@ -57,7 +59,7 @@ procs:
   ingest:
     shell: uv run --no-sync python -m sio_ingest
   web:
-    shell: cd web && npm run dev
+    shell: cd web && npm run dev -- --port ${SIO_WEB_PORT:-5173} --strictPort
 
   # --- convenience panes ----------------------------------------------------
   doctor:

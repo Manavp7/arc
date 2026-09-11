@@ -118,10 +118,11 @@ class RtspCameraConnector(Connector):
         target = self.url if self.backend == "opencv" else self._gst_pipeline()
         api = cv2.CAP_FFMPEG if self.backend == "opencv" else cv2.CAP_GSTREAMER
         # On a thread: opening an RTSP stream negotiates with the camera and can take seconds.
-        self._capture = await asyncio.to_thread(cv2.VideoCapture, target, api)
+        parameters = [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000, cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000]
+        self._capture = await asyncio.to_thread(cv2.VideoCapture, target, api, parameters)
         if not self._capture.isOpened():
             raise RuntimeError(
-                f"could not open {self.url}. Check the URL, that the camera is reachable, and that "
+                f"could not open {_redact(self.url)}. Check the URL, that the camera is reachable, and that "
                 f"the transport is right — some cameras only serve RTSP over UDP "
                 f"(set options.transport to 'udp')."
             )
@@ -201,9 +202,13 @@ class RtspCameraConnector(Connector):
 
         key: str | None = None
         if self._store is not None:
-            key = f"frames/{self.source_id}/{utc_now().strftime('%Y%m%dT%H%M%S%f')}.jpg"
+            from sio_core.tenancy import current_tenant
+
+            key = f"pending/tenants/{current_tenant()}/frames/{self.source_id}/{utc_now().strftime('%Y%m%dT%H%M%S%f')}.jpg"
             try:
                 await self._store.put(key, encoded, content_type="image/jpeg")
+                if self._error and self._error.startswith("frame store failed"):
+                    self._error = None
             except Exception as error:
                 # A storage failure must not stop the stream. The frame is lost; the camera being up is still
                 # worth reporting, and the health line will say storage is broken.
@@ -272,6 +277,14 @@ def _redact(url: str) -> str:
     `rtsp://admin:hunter2@10.0.0.5/stream` is the normal form for a camera, and that string ends up in logs,
     health payloads and error messages. Redacting at the boundary is easier than remembering not to log it.
     """
+    # A camera may also place access credentials in query parameters.
+    from urllib.parse import urlsplit, urlunsplit
+
+    try:
+        parsed = urlsplit(url)
+        url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    except ValueError:
+        return "[invalid camera URL]"
     if "@" not in url:
         return url
     scheme, _, rest = url.partition("://")

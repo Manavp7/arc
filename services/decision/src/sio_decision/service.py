@@ -8,6 +8,7 @@ so there is no code path from "recommended" to "done" for it to take by accident
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
@@ -159,7 +160,7 @@ class DecisionService(SioService):
         if incident is None:
             self.log.info(
                 "decision.no_location",
-                event=event.event_id,
+                event_id=event.event_id,
                 why="the event has no position and no zone, so distances cannot be computed",
             )
             return None
@@ -169,7 +170,7 @@ class DecisionService(SioService):
         if not responders:
             self.log.info(
                 "decision.no_responders",
-                event=event.event_id,
+                event_id=event.event_id,
                 requires=requires,
                 why=(
                     f"nothing on site has the {requires!r} capability this task needs"
@@ -178,7 +179,9 @@ class DecisionService(SioService):
                 ),
             )
 
-        options, solves = build_options(responders, [incident])
+        # Each strategy may spend its full solver budget. Keep Redis consumption and
+        # other HTTP requests running while the recommendation is computed.
+        options, solves = await asyncio.to_thread(build_options, responders, [incident])
         if requires and not responders:
             # Say the true thing. "No aerial responder is available" is actionable; quietly recommending a
             # forklift for an overflight is worse than recommending nothing, because it looks like an answer.
@@ -526,7 +529,9 @@ class DecisionService(SioService):
                 )
                 for index, row in enumerate(rows)
             ]
-            result = solve_dock_schedule(requests, [str(row["zone_id"]) for row in docks])
+            result = await asyncio.to_thread(
+                solve_dock_schedule, requests, [str(row["zone_id"]) for row in docks]
+            )
             return result.describe()
 
     async def _load(self, decision_id: str) -> Decision:

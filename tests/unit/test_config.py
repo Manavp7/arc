@@ -14,11 +14,11 @@ from sio_core.errors import ConfigError
 def test_defaults_are_local_first(pristine_env: None) -> None:
     cfg = Settings(_env_file=None)  # type: ignore[call-arg]
     assert cfg.bus_backend == "redis"
-    assert cfg.graph_backend == "neo4j"
+    assert cfg.graph_backend == "postgres"
     assert cfg.vector_backend == "pgvector"
-    assert cfg.blob_backend == "minio"
+    assert cfg.blob_backend == "file"
     assert cfg.auth_mode == "dev"
-    assert cfg.workflow_runner == "temporal"
+    assert cfg.workflow_runner == "inline"
 
 
 def test_governance_flags_default_to_the_safe_position(pristine_env: None) -> None:

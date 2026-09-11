@@ -49,8 +49,10 @@ import socket, subprocess, sys, time
 listener = socket.socket()
 listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 listener.bind(("127.0.0.1", {port}))
-listener.listen(1)
-child = subprocess.Popen([sys.executable, "-c", "import time\\nwhile True: time.sleep(0.05)"])
+listener.listen(16)
+child_code = "import socket, sys\\nserver = socket.socket(fileno=int(sys.argv[1]))\\nwhile True: server.accept()[0].close()"
+child = subprocess.Popen([sys.executable, "-c", child_code, str(listener.fileno())], pass_fds=(listener.fileno(),))
+listener.close()
 while True:
     time.sleep(0.05)
 """
@@ -75,13 +77,14 @@ def write_state(processes: dict[str, int], ports: dict[str, int] | None = None) 
 
 
 @pytest.fixture(autouse=True)
-def clean_state():
-    original = SUPERVISOR_STATE.read_text() if SUPERVISOR_STATE.exists() else None
-    SUPERVISOR_STATE.unlink(missing_ok=True)
+def clean_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Never read, replace or delete an operator's active supervisor record."""
+    import supervisor
+
+    state = tmp_path / "supervisor.json"
+    monkeypatch.setattr(supervisor, "SUPERVISOR_STATE", state)
+    monkeypatch.setattr(sys.modules[__name__], "SUPERVISOR_STATE", state)
     yield
-    SUPERVISOR_STATE.unlink(missing_ok=True)
-    if original is not None:
-        SUPERVISOR_STATE.write_text(original)
 
 
 def test_nothing_to_stop_is_not_an_error() -> None:
@@ -152,13 +155,12 @@ def test_a_grandchild_holding_a_port_is_stopped_too() -> None:
     """
     port = free_port()
     child = spawn(WITH_GRANDCHILD.format(port=port))
-    deadline = time.monotonic() + 5
-    while not port_is_bound(port) and time.monotonic() < deadline:
-        time.sleep(0.1)
-    assert port_is_bound(port), "the fixture did not manage to bind its port"
-
-    write_state({"forker": child.pid}, {"forker": port})
     try:
+        deadline = time.monotonic() + 5
+        while not port_is_bound(port) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert port_is_bound(port), "the fixture did not manage to bind its port"
+        write_state({"forker": child.pid}, {"forker": port})
         assert stop_detached(grace_s=3.0) == 0
         assert not _alive(child.pid)
         deadline = time.monotonic() + 3

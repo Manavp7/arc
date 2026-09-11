@@ -9,6 +9,7 @@ environment change, and the code that consumes the port is untouched.
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 from .config import Settings, get_settings
@@ -285,7 +286,9 @@ async def close_all() -> None:
         if close is None:
             continue
         try:
-            await close()
+            outcome = close()
+            if inspect.isawaitable(outcome):
+                await outcome
         except Exception as exc:
             log.warning("registry.close_failed", adapter=key, error=describe_error(exc))
     _instances.clear()

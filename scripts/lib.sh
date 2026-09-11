@@ -49,10 +49,16 @@ ensure_dirs() {
 # values may contain characters that a shell would interpret.
 env_value() {
   key="$1"; default_value="${2:-}"
+  # Explicit environment overrides, including empty values, have the same precedence as Settings.
+  if value="$(printenv "${key}")"; then
+    printf '%s' "${value}"
+    return 0
+  fi
   for file in "${SIO_ROOT}/.env" "${SIO_ROOT}/.env.example"; do
     [ -f "${file}" ] || continue
     value="$(grep "^${key}=" "${file}" 2>/dev/null | head -n 1 | cut -d= -f2- || true)"
     if [ -n "${value}" ]; then
+      value="$(printf '%s' "${value}" | sed 's/[[:space:]][[:space:]]*#.*$//; s/[[:space:]]*$//')"
       printf '%s' "${value}"
       return 0
     fi
@@ -150,13 +156,14 @@ download() {
 # Locate the Postgres binaries. Homebrew keeps versioned formulae out of PATH, and Debian
 # hides them under /usr/lib/postgresql/<version>/bin, so neither platform can rely on PATH.
 pg_bin_dir() {
-  if have pg_ctl && have initdb; then
+  # On macOS prefer the selected formula over an older pg_ctl earlier on PATH.
+  if is_linux && have pg_ctl && have initdb; then
     dirname "$(command -v pg_ctl)"
     return 0
   fi
   for candidate in \
-    "/opt/homebrew/opt/${SIO_BREW_POSTGRES:-postgresql@16}/bin" \
-    "/usr/local/opt/${SIO_BREW_POSTGRES:-postgresql@16}/bin" \
+    "/opt/homebrew/opt/${SIO_BREW_POSTGRES:-postgresql@17}/bin" \
+    "/usr/local/opt/${SIO_BREW_POSTGRES:-postgresql@17}/bin" \
     "/usr/lib/postgresql/16/bin" \
     "/usr/lib/postgresql/17/bin"; do
     if [ -x "${candidate}/pg_ctl" ]; then

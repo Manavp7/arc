@@ -11,6 +11,7 @@
  */
 
 import { create } from "zustand";
+import { mergeEntity, entityIsActive, replayEvents } from "./lib/entity-state";
 import type {
   Alert,
   Decision,
@@ -54,10 +55,14 @@ interface SioState {
   replayMode: "live" | "scrubbing" | "playing";
   replayProgress: number;
   lastMessageAt: string | null;
+  lastStreamActivityAt: string | null;
+  markStreamActivity: (receivedAt: string) => void;
 
   setConnection: (status: ConnectionStatus) => void;
   upsertEntity: (entity: Entity) => void;
   upsertEntities: (entities: Entity[]) => void;
+  replaceEntities: (entities: Entity[]) => void;
+  pruneStaleEntities: (windowS?: number, nowMs?: number) => void;
   addEvent: (event: SioEvent) => void;
   setEvents: (events: SioEvent[]) => void;
   setAlerts: (alerts: Alert[]) => void;
@@ -99,20 +104,6 @@ interface SioState {
  * panel's dwell time collapsed to "0 min" — the one number UC1 ("stayed more than 15 minutes")
  * actually turns on.
  */
-function mergeLifetime(previous: Entity | undefined, incoming: Entity): Entity {
-  if (!previous) return incoming;
-  const first =
-    previous.first_seen < incoming.first_seen
-      ? previous.first_seen
-      : incoming.first_seen;
-  const last =
-    previous.last_seen > incoming.last_seen
-      ? previous.last_seen
-      : incoming.last_seen;
-  if (first === incoming.first_seen && last === incoming.last_seen)
-    return incoming;
-  return { ...incoming, first_seen: first, last_seen: last };
-}
 
 export const useSioStore = create<SioState>((set) => ({
   connection: "connecting",
@@ -131,15 +122,17 @@ export const useSioStore = create<SioState>((set) => ({
   replayProgress: 0,
   requestedReplay: null,
   lastMessageAt: null,
+  lastStreamActivityAt: null,
 
   setConnection: (status) => set({ connection: status }),
+  markStreamActivity: (receivedAt) => set({ lastStreamActivityAt: receivedAt }),
 
   upsertEntity: (entity) =>
     set((state) => {
       const entities = new Map(state.entities);
       entities.set(
         entity.entity_id,
-        mergeLifetime(state.entities.get(entity.entity_id), entity),
+        mergeEntity(state.entities.get(entity.entity_id), entity),
       );
       return { entities, lastMessageAt: new Date().toISOString() };
     }),
@@ -150,11 +143,25 @@ export const useSioStore = create<SioState>((set) => ({
       for (const entity of incoming) {
         entities.set(
           entity.entity_id,
-          mergeLifetime(state.entities.get(entity.entity_id), entity),
+          mergeEntity(state.entities.get(entity.entity_id), entity),
         );
       }
       return { entities };
     }),
+
+  replaceEntities: (incoming) => set((state) => {
+    const entities = new Map(state.entities);
+    for (const entity of incoming) entities.set(entity.entity_id, mergeEntity(entities.get(entity.entity_id), entity));
+    for (const [id, entity] of entities) if (!entityIsActive(entity, 300, Date.now())) entities.delete(id);
+    return { entities };
+  }),
+  pruneStaleEntities: (windowS = 300, nowMs = Date.now()) => set((state) => {
+    const stale = [...state.entities].filter(([, entity]) => !entityIsActive(entity, windowS, nowMs));
+    if (!stale.length) return state;
+    const entities = new Map(state.entities);
+    stale.forEach(([id]) => entities.delete(id));
+    return { entities };
+  }),
 
   addEvent: (event) =>
     set((state) => ({
@@ -196,7 +203,7 @@ export const useSioStore = create<SioState>((set) => ({
     set(
       ts === null
         ? { replayAt: null, replayMode: "live", replayProgress: 0 }
-        : { replayAt: ts },
+        : { replayAt: ts, replayMode: "scrubbing", historyEntities: new Map(), historyEvents: [] },
     ),
 
   requestReplay: (window) => set({ requestedReplay: window }),
@@ -214,11 +221,7 @@ export const useSioStore = create<SioState>((set) => ({
       historyEntities: next,
       replayMode: mode,
       replayProgress: options.progress ?? 0,
-      // A replay frame carries the events inside its own step, which are usually none. Keep the last
-      // non-empty set so the feed does not flicker empty between interesting moments, and cap it.
-      historyEvents: options.events?.length
-        ? [...options.events, ...state.historyEvents].slice(0, 60)
-        : state.historyEvents,
+      historyEvents: replayEvents(state.historyEvents, options.events ?? [], ts, mode === "playing"),
     }));
   },
 
@@ -237,6 +240,10 @@ export const useSioStore = create<SioState>((set) => ({
   reset: () =>
     set({
       entities: new Map(),
+      connection: "connecting",
+      lastMessageAt: null,
+  lastStreamActivityAt: null,
+      zones: [],
       events: [],
       alerts: [],
       decisions: [],

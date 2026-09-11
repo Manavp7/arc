@@ -70,21 +70,47 @@ class CameraCalibration:
         service that imported the simulator's site model to learn camera poses would be unable to
         work on a real site.
         """
-        config = row.get("config") or {}
-        latitude, longitude = row.get("lat"), row.get("lon")
-        if latitude is None or longitude is None:
+        try:
+            config = row.get("config") or {}
+            latitude, longitude = row.get("lat"), row.get("lon")
+            if latitude is None or longitude is None:
+                return None
+            value = cls(
+                source_id=str(row["source_id"]),
+                geo=Geo(lat=float(latitude), lon=float(longitude)),
+                bearing_deg=float(config.get("bearing_deg", 0.0)),
+                fov_deg=float(config.get("fov_deg", 70.0)),
+                range_m=float(config.get("range_m", 60.0)),
+                height_m=float(config.get("height_m", 6.0)),
+                tilt_deg=float(config.get("tilt_deg", 18.0)),
+                vfov_deg=float(config.get("vfov_deg", 45.0)),
+                frame_width=int(config.get("frame_width", 1280)),
+                frame_height=int(config.get("frame_height", 720)),
+                zone_id=row.get("zone_id"),
+            )
+        except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
             return None
-        return cls(
-            source_id=str(row["source_id"]),
-            geo=Geo(lat=float(latitude), lon=float(longitude)),
-            bearing_deg=float(config.get("bearing_deg", 0.0)),
-            fov_deg=float(config.get("fov_deg", 70.0)),
-            range_m=float(config.get("range_m", 60.0)),
-            height_m=float(config.get("height_m", 6.0)),
-            tilt_deg=float(config.get("tilt_deg", 18.0)),
-            vfov_deg=float(config.get("vfov_deg", 45.0)),
-            zone_id=row.get("zone_id"),
-        )
+        if (
+            value.frame_width <= 0
+            or value.frame_height <= 0
+            or not all(
+                math.isfinite(v)
+                for v in (
+                    value.bearing_deg,
+                    value.fov_deg,
+                    value.range_m,
+                    value.height_m,
+                    value.tilt_deg,
+                    value.vfov_deg,
+                )
+            )
+            or not 0 < value.fov_deg < 180
+            or not 0 < value.vfov_deg < 180
+            or value.height_m <= 0
+            or value.range_m <= 0
+        ):
+            return None
+        return value
 
 
 @dataclass(frozen=True)

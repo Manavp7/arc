@@ -18,9 +18,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def pytest_configure(config: pytest.Config) -> None:
     """Force infra-free defaults for the whole session before settings are cached."""
-    os.environ.setdefault("SIO_BUS_BACKEND", "memory")
-    os.environ.setdefault("SIO_GRAPH_BACKEND", "memory")
-    os.environ.setdefault("SIO_VECTOR_BACKEND", "memory")
+    infra = os.environ.get("SIO_TEST_INFRA") == "1"
+    os.environ.setdefault("SIO_BUS_BACKEND", "redis" if infra else "memory")
+    os.environ.setdefault("SIO_GRAPH_BACKEND", "postgres" if infra else "memory")
+    os.environ.setdefault("SIO_VECTOR_BACKEND", "pgvector" if infra else "memory")
     os.environ.setdefault("SIO_BLOB_BACKEND", "file")
     os.environ.setdefault("SIO_LLM_PROVIDER", "scripted")
     os.environ.setdefault("SIO_WORKFLOW_RUNNER", "inline")

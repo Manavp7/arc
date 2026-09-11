@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Start, stop and inspect SIO's infrastructure — without Docker, on either platform.
 #
-#   scripts/services.sh start [name...]   # default: postgres redis neo4j minio
+#   scripts/services.sh start [name...]   # default: postgres redis
 #   scripts/services.sh stop  [name...]
 #   scripts/services.sh status
 #   scripts/services.sh restart
@@ -16,7 +16,7 @@ set -euo pipefail
 # shellcheck source=scripts/lib.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
-DEFAULT_SERVICES="postgres redis neo4j minio"
+DEFAULT_SERVICES="postgres redis"
 ALL_SERVICES="postgres redis neo4j minio temporal grafana ollama"
 
 PG_DATA="${SIO_STATE_DIR}/pg"

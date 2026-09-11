@@ -33,7 +33,14 @@ class WorldModelService(SioService):
     """
 
     name = "worldmodel"
-    subscribes = (Topic.ENTITIES, Topic.TRACKS, Topic.RAW_FRAMES, Topic.RAW_IOT, Topic.RAW_GPS)
+    subscribes = (
+        Topic.ENTITIES,
+        Topic.TRACKS,
+        Topic.RAW_FRAMES,
+        Topic.FRAMES_READY,
+        Topic.RAW_IOT,
+        Topic.RAW_GPS,
+    )
     tick_interval_s = 30.0
 
     FRAME_COLLECTION = "frames"
@@ -100,7 +107,10 @@ class WorldModelService(SioService):
             await self._handle_relationship(message.decode(Relationship))
         elif message.kind == "Track":
             await self._handle_track(message.decode(Track))
-        elif message.kind == "Observation" and message.topic == str(Topic.RAW_FRAMES):
+        elif message.kind == "Observation" and message.topic in (
+            str(Topic.RAW_FRAMES),
+            str(Topic.FRAMES_READY),
+        ):
             await self._index_frame(message.decode(Observation), ctx)
         elif message.kind == "Observation" and message.topic in (
             str(Topic.RAW_IOT),
@@ -384,7 +394,7 @@ class WorldModelService(SioService):
         after a restart the replayed backlog would otherwise be embedded in full before anything
         current was.
         """
-        if not observation.raw_ref:
+        if not observation.raw_ref or observation.raw_ref.startswith("pending/"):
             return
         if ctx.age_s > self.settings.perception_max_age_s:
             self._frames_skipped += 1

@@ -23,6 +23,7 @@ from .connectors.simulator import SimulatorConnector
 from .connectors.weather import OpenMeteoConnector
 from .sim.renderer import CameraRenderer
 from .site import load_site
+from .source_manager import SourceManager
 
 # Modality decides the topic. Keeping this mapping in one place means a new connector only has to
 # declare what kind of signal it produces, not know the bus layout.
@@ -71,6 +72,7 @@ class IngestService(SioService):
         self.renderer = CameraRenderer(self.settings.samples_dir)
         self._frames_written = 0
         self._frames_unrendered = 0
+        self.sources = SourceManager(self)
 
     # ----------------------------------------------------------------- lifecycle
     def _build_connectors(self) -> list[Connector]:
@@ -132,7 +134,11 @@ class IngestService(SioService):
         # Nothing runs merely by being installed. A plugin declares what it CAN do; `.sio/plugins.json` says
         # what should actually run, with what options — because installing a package must not start reading
         # somebody's camera.
-        return [simulator, weather, *self._build_plugin_connectors()]
+        configured = self.sources.configured([simulator, weather, *self._build_plugin_connectors()])
+        self.simulator_connector = next(
+            (c for c in configured if isinstance(c, SimulatorConnector)), None
+        )
+        return configured
 
     def _build_plugin_connectors(self) -> list[Connector]:
         """Instantiate the plugin connectors this deployment has configured.
@@ -196,6 +202,10 @@ class IngestService(SioService):
             try:
                 await connector.start()
             except Exception as exc:
+                self.sources.failed(
+                    connector.source_id,
+                    f"Could not start ({type(exc).__name__}); check settings and connector dependencies",
+                )
                 self.log.error(
                     "connector.start_failed", source=connector.source_id, error=describe_error(exc)
                 )
@@ -246,14 +256,18 @@ class IngestService(SioService):
             try:
                 async for observation in connector.observations():
                     topic = self._topic_for(connector, observation)
-                    if topic == str(Topic.RAW_FRAMES):
+                    if topic == str(Topic.RAW_FRAMES) and isinstance(connector, SimulatorConnector):
                         await self._store_frame(observation)
                     await self.publish(topic, observation)
+                    self.sources.observed(connector, observation)
                     self._published_by_topic[topic] = self._published_by_topic.get(topic, 0) + 1
                     await self._apply_backpressure(topic)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                self.sources.failed(
+                    connector.source_id, f"Connection interrupted ({type(exc).__name__}); retrying"
+                )
                 self.metrics.errors.labels(service=self.name, kind="connector").inc()
                 self.log.error(
                     "connector.failed",
@@ -364,7 +378,26 @@ class IngestService(SioService):
         for connector in self.connectors:
             with contextlib.suppress(Exception):
                 checks[f"connector:{connector.source_id}"] = await connector.health()
+        for source_id, status in self.sources.status.items():
+            if status.get("status") == "error":
+                checks[f"connector:{source_id}"] = (
+                    f"degraded: {status.get('error', 'connection error')}"
+                )
         return checks
+
+    async def health_info(self) -> dict[str, str]:
+        simulated = any(isinstance(c, SimulatorConnector) for c in self.connectors)
+        real = any(not isinstance(c, SimulatorConnector) for c in self.connectors)
+        mode = (
+            "mixed"
+            if simulated and real
+            else "simulated"
+            if simulated
+            else "real"
+            if real
+            else "unavailable"
+        )
+        return {"data_mode": mode, "restart_required": str(bool(self.sources.changed)).lower()}
 
     async def tick(self) -> None:
         stats = self.simulator_connector.simulator.stats() if self.simulator_connector else {}
@@ -380,6 +413,8 @@ class IngestService(SioService):
 
     # --------------------------------------------------------------------- routes
     def routes(self, app: FastAPI) -> None:
+        self.sources.routes(app)
+
         @app.get("/connectors", tags=["ingest"])
         async def list_connectors() -> dict[str, Any]:
             return {

@@ -16,6 +16,8 @@
 set -uo pipefail
 # shellcheck source=scripts/lib.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+# lib.sh enables errexit for mutating scripts; diagnostics must continue after failed probes.
+set +e
 
 MODE="normal"
 for arg in "$@"; do
@@ -98,28 +100,20 @@ else
   check_fail "redis not listening on 6379" "just services"
 fi
 
-if port_in_use 7687; then
-  check_ok "neo4j listening on 7687 (bolt)"
-else
-  check_warn "neo4j not listening on 7687 — SIO_GRAPH_BACKEND=postgres still works"
+if [ "$(env_value SIO_GRAPH_BACKEND postgres)" = "neo4j" ]; then
+  if port_in_use 7687; then check_ok "neo4j listening on 7687 (bolt)"
+  else check_fail "selected neo4j adapter is unavailable" "just services neo4j && just neo4j-init"; fi
 fi
-
-if port_in_use 9000; then
-  check_ok "minio listening on 9000"
-else
-  check_warn "minio not listening on 9000 — SIO_BLOB_BACKEND=file still works"
+if [ "$(env_value SIO_BLOB_BACKEND file)" = "minio" ]; then
+  if port_in_use 9000; then check_ok "minio listening on 9000"
+  else check_fail "selected minio adapter is unavailable" "just services minio && just minio-init"; fi
 fi
-
-if port_in_use 7233; then
-  check_ok "temporal listening on 7233"
-else
-  check_warn "temporal not running — SIO_WORKFLOW_RUNNER=inline still works"
+if [ "$(env_value SIO_WORKFLOW_RUNNER inline)" != "inline" ]; then
+  check_fail "Temporal workflow execution is not implemented" "set SIO_WORKFLOW_RUNNER=inline"
 fi
-
-if port_in_use 11434; then
-  check_ok "ollama listening on 11434"
-else
-  check_warn "ollama not running — copilot needs SIO_LLM_PROVIDER=scripted"
+if [ "$(env_value SIO_LLM_PROVIDER scripted)" = "ollama" ]; then
+  if port_in_use 11434; then check_ok "ollama listening on 11434"
+  else check_fail "selected Ollama provider is unavailable" "just services ollama && just models"; fi
 fi
 
 # --------------------------------------------------------------- deep checks (via python)
@@ -152,13 +146,14 @@ fi
 
 # ------------------------------------------------------------------------------------ models
 [ "${MODE}" = "quiet" ] || log "models"
-MODEL_DIR="${SIO_ROOT}/$(env_value SIO_MODEL_DIR .sio/models)"
+MODEL_DIR="$(env_value SIO_MODEL_DIR .sio/models)"
+case "${MODEL_DIR}" in /*) ;; *) MODEL_DIR="${SIO_ROOT}/${MODEL_DIR}" ;; esac
 for model in "$(env_value SIO_DET_MODEL yolo26n.onnx)"; do
   if [ -f "${MODEL_DIR}/${model}" ]; then
     size="$(wc -c <"${MODEL_DIR}/${model}" | tr -d ' ')"
     check_ok "${model} present (${size} bytes)"
   else
-    check_warn "${model} not downloaded — run: just models"
+    check_warn "${model} absent: auto detector uses synthetic demo data only; real cameras need just models"
   fi
 done
 
@@ -175,7 +170,7 @@ if [ "${MODE}" = "report" ]; then
   is_macos && echo "brew services: $(brew services list 2>/dev/null | awk 'NR>1 {printf "%s=%s ", $1, $2}')"
   echo "state dir:     ${SIO_STATE_DIR} ($(du -sh "${SIO_STATE_DIR}" 2>/dev/null | cut -f1))"
   echo "git:           $(git -C "${SIO_ROOT}" rev-parse --short HEAD 2>/dev/null) on $(git -C "${SIO_ROOT}" rev-parse --abbrev-ref HEAD 2>/dev/null)"
-  echo "adapters:      bus=$(env_value SIO_BUS_BACKEND redis) graph=$(env_value SIO_GRAPH_BACKEND neo4j) vector=$(env_value SIO_VECTOR_BACKEND pgvector) blob=$(env_value SIO_BLOB_BACKEND minio)"
+  echo "adapters:      bus=$(env_value SIO_BUS_BACKEND redis) graph=$(env_value SIO_GRAPH_BACKEND postgres) vector=$(env_value SIO_VECTOR_BACKEND pgvector) blob=$(env_value SIO_BLOB_BACKEND file)"
   echo "pidfiles:      $(ls "${SIO_RUN_DIR}" 2>/dev/null | tr '\n' ' ')"
   printf '%s\n' "--- end report ---"
 fi

@@ -1,0 +1,34 @@
+.notification-center{position:relative;display:flex;align-items:center;flex-shrink:0;color:var(--text,#e4e8ed)}
+.notification-bell{position:relative;display:grid;place-items:center;width:34px;height:34px;border:1px solid var(--border,rgba(255,255,255,.14));border-radius:9px;background:transparent;color:inherit;cursor:pointer}
+.notification-bell:hover,.notification-bell.is-open{background:rgba(130,155,180,.15)}
+.notification-badge{position:absolute;top:-6px;right:-7px;min-width:17px;height:17px;display:grid;place-items:center;padding:0 4px;border-radius:10px;background:#d26a4c;color:#fff;font-size:9px;font-weight:700;font-variant-numeric:tabular-nums;border:2px solid var(--bg-panel,#141b24)}
+.notification-panel{position:fixed;top:calc(var(--topbar-h,60px) + 8px);right:18px;z-index:2000;width:min(390px,calc(100vw - 24px));max-height:min(720px,calc(100dvh - var(--topbar-h,60px) - 24px));display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--border,rgba(130,155,180,.26));border-radius:14px;background:var(--bg-panel,#121923);color:var(--text,#e4e8ed);box-shadow:0 20px 70px rgba(0,0,0,.4);text-align:left;font-family:inherit}
+.notification-heading{display:flex;justify-content:space-between;gap:12px;padding:18px 18px 14px;align-items:center}
+.notification-heading span{font-size:9px;letter-spacing:.14em;color:var(--text-dim,#9baaba)}
+.notification-heading h2{margin:4px 0 0;font-size:19px;font-weight:600;letter-spacing:-.03em}
+.notification-panel button{font:inherit;color:inherit;cursor:pointer}
+.notification-panel button:disabled{opacity:.45;cursor:default}
+.notification-heading>button{background:none;border:0;padding:5px 9px;font-size:23px;line-height:1;color:var(--text-dim,#9baaba)}
+.notification-controls{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:0 18px 12px;border-bottom:1px solid var(--border,rgba(130,155,180,.2));font-size:11px}
+.notification-controls>div{display:flex;gap:3px;padding:3px;border:1px solid var(--border,rgba(130,155,180,.2));border-radius:8px}
+.notification-controls button{border:0;background:none;border-radius:5px;padding:5px 8px;white-space:nowrap}
+.notification-controls [aria-pressed=true]{background:rgba(130,155,180,.2)}
+.notification-items{overflow-y:auto;overscroll-behavior:contain;min-height:90px}
+.notification-item{position:relative;padding:15px 18px;border-bottom:1px solid var(--border,rgba(130,155,180,.13));border-left:3px solid transparent}
+.notification-item.is-unread{background:rgba(91,146,187,.07);border-left-color:#6295b5}
+.notification-item.is-unread.severity-warning{border-left-color:#d7ab5b}
+.notification-item.is-unread.severity-error{border-left-color:#d27864}
+.notification-item.is-read{opacity:.78}
+.notification-item-meta{display:flex;justify-content:space-between;gap:8px;margin-bottom:8px;font-size:10px;color:var(--text-dim,#9baaba)}
+.notification-open{display:block;width:100%;padding:0;border:0;text-align:left;background:none}
+.notification-open strong{display:block;font-size:12px;line-height:1.5;font-weight:600}
+.notification-open>span{display:block;margin-top:4px;font-size:12px;line-height:1.5;color:var(--text-dim,#9baaba);overflow-wrap:anywhere}
+.notification-mark{margin-top:10px;padding:0;border:0;background:none;font-size:10px!important;color:var(--text-dim,#9baaba)!important;text-decoration:underline;text-underline-offset:3px}
+.notification-empty{padding:28px 22px;margin:0;font-size:12px;line-height:1.6;color:var(--text-dim,#9baaba)}
+.notification-empty small{display:block;margin-top:8px;font-size:11px}
+.notification-error,.notification-bound{margin:0;padding:12px 18px;font-size:11px;line-height:1.6;background:rgba(181,112,63,.12);color:inherit}
+.notification-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px;font-size:10px;color:var(--text-dim,#9baaba)}
+.notification-footer>div{display:flex;gap:4px}
+.notification-footer button{padding:5px 7px;border:0;background:transparent;border-radius:4px;font-size:10px}
+.notification-panel button:focus-visible,.notification-bell:focus-visible{outline:2px solid #83b3d2;outline-offset:3px}
+@media(max-width:600px){.notification-panel{right:12px;max-height:calc(100dvh - var(--topbar-h,60px) - 20px)}.notification-bell{width:31px;height:31px}.notification-controls{padding-left:12px;padding-right:12px;font-size:10px}.notification-footer{flex-wrap:wrap}}

@@ -233,3 +233,49 @@ def test_justfile_documents_every_public_recipe() -> None:
     }
     unexpected = set(undocumented) - allowed
     assert not unexpected, f"add a comment above these recipes: {sorted(unexpected)}"
+
+
+@pytest.mark.parametrize("override", ["55432", ""])
+def test_shell_configuration_respects_explicit_environment(tmp_path, override):
+    import os
+    import subprocess
+
+    (tmp_path / ".env").write_text("SIO_PG_PORT=5432\n")
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            '. scripts/lib.sh; SIO_ROOT="$1"; env_value SIO_PG_PORT 5432',
+            "test",
+            str(tmp_path),
+        ],
+        cwd=REPO_ROOT,
+        env={**os.environ, "SIO_PG_PORT": override},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert result.stdout == override
+
+
+def test_shell_configuration_strips_documented_inline_comment(tmp_path):
+    import os
+    import subprocess
+
+    (tmp_path / ".env").write_text("SIO_GRAPH_BACKEND=postgres   # optional alternatives\n")
+    env = {key: value for key, value in os.environ.items() if key != "SIO_GRAPH_BACKEND"}
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            '. scripts/lib.sh; SIO_ROOT="$1"; env_value SIO_GRAPH_BACKEND postgres',
+            "test",
+            str(tmp_path),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert result.stdout == "postgres"

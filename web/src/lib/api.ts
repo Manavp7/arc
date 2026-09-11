@@ -1,6 +1,7 @@
 /** Typed HTTP client for the SIO API. Requests are same-origin via the Vite proxy. */
 
 import * as session from "./session";
+import { SioApiError, SioClient } from "../../../sdk/ts/src/client";
 import type {
   Alert,
   Decision,
@@ -70,54 +71,28 @@ export function explainError(error: unknown): string {
   return `${head}${outstanding}${problems}${detail.fix ? ` — ${detail.fix}` : ""}${legal}`;
 }
 
-async function request<T>(
-  path: string,
-  init?: RequestInit,
-  retrying = false,
-): Promise<T> {
-  const url = `${BASE}${path}`;
-  // Every request carries a principal. `ensure()` reuses a valid session, so this is a no-op after the
-  // first call — and concurrent callers share one mint rather than each getting their own.
-  await session.ensure();
-  const response = await fetch(url, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...session.headers(),
-      ...(init?.headers ?? {}),
-    },
-  });
-  // A 401 means the token expired or the secret changed. Retry ONCE with a fresh one: a loop here would
-  // turn a misconfigured secret into an infinite request storm against the token endpoint.
-  if (response.status === 401 && !retrying) {
-    session.clear();
-    return request<T>(path, init, true);
-  }
-  if (!response.ok) {
-    // Surface the server's message: the API returns a reason for every denial, and hiding it
-    // behind a generic "request failed" is how governance decisions become unexplainable.
-    let message = response.statusText;
-    let structured: RefusalDetail | string | undefined;
-    try {
-      const body = (await response.json()) as {
-        detail?: RefusalDetail | string;
-      };
-      if (typeof body.detail === "string") {
-        message = body.detail;
-        structured = body.detail;
-      } else if (body.detail && typeof body.detail === "object") {
-        // Keep the object AND derive a readable message from it, so a caller that only looks at
-        // `error.message` still gets a sentence rather than `[object Object]`.
-        structured = body.detail;
-        message = body.detail.message ?? message;
-      }
-    } catch {
-      /* body was not json */
+const client = new SioClient({
+  url: "",
+  tokenProvider: async (forceRefresh) => (await session.ensure(forceRefresh)).token,
+});
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  try {
+    // Header names are case-insensitive. Object spread could keep both Content-Type
+    // and content-type, causing fetch to combine JSON and a caller's media MIME.
+    const headers = new Headers(init?.headers);
+    if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+    return await client.request<T>(init?.method ?? "GET", `${BASE}${path}`, { raw: {
+      ...init,
+      headers,
+    } });
+  } catch (error) {
+    if (error instanceof SioApiError) {
+      if (error.status === 401) session.clear();
+      throw new ApiError(error.message, error.status, error.url, error.detail as RefusalDetail | string);
     }
-    throw new ApiError(message, response.status, url, structured);
+    throw error;
   }
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
 }
 
 function query(
@@ -132,6 +107,7 @@ function query(
 }
 
 export const api = {
+  request,
   health: () => request<HealthStatus>("/health"),
 
   entities: (
@@ -157,10 +133,10 @@ export const api = {
     } = {},
   ) => request<SioEvent[]>(`/events${query(params)}`),
 
-  timeline: (params: { from?: string; to?: string; limit?: number } = {}) =>
-    request<SioEvent[]>(`/timeline${query(params)}`),
+  timeline: (params: { from?: string; to?: string; limit?: number } = {}, signal?: AbortSignal) =>
+    request<SioEvent[]>(`/timeline${query(params)}`, { signal }),
 
-  worldAt: (ts: string, presenceWindowS?: number) =>
+  worldAt: (ts: string, presenceWindowS?: number, signal?: AbortSignal) =>
     request<{
       entities: Entity[];
       ts: string;
@@ -172,7 +148,7 @@ export const api = {
         in_zones: number;
       };
       presence_window_s: number;
-    }>(`/world/at${query({ ts, presence_window_s: presenceWindowS })}`),
+    }>(`/world/at${query({ ts, presence_window_s: presenceWindowS })}`, { signal }),
 
   timelineBounds: () =>
     request<{

@@ -19,6 +19,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import * as session from "../lib/session";
+import { OperatingModes } from "./SystemPanel";
 import { api } from "../lib/api";
 import type { Decision, DecisionOption } from "../types";
 import { fromDecision, type Explainable } from "./ExplanationDrawer";
@@ -77,6 +79,7 @@ export function DecisionsPanel({ onExplain }: { onExplain: (subject: Explainable
 
   return (
     <div className="panel-body decisions-panel">
+      <OperatingModes />
       {flash && <p className="panel-flash">{flash}</p>}
       {error && <p className="panel-error">{error}</p>}
 
@@ -110,11 +113,11 @@ export function DecisionsPanel({ onExplain }: { onExplain: (subject: Explainable
                       primary: true,
                     },
                     { label: "Reject", onClick: () => void decide(decision, "reject"), danger: true },
-                  ]),
+                  ].filter(action => session.can(action.label.startsWith("Approve") ? "decision.approve" : "decision.reject"))),
                 )
               }
-              onApprove={(optionId) => void decide(decision, "approve", optionId)}
-              onReject={() => void decide(decision, "reject")}
+              onApprove={session.can("decision.approve") ? (optionId) => void decide(decision, "approve", optionId) : undefined}
+              onReject={session.can("decision.reject") ? () => void decide(decision, "reject") : undefined}
             />
           ))}
         </div>
@@ -205,20 +208,20 @@ function DecisionCard({
         <button type="button" className="link-btn" onClick={onExplain}>
           why?
         </button>
-        {decision.approval === "pending" && onApprove && (
+        {decision.approval === "pending" && (onApprove || onReject) && (
           <>
             <button
               type="button"
               className="decision-btn decision-btn-approve"
-              disabled={busy}
-              onClick={() => onApprove(decision.chosen ?? "")}
+              disabled={busy || !onApprove}
+              onClick={() => onApprove?.(decision.chosen ?? "")}
             >
               approve
             </button>
             <button
               type="button"
               className="decision-btn decision-btn-reject"
-              disabled={busy}
+              disabled={busy || !onReject}
               onClick={onReject}
             >
               reject

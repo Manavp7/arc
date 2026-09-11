@@ -470,14 +470,20 @@ class ReplayRegistry:
         self._sessions[session.replay_id] = session
         return session
 
-    def get(self, replay_id: str) -> ReplaySession | None:
+    def get(self, replay_id: str, *, tenant_id: str | None = None) -> ReplaySession | None:
         self._evict()
-        return self._sessions.get(replay_id)
+        session = self._sessions.get(replay_id)
+        return (
+            session
+            if session is not None and (tenant_id is None or session.tenant_id == tenant_id)
+            else None
+        )
 
-    def cancel(self, replay_id: str) -> bool:
-        session = self._sessions.pop(replay_id, None)
+    def cancel(self, replay_id: str, *, tenant_id: str | None = None) -> bool:
+        session = self.get(replay_id, tenant_id=tenant_id)
         if session is None:
             return False
+        self._sessions.pop(replay_id)
         session.cancelled = True
         return True
 
@@ -488,10 +494,14 @@ class ReplayRegistry:
                 session.cancelled = True
                 del self._sessions[replay_id]
 
-    def describe(self) -> dict[str, Any]:
+    def describe(self, *, tenant_id: str | None = None) -> dict[str, Any]:
+        self._evict()
+        sessions = [
+            s for s in self._sessions.values() if tenant_id is None or s.tenant_id == tenant_id
+        ]
         return {
-            "sessions": len(self._sessions),
+            "sessions": len(sessions),
             "max_sessions": self.max_sessions,
             "ttl_s": self.ttl_s,
-            "active": [session.describe() for session in self._sessions.values()],
+            "active": [session.describe() for session in sessions],
         }

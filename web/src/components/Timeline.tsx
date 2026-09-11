@@ -19,6 +19,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api";
+import * as session from "../lib/session";
+import { readSse } from "../lib/stream";
+import { LatestOperation } from "../lib/replay";
 import { useSioStore } from "../store";
 import type { ReplayFrame } from "../types";
 
@@ -75,7 +78,8 @@ export function Timeline() {
   const [lag, setLag] = useState<number>(0);
 
   const trackRef = useRef<HTMLDivElement | null>(null);
-  const streamRef = useRef<EventSource | null>(null);
+  const streamRef = useRef<AbortController | null>(null);
+  const operationRef = useRef(new LatestOperation());
   const replayIdRef = useRef<string | null>(null);
   const scrubTimerRef = useRef<number | null>(null);
 
@@ -141,7 +145,10 @@ export function Timeline() {
 
   // --- stop any stream when this unmounts, or the server keeps reconstructing for nobody -----
   const stopStream = useCallback(() => {
-    streamRef.current?.close();
+    operationRef.current.cancel();
+    if (scrubTimerRef.current !== null) window.clearTimeout(scrubTimerRef.current);
+    scrubTimerRef.current = null;
+    streamRef.current?.abort();
     streamRef.current = null;
     if (replayIdRef.current) {
       // Tell the server. Without this the session sits in the registry doing database work for a
@@ -152,6 +159,9 @@ export function Timeline() {
   }, []);
 
   useEffect(() => stopStream, [stopStream]);
+  useEffect(() => useSioStore.subscribe((state, previous) => {
+    if (state.replayAt === null && previous.replayAt !== null) stopStream();
+  }), [stopStream]);
 
   // --- scrubbing ----------------------------------------------------------------------------
   const scrubTo = useCallback(
@@ -161,20 +171,20 @@ export function Timeline() {
         windowRange.start.getTime() + span * Math.min(1, Math.max(0, fraction)),
       );
       stopStream();
+      const operation = operationRef.current.begin();
       // Show the handle immediately, then fetch. Waiting for the response before moving the handle
       // makes the control feel broken during the request.
       useSioStore.getState().setReplayAt(ts.toISOString());
       if (scrubTimerRef.current) window.clearTimeout(scrubTimerRef.current);
       scrubTimerRef.current = window.setTimeout(() => {
-        api
-          .worldAt(ts.toISOString())
-          .then((world) => {
-            setHistory(ts.toISOString(), world.entities, "scrubbing");
-            setStatus(
-              `${world.counts.movers} moving, ${world.counts.static} fixed, ${world.counts.in_zones} in zones`,
-            );
-          })
-          .catch(() => setStatus("could not reconstruct that instant"));
+        void Promise.all([
+          api.worldAt(ts.toISOString(), undefined, operation.signal),
+          api.timeline({ from: new Date(ts.getTime() - 120_000).toISOString(), to: ts.toISOString(), limit: 200 }, operation.signal),
+        ]).then(([world, events]) => {
+          if (!operation.isCurrent()) return;
+          setHistory(ts.toISOString(), world.entities, "scrubbing", { events });
+          setStatus(`${world.counts.movers} moving, ${world.counts.static} fixed, ${world.counts.in_zones} in zones`);
+        }).catch(() => { if (operation.isCurrent()) setStatus("could not reconstruct that instant"); });
       }, SCRUB_DEBOUNCE_MS);
     },
     [setHistory, stopStream, windowRange],
@@ -203,6 +213,8 @@ export function Timeline() {
   const play = useCallback(
     async (override?: { from: string; to: string; label?: string }) => {
       stopStream();
+      const operation = operationRef.current.begin();
+      useSioStore.getState().setReplayAt(override?.from ?? windowRange.start.toISOString());
       setStatus(
         override?.label
           ? `planning replay of ${override.label}…`
@@ -216,6 +228,7 @@ export function Timeline() {
           to: override?.to ?? windowRange.end.toISOString(),
           speed,
         });
+        if (!operation.isCurrent()) { void api.cancelReplay(plan.replay_id).catch(() => undefined); return; }
         replayIdRef.current = plan.replay_id;
         setStatus(
           (override?.label ? `${override.label}: ` : "") +
@@ -223,32 +236,30 @@ export function Timeline() {
             (plan.capped ? " (resolution reduced to fit)" : ""),
         );
 
-        const stream = new EventSource(
-          `/api${plan.stream.replace(/^\/api/, "")}`,
-        );
-        streamRef.current = stream;
-        // A NAMED event, so an explicit listener is required: `onmessage` only fires for unnamed frames,
-        // and this exact mistake once silently dropped every live update in this app.
-        stream.addEventListener("ReplayFrame", (message) => {
-          const frame = JSON.parse(
-            (message as MessageEvent).data,
-          ) as ReplayFrame;
-          setHistory(frame.ts, frame.entities, "playing", {
-            progress: frame.progress,
-            events: frame.events,
-          });
-          setLag(frame.lag_s);
+        const controller = new AbortController();
+        streamRef.current = controller;
+        await session.ensure();
+        if (!operation.isCurrent()) return;
+        const response = await fetch(`/api${plan.stream.replace(/^\/api/, "")}`, {
+          headers: session.headers(), signal: controller.signal,
         });
-        stream.addEventListener("ReplayComplete", () => {
-          setStatus("replay complete");
+        if (!response.ok || !response.body) throw new Error("replay stream refused");
+        let completed = false;
+        for await (const message of readSse(response.body)) {
+          if (!operation.isCurrent()) return;
+          if (message.event === "ReplayFrame") {
+            const frame = JSON.parse(message.data) as ReplayFrame;
+            setHistory(frame.ts, frame.entities, "playing", { progress: frame.progress, events: frame.events });
+            setLag(frame.lag_s);
+          } else if (message.event === "ReplayComplete") { completed = true; break; }
+        }
+        if (operation.isCurrent()) {
+          setStatus(completed ? "replay complete" : "replay interrupted; choose play to resume");
           stopStream();
-        });
-        stream.onerror = () => {
-          setStatus("replay stream dropped");
-          stopStream();
-        };
+          useSioStore.setState({ replayMode: "scrubbing" });
+        }
       } catch {
-        setStatus("could not start a replay");
+        if (operation.isCurrent()) { setStatus("could not complete the replay"); stopStream(); }
       }
     },
     [setHistory, speed, stopStream, windowRange],
@@ -265,6 +276,7 @@ export function Timeline() {
 
   const pause = useCallback(() => {
     stopStream();
+    useSioStore.setState({ replayMode: "scrubbing" });
     setStatus("paused");
   }, [stopStream]);
 
@@ -294,6 +306,7 @@ export function Timeline() {
     [density],
   );
   const isLive = replayMode === "live";
+  const canReplay = session.can("timeline.write");
 
   return (
     <div className="timeline">
@@ -320,8 +333,7 @@ export function Timeline() {
           <button
             type="button"
             className="tl-btn"
-            onClick={() => void play()}
-            title="Replay this window"
+            disabled={!canReplay} title={!canReplay ? "Your role cannot start replays" : "Play this window"} onClick={() => void play()}
           >
             ▶ play
           </button>

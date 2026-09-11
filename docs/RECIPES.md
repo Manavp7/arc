@@ -8,7 +8,7 @@ it sends somebody to a command that does not exist and they conclude the docs ca
 The descriptions come from the comments above each recipe, so `just --list` and this page cannot
 disagree.
 
-There are **54**.
+There are **55**.
 
 ## Setup
 
@@ -24,7 +24,7 @@ There are **54**.
 
 | recipe | what it does |
 |---|---|
-| `just services *args` | Start postgres, redis, neo4j and minio (add names to be selective, or "all"). |
+| `just services *args` | Start postgres and redis (add names for optional adapters, or "all"). |
 | `just services-stop *args` | Stop the datastores, keeping their data. |
 | `just services-status` | What is running, on which port, and whether it answers. |
 | `just services-restart *args` | Restart the datastores, keeping their data. |
@@ -46,7 +46,8 @@ There are **54**.
 
 | recipe | what it does |
 |---|---|
-| `just dev *args` | Run the whole platform (mprocs if available, otherwise the built-in supervisor). |
+| `just dev *args` | Run the whole platform with the same supervised process table everywhere. |
+| `just dev-tui` | Optional interactive process panes; use just dev for health-gated startup. |
 | `just dev-lite *args` | Run every consumer in a single process — for low-RAM machines. |
 | `just dev-core *args` | Run only the data path (ingest, api, web). |
 | `just stop` | Stop anything `just dev` started (uses pidfiles, never pkill). |

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
@@ -36,15 +37,18 @@ DEFAULT_TOPICS: tuple[str, ...] = (
 class Subscriber:
     """One connected client."""
 
-    __slots__ = ("dropped", "queue", "topics")
+    __slots__ = ("dropped", "queue", "tenant_id", "topics")
 
-    def __init__(self, topics: Sequence[str] | None, maxsize: int = 500) -> None:
+    def __init__(self, topics: Sequence[str] | None, *, tenant_id: str, maxsize: int = 500) -> None:
         self.queue: asyncio.Queue[BusMessage] = asyncio.Queue(maxsize=maxsize)
         self.topics = {str(t) for t in topics} if topics else None
         self.dropped = 0
+        self.tenant_id = tenant_id
 
     def wants(self, message: BusMessage) -> bool:
-        return self.topics is None or str(message.topic) in self.topics
+        return message.tenant_id == self.tenant_id and (
+            self.topics is None or str(message.topic) in self.topics
+        )
 
     def offer(self, message: BusMessage) -> None:
         if not self.wants(message):
@@ -102,8 +106,8 @@ class StreamHub:
                 await asyncio.sleep(1.0)
 
     @contextlib.contextmanager
-    def subscribe(self, topics: Sequence[str] | None = None) -> Any:
-        subscriber = Subscriber(topics)
+    def subscribe(self, topics: Sequence[str] | None = None, *, tenant_id: str) -> Any:
+        subscriber = Subscriber(topics, tenant_id=tenant_id)
         self.subscribers.add(subscriber)
         log.debug("stream.subscribed", clients=len(self.subscribers))
         try:
@@ -114,7 +118,7 @@ class StreamHub:
                 log.info("stream.client_lagged", dropped=subscriber.dropped)
 
     async def events(
-        self, subscriber: Subscriber, *, keepalive_s: float = 15.0
+        self, subscriber: Subscriber, *, keepalive_s: float = 15.0, expires_at: float = 0.0
     ) -> AsyncIterator[str]:
         """Server-Sent Events frames for one subscriber.
 
@@ -123,8 +127,13 @@ class StreamHub:
         """
         yield ": connected\n\n"
         while True:
+            remaining = expires_at - time.time() if expires_at else keepalive_s
+            if remaining <= 0:
+                return
             try:
-                message = await asyncio.wait_for(subscriber.queue.get(), timeout=keepalive_s)
+                message = await asyncio.wait_for(
+                    subscriber.queue.get(), timeout=min(keepalive_s, remaining)
+                )
             except TimeoutError:
                 yield ": keepalive\n\n"
                 continue

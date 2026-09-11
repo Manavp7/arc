@@ -174,6 +174,35 @@ POLICY: tuple[Rule, ...] = (
     ),
     # --- ordinary operations -----------------------------------------------------------------
     Rule(
+        "notifications.write",
+        description="Mark only the authenticated recipient's visible in-app notifications as read",
+    ),
+    Rule(
+        "storage.write",
+        roles=("admin",),
+        description="Manage recorded-media retention, archival and explicit permanent cleanup",
+    ),
+    Rule(
+        "storage.read",
+        roles=("admin", "integrator"),
+        description="Inspect recorded-media storage usage and retention eligibility",
+    ),
+    Rule(
+        "review.write",
+        roles=("operator", "commander", "integrator", "ml_engineer", "admin"),
+        description="Upload recorded footage, configure image zones and review rules, and run analysis",
+    ),
+    Rule(
+        "case.write",
+        roles=("operator", "commander", "admin"),
+        description="Assign incident ownership, append investigation notes and record review outcomes",
+    ),
+    Rule(
+        "site.write",
+        roles=("integrator", "admin"),
+        description="Commission site geometry and camera calibration",
+    ),
+    Rule(
         "alerts.write",
         roles=("operator", "commander", "admin"),
         description="Acknowledging and resolving is an operator's job",

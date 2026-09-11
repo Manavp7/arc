@@ -8,7 +8,7 @@
  *       console.log(entity.label, entity.state.zone_id);
  *     }
  *
- * Types are generated from the API's OpenAPI schema — run `npm run generate` against a running platform.
+ * Query schemas are generated from OpenAPI; response contracts are shared with the console.
  * See `docs/SDK.md`.
  */
 
@@ -23,3 +23,7 @@ export type {
   StreamMessage,
 } from "./client.ts";
 export type { components, operations, paths } from "./generated/api.d.ts";
+
+export { readSse } from "./sse.ts";
+export type { SseFrame } from "./sse.ts";
+export type { Forecast, Mission, Zone, ReplayPlan, ReplayFrame, Explanation, HealthStatus, SioEvent } from "./contracts.ts";

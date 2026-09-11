@@ -1,0 +1,9 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {sourceSlots,mappedTargets,presetPreviewSummary} from '../src/lib/rule-presets.ts';
+const video={video_id:'clip',revision:7,title:'Loading bay',zones:[{zone_id:'gate',name:'Entrance',points:[[0,0],[1,0],[1,1]]},{zone_id:'unused',name:'Unused',points:[]}],rules:[{rule_id:'rule',zone_id:'gate'}]};
+const version={slots:[{slot_id:'entrance',name:'Entrance'}]};
+test('preset source slots include only used zones without camera coordinates',()=>{assert.deepEqual(sourceSlots(video),[{source_zone_id:'gate',slot_id:'scope_1',name:'Entrance'}]);assert.equal(JSON.stringify(sourceSlots(video)).includes('points'),false);});
+test('target requests pin the recording revision and require explicit valid mapping',()=>{const result=mappedTargets([video],['clip'],{clip:{entrance:'gate'}},version);assert.deepEqual(result,[{video_id:'clip',revision:7,zone_map:{entrance:'gate'}}]);assert.throws(()=>mappedTargets([video],['clip'],{},version),/Map every/);assert.throws(()=>mappedTargets([video],['clip'],{clip:{entrance:'other'}},version),/belong/);});
+test('different logical scopes cannot silently map to the same target zone',()=>{assert.throws(()=>mappedTargets([video],['clip'],{clip:{entrance:'gate',exit:'gate'}},{slots:[...version.slots,{slot_id:'exit'}]}),/different target zone/);assert.throws(()=>mappedTargets([video],[],{},version),/one and 20/);});
+test('preview distinguishes append preservation from explicit removal',()=>{const result={status:'ready',before_rules:[{}],final_rules:[{},{}],added_rules:[{}],removed_count:1};assert.equal(presetPreviewSummary(result,'append'),'1 current → 2 rules · 1 added');assert.match(presetPreviewSummary(result,'replace'),/1 removed/);assert.equal(presetPreviewSummary({status:'rejected',message:'Stale'},'append'),'Stale');});

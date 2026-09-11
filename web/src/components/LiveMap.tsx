@@ -274,7 +274,7 @@ const MAP_WORTHY: ReadonlySet<string> = new Set(["medium", "high", "critical"]);
 /** How long an event keeps its marker. Older than this and it is history, not a live situation. */
 const EVENT_MARKER_TTL_MS = 120_000;
 
-function eventLayer(events: SioEvent[]) {
+function eventLayer(events: SioEvent[], now: number) {
   // Phase 3 turned this layer into a problem worth solving properly.
   //
   // Zone entries and exits fire constantly, they carry the position of the entity that caused them,
@@ -289,10 +289,9 @@ function eventLayer(events: SioEvent[]) {
   //      entity, and an annotation that covers its subject has failed.
   //   3. Markers fade out over two minutes, because a mark that looks identical at five minutes old
   //      teaches an operator to ignore all of them.
-  const now = Date.now();
   const positioned = events
     .filter((event) => event.geo != null && MAP_WORTHY.has(event.severity))
-    .filter((event) => now - new Date(event.ts).getTime() < EVENT_MARKER_TTL_MS)
+    .filter((event) => { const age = now - Date.parse(event.ts); return age >= 0 && age < EVENT_MARKER_TTL_MS; })
     .slice(0, 40);
 
   const age = (event: SioEvent) =>
@@ -337,7 +336,12 @@ export function LiveMap() {
     () => positionedEntities(replayAt ? historyMap : entityMap),
     [replayAt, historyMap, entityMap],
   );
-  const events = useSioStore((state) => state.events);
+  const liveEvents = useSioStore((state) => state.events);
+  const historyEvents = useSioStore((state) => state.historyEvents);
+  const events = replayAt ? historyEvents : liveEvents;
+  const [liveClock, setLiveClock] = useState(Date.now);
+  useEffect(() => { const timer = window.setInterval(() => setLiveClock(Date.now()), 5000); return () => window.clearInterval(timer); }, []);
+  const displayTime = replayAt ? Date.parse(replayAt) : liveClock;
   const zones = useSioStore((state) => state.zones);
   const selectedId = useSioStore((state) => state.selectedEntityId);
   const selectEntity = useSioStore((state) => state.selectEntity);
@@ -415,7 +419,7 @@ export function LiveMap() {
   const [showHeatmap, setShowHeatmap] = useState(false);
 
   useEffect(() => {
-    if (!showHeatmap) return undefined;
+    if (!showHeatmap || replayAt) return undefined;
     let cancelled = false;
     const load = async () => {
       try {
@@ -434,7 +438,7 @@ export function LiveMap() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [showHeatmap]);
+  }, [showHeatmap, replayAt]);
 
   const legendEntries = useMemo(() => {
     const counts = new Map<string, number>();
@@ -451,7 +455,7 @@ export function LiveMap() {
   }, [entities, selectedId, cameraVersion]);
 
   const heatmapLayer = useMemo(() => {
-    if (!showHeatmap || !heatmap?.cells?.length) return null;
+    if (!showHeatmap || replayAt || !heatmap?.cells?.length) return null;
     const peak = Math.max(1, heatmap.max_observations);
     return new PolygonLayer<HeatmapCell>({
       id: "h3-heatmap",
@@ -478,7 +482,7 @@ export function LiveMap() {
       // deck.gl 9 does not accept `depthTest` in `parameters`, and ordering is the clearer mechanism anyway:
       // it is visible at the call site rather than hidden in a layer's options.
     });
-  }, [showHeatmap, heatmap]);
+  }, [showHeatmap, heatmap, replayAt]);
 
   const layers = useMemo(() => {
     const entityStack = entityLayers(entities, labelled, selectedId, selectEntity);
@@ -491,10 +495,10 @@ export function LiveMap() {
       ...(heatmapLayer ? [heatmapLayer] : []),
       zoneLayer(zones),
       ...entityStack,
-      eventLayer(events),
+      eventLayer(events, displayTime),
       labels,
     ];
-  }, [zones, entities, labelled, events, selectedId, selectEntity, heatmapLayer]);
+  }, [zones, entities, labelled, events, selectedId, selectEntity, heatmapLayer, displayTime]);
 
   useEffect(() => {
     overlayRef.current?.setProps({ layers });
@@ -522,13 +526,14 @@ export function LiveMap() {
       <button
         type="button"
         className={showHeatmap ? "heatmap-toggle heatmap-toggle-active" : "heatmap-toggle"}
+        disabled={Boolean(replayAt)}
         onClick={() => setShowHeatmap(!showHeatmap)}
         title="H3 occupancy heatmap, aggregated on the server"
       >
-        {showHeatmap ? "heatmap on" : "heatmap"}
+        {replayAt ? "heatmap available in LIVE" : showHeatmap ? "heatmap on" : "heatmap"}
       </button>
 
-      {showHeatmap && heatmap && (
+      {showHeatmap && !replayAt && heatmap && (
         <div className="heatmap-legend">
           <strong>Occupancy</strong> — {heatmap.cells.length} cell(s) at ~
           {heatmap.edge_length_m} m

@@ -26,8 +26,10 @@ interesting: one of these is AGPL-3.0, and finding that out during a procurement
 and this is a demonstrable platform, not a shipped product. Three ways out, in order of how much work they are:
 
 1. Buy an Ultralytics Enterprise licence.
-2. Swap the weights. The detector is behind `SIO_DETECTOR` and reads any ONNX model with a YOLO output shape —
-   `rtdetr` and several Apache-licensed alternatives drop in without code changes.
+2. Integrate a compatible alternative. The current ONNX adapter expects FP32 RGB letterboxed NCHW input
+   and a first output shaped `[1, N, 6]` containing already-deduplicated `xyxy, confidence, class` rows.
+   The installed YOLO26 Nano asset satisfies that contract. RT-DETR and raw YOLO exports may require
+   different preprocessing, decoding, label mapping or suppression; they are not generic weight replacements.
 3. `SIO_DETECTOR=synthetic` for a demo that needs no detector at all.
 
 Nothing else in the dependency tree is copyleft; `just check` runs on a permissive stack.

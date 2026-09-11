@@ -34,7 +34,7 @@ def polygon_wkt(corners: list[tuple[float, float]]) -> str:
     return f"POLYGON(({ring}, {first.lon} {first.lat}))"
 
 
-async def seed(*, clear: bool, write_geojson: bool) -> int:
+async def seed(*, clear: bool, write_geojson: bool, if_empty: bool = False) -> int:
     from sio_ingest.site import load_site
 
     from sio_core.config import get_settings
@@ -50,6 +50,16 @@ async def seed(*, clear: bool, write_geojson: bool) -> int:
         return 2
 
     tenant = cfg.tenant_id
+    if if_empty:
+        count = await pool.fetchval(
+            "SELECT (SELECT count(*) FROM zones WHERE tenant_id = %s) + "
+            "(SELECT count(*) FROM sources WHERE tenant_id = %s)",
+            (tenant, tenant),
+        )
+        if count:
+            print("site configuration already exists; setup leaves it unchanged")
+            await pool.close()
+            return 0
     print(f"seeding '{site.name}' into {cfg.pg_database} (tenant: {tenant})")
 
     if clear:
@@ -177,8 +187,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Seed the SIO demo site")
     parser.add_argument("--clear", action="store_true", help="delete existing zones/sources first")
     parser.add_argument("--geojson", action="store_true", help="also write the GeoJSON export")
+    parser.add_argument(
+        "--if-empty", action="store_true", help="seed only a tenant without sources or zones"
+    )
     args = parser.parse_args(argv)
-    return asyncio.run(seed(clear=args.clear, write_geojson=args.geojson))
+    if args.if_empty and args.clear:
+        parser.error("--if-empty cannot be combined with --clear")
+    return asyncio.run(seed(clear=args.clear, write_geojson=args.geojson, if_empty=args.if_empty))
 
 
 if __name__ == "__main__":

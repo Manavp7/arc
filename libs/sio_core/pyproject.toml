@@ -23,6 +23,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+keycloak = ["python-jose[cryptography]>=3.5"]
 kafka = ["aiokafka>=0.12"]
 qdrant = ["qdrant-client>=1.12"]
 

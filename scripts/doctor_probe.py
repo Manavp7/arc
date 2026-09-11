@@ -72,15 +72,22 @@ async def check_postgres() -> None:
         emit("ok", f"postgres reachable as {cfg.pg_user}@{cfg.pg_database}")
 
         extensions = await pool.extensions()
+        available = {
+            row["name"] for row in await pool.fetch("SELECT name FROM pg_available_extensions")
+        }
+        server_version = await pool.fetchval("SHOW server_version")
         for required in ("postgis", "vector"):
             if required in extensions:
                 emit("ok", f"extension {required} installed")
-            else:
+            elif required not in available:
                 emit(
                     "fail",
-                    f"extension {required} missing",
-                    "just db-init (install postgis/pgvector first)",
+                    f"extension {required} unavailable for the running PostgreSQL {server_version}",
+                    "install extensions for this server major version; on macOS use postgresql@17 "
+                    "with current Homebrew postgis/pgvector, then point SIO_PG_PORT at that server",
                 )
+            else:
+                emit("fail", f"extension {required} available but not enabled", "just db-init")
 
         rows = await pool.fetch(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"

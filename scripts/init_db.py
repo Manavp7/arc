@@ -134,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
                 if "postgis" in str(exc).lower() or "vector" in str(exc).lower():
                     print(
                         "  hint: PostGIS/pgvector extensions are missing. "
-                        "macOS: brew install postgis pgvector. "
+                        "macOS: brew install postgresql@17 postgis pgvector, then connect to that server; current Homebrew extensions do not support PostgreSQL 16. "
                         "Linux: apt-get install postgresql-16-postgis-3 postgresql-16-pgvector",
                         file=sys.stderr,
                     )

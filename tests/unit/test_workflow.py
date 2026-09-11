@@ -450,7 +450,7 @@ async def test_compensating_an_incident_resolves_it_rather_than_deleting_it() ->
     """Deleting it would erase the fact that a response started, which is exactly what the append-only
     tables exist to prevent."""
     result = await ACTIVITIES["close_incident"](a_context(), "create_incident:compensate")
-    assert result["resolved"] is True
+    assert result["resolved"] is False
     assert "rolled back" in result["reason"]
 
 

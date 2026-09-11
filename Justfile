@@ -25,8 +25,7 @@ setup:
     bash scripts/bootstrap.sh
     just services
     just db-init
-    just neo4j-init
-    just minio-init
+    just seed --if-empty
     just doctor
 
 # Install dependencies only (no datastores) — useful in CI.
@@ -46,7 +45,7 @@ doctor *args:
     bash scripts/doctor.sh {{args}}
 
 # ----------------------------------------------------------------- infrastructure
-# Start postgres, redis, neo4j and minio (add names to be selective, or "all").
+# Start postgres and redis (add names for optional adapters, or "all").
 services *args:
     bash scripts/services.sh start {{args}}
 
@@ -107,15 +106,13 @@ samples *args:
     {{uv}} python scripts/make_sample_clip.py {{args}}
 
 # ------------------------------------------------------------------------------ run
-# Run the whole platform (mprocs if available, otherwise the built-in supervisor).
+# Run the whole platform with the same supervised process table everywhere.
 dev *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if command -v mprocs >/dev/null 2>&1 && [ -f mprocs.yaml ]; then
-        mprocs --config mprocs.yaml
-    else
-        {{uv}} python scripts/supervisor.py --profile full {{args}}
-    fi
+    {{uv}} python scripts/supervisor.py --profile full {{args}}
+
+# Optional interactive process panes; use just dev for health-gated startup.
+dev-tui:
+    mprocs --config mprocs.yaml
 
 # Run every consumer in a single process — for low-RAM machines.
 dev-lite *args:
@@ -229,7 +226,8 @@ web-check:
     if [ -d web/node_modules ]; then
         cd web && npx tsc --noEmit && npx vite build
     else
-        echo "web/node_modules missing — skipping web check (run: just setup)"
+        echo "web/node_modules missing — run: npm ci --prefix web" >&2
+        exit 1
     fi
 
 # --------------------------------------------------------------------------- utility
