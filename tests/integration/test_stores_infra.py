@@ -422,6 +422,8 @@ async def test_minio_bucket_exists(cfg) -> None:  # type: ignore[no-untyped-def]
     """Tier 1 regression guard: the bucket is referenced everywhere and created by one script."""
     from sio_core.stores.blob import MinioBlobStore
 
+    if os.environ.get("SIO_BLOB_BACKEND", cfg.blob_backend) != "minio":
+        pytest.skip("blob backend is not minio")
     store = MinioBlobStore(
         cfg.minio_endpoint,
         cfg.minio_access_key,
