@@ -10,7 +10,7 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 from sio_api.review_models import AnalysisRequest, inspect_detector, model_catalog, pin_profile
-from sio_api.video_processing import VideoProcessor
+from sio_api.video_processing import VideoProcessor, media_available
 from sio_api.video_review import VideoReviewManager
 from test_video_jobs_storage import queue as queue
 from test_video_jobs_storage import seed_video
@@ -350,6 +350,8 @@ async def test_legacy_queued_job_gains_one_actual_profile_for_future_recovery(qu
 
 
 async def test_public_legacy_video_probes_playback_fps_instead_of_using_source_fps(queue, footage):
+    if not media_available():
+        pytest.skip("Working ffmpeg/ffprobe needed to inspect real playback metadata")
     manager, store, app = queue
     manager.closing = True
     video = await seed_video(manager, store)
@@ -361,4 +363,25 @@ async def test_public_legacy_video_probes_playback_fps_instead_of_using_source_f
         result = await client.get(f"/api/review/videos/{video['video_id']}", headers=auth(manager))
     assert result.status_code == 200
     assert result.json()["fps"] == 60 and result.json()["playback_fps"] == 12
+    assert "playback_fps" not in await store.get("tenant-a", "video", video["video_id"])
+
+
+async def test_legacy_playback_metadata_stays_unknown_without_ffprobe(queue, footage, monkeypatch):
+    manager, store, app = queue
+    manager.closing = True
+    video = await seed_video(manager, store)
+    await store.put("tenant-a", "video", video["video_id"], {**video, "fps": 60})
+    (manager.directory("tenant-a", video["video_id"]) / "playback.mp4").write_bytes(footage)
+
+    def missing_probe(path):
+        raise FileNotFoundError("ffprobe is not installed")
+
+    monkeypatch.setattr("sio_api.video_processing.probe", missing_probe)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app), base_url="http://test"
+    ) as client:
+        result = await client.get(f"/api/review/videos/{video['video_id']}", headers=auth(manager))
+    assert result.status_code == 200
+    assert result.json()["fps"] == 60
+    assert "playback_fps" not in result.json()
     assert "playback_fps" not in await store.get("tenant-a", "video", video["video_id"])

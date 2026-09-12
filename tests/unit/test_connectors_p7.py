@@ -444,13 +444,33 @@ def test_the_message_whitelist_is_small() -> None:
     assert "GLOBAL_POSITION_INT" in INTERESTING
 
 
-def test_positions_are_throttled() -> None:
-    """A yard drone at 10m/s moves 5m between 2Hz reports, well inside what anything downstream cares about."""
+@pytest.mark.parametrize("kind", ["GLOBAL_POSITION_INT", "GPS_RAW_INT"])
+@pytest.mark.parametrize("clock_origin", [0.0, 0.25])
+def test_positions_are_throttled(monkeypatch, kind: str, clock_origin: float) -> None:
+    """The first report is immediate even on a fresh host; later reports obey the interval."""
+    now = clock_origin
+    monkeypatch.setattr("sio_ingest.connectors.drone.time.monotonic", lambda: now)
     connector = MavlinkDroneConnector(a_config("drone_mavlink", min_interval_s=999))
-    first = connector._handle(FakeMavlinkMessage("GLOBAL_POSITION_INT", lat=1, lon=1, alt=0))
-    second = connector._handle(FakeMavlinkMessage("GLOBAL_POSITION_INT", lat=2, lon=2, alt=0))
+    first = connector._handle(FakeMavlinkMessage(kind, lat=1, lon=1, alt=0))
+    second = connector._handle(FakeMavlinkMessage(kind, lat=2, lon=2, alt=0))
     assert first is not None
     assert second is None, "a second position inside the interval must be dropped"
+
+    now = clock_origin + 998.0
+    assert connector._handle(FakeMavlinkMessage(kind, lat=3, lon=3, alt=0)) is None
+    now = clock_origin + 999.0
+    assert connector._handle(FakeMavlinkMessage(kind, lat=4, lon=4, alt=0)) is not None
+    assert connector._handle(FakeMavlinkMessage(kind, lat=5, lon=5, alt=0)) is None
+
+
+@pytest.mark.parametrize("kind", ["GLOBAL_POSITION_INT", "GPS_RAW_INT"])
+def test_a_rejected_position_does_not_delay_the_first_fix(monkeypatch, kind: str) -> None:
+    now = 0.0
+    monkeypatch.setattr("sio_ingest.connectors.drone.time.monotonic", lambda: now)
+    connector = MavlinkDroneConnector(a_config("drone_mavlink", min_interval_s=999))
+    assert connector._handle(FakeMavlinkMessage(kind, lat=0, lon=0, alt=0)) is None
+    now = 0.25
+    assert connector._handle(FakeMavlinkMessage(kind, lat=1, lon=1, alt=0)) is not None
 
 
 # --- RTSP -----------------------------------------------------------------------------------------

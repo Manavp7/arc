@@ -96,6 +96,7 @@ bootstrap_macos_datastores() {
   macos_brew_install "${SIO_BREW_POSTGIS}"
   macos_brew_install "${SIO_BREW_PGVECTOR}"
   macos_brew_install "${SIO_BREW_REDIS}"
+  macos_brew_install ffmpeg
   if [ "${PROFILE}" = "full" ]; then
     macos_brew_install "${SIO_BREW_NEO4J}"
     macos_brew_install "${SIO_BREW_MINIO}"
@@ -182,7 +183,7 @@ install_ollama_linux() {
 
 bootstrap_linux_datastores() {
   have apt-get || die "this Linux path expects apt-get (Debian/Ubuntu)"
-  linux_apt_install "${SIO_APT_POSTGRES}" "${SIO_APT_POSTGIS}" "${SIO_APT_PGVECTOR}" "${SIO_APT_REDIS}"
+  linux_apt_install "${SIO_APT_POSTGRES}" "${SIO_APT_POSTGIS}" "${SIO_APT_PGVECTOR}" "${SIO_APT_REDIS}" ffmpeg
   if [ "${PROFILE}" = "full" ]; then
     linux_install_neo4j
     install_minio_binary

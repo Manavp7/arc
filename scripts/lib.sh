@@ -68,10 +68,12 @@ env_value() {
 
 port_in_use() {
   port="$1"
-  if have lsof; then
+  # A service owned by another user can be invisible to unprivileged lsof (for example,
+  # Redis started by apt on a CI runner). Probe the same loopback address clients use.
+  if have nc; then
+    nc -z -w 1 127.0.0.1 "${port}" >/dev/null 2>&1
+  elif have lsof; then
     lsof -nP -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1
-  elif have nc; then
-    nc -z 127.0.0.1 "${port}" >/dev/null 2>&1
   else
     return 1
   fi

@@ -81,7 +81,7 @@ class MavlinkDroneConnector(Connector):
         self.min_interval_s = float(options.get("min_interval_s", 0.5))
         self.label = config.label or str(options.get("label", "drone"))
         self._connection: Any = None
-        self._last_emit = 0.0
+        self._last_emit: float | None = None
         self._battery_percent: float | None = None
         self._mode: str | None = None
         self._armed: bool | None = None
@@ -174,13 +174,13 @@ class MavlinkDroneConnector(Connector):
         if kind not in ("GLOBAL_POSITION_INT", "GPS_RAW_INT"):
             return None
 
-        # , not the event loop's clock. `asyncio.get_event_loop()` is deprecated outside a
+        # Use a monotonic clock. `asyncio.get_event_loop()` is deprecated outside a
         # running loop and a throttle has no business depending on one — this method is pure message handling
         # and is far easier to test without a loop in scope.
         now = time.monotonic()
-        if now - self._last_emit < self.min_interval_s:
+        # None means no position has been emitted: the first report must not depend on host uptime.
+        if self._last_emit is not None and now - self._last_emit < self.min_interval_s:
             return None
-        self._last_emit = now
 
         latitude = getattr(message, "lat", None)
         longitude = getattr(message, "lon", None)
@@ -195,9 +195,7 @@ class MavlinkDroneConnector(Connector):
             alt=_altitude_of(message),
         )
         velocity = _velocity_of(message)
-        self._emitted += 1
-        self._error = None
-        return Observation(
+        observation = Observation(
             source_id=self.source_id,
             modality=self.modality,
             ts=utc_now(),
@@ -225,6 +223,10 @@ class MavlinkDroneConnector(Connector):
                 "label": self.label,
             },
         )
+        self._last_emit = now
+        self._emitted += 1
+        self._error = None
+        return observation
 
     async def health(self) -> str:
         if self._error:

@@ -95,19 +95,46 @@ stop_postgres() {
 }
 
 # --------------------------------------------------------------------------------- redis
+redis_ready() {
+  # Bound both connection and reply waits: an unrelated listener must not hang startup.
+  # A bare TCP connection also cannot distinguish Redis from an HTTP service or NOAUTH.
+  python3 - "${REDIS_PORT}" <<'PY'
+import socket
+import sys
+
+try:
+    with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=1) as connection:
+        connection.sendall(b"PING\r\n")
+        with connection.makefile("rb") as reply:
+            ready = reply.readline(8) == b"+PONG\r\n"
+except (OSError, ValueError):
+    ready = False
+sys.exit(0 if ready else 1)
+PY
+}
+
 start_redis() {
+  have python3 || { fail "python3 not found; run scripts/bootstrap.sh"; return 1; }
   if is_macos; then
     brew services start "${SIO_BREW_REDIS}" >/dev/null 2>&1 || true
     wait_for_port "${REDIS_PORT}" "redis" || return 1
-    ok "redis running (brew services, port ${REDIS_PORT})"
   else
     mkdir -p "${SIO_STATE_DIR}/redis"
-    if port_in_use "${REDIS_PORT}"; then ok "redis already running"; return 0; fi
+    if port_in_use "${REDIS_PORT}"; then
+      if redis_ready; then
+        ok "redis already running (port ${REDIS_PORT}, PING successful)"
+        return 0
+      fi
+      fail "port ${REDIS_PORT} is in use but Redis PING failed; leaving the existing listener unchanged"
+      return 1
+    fi
     start_daemon redis redis-server \
       --port "${REDIS_PORT}" --bind 127.0.0.1 --dir "${SIO_STATE_DIR}/redis" \
       --save 60 1000 --appendonly no
     wait_for_port "${REDIS_PORT}" "redis" || return 1
   fi
+  redis_ready || { fail "redis on port ${REDIS_PORT} did not return PONG"; return 1; }
+  ok "redis running (port ${REDIS_PORT}, PING successful)"
 }
 
 stop_redis() {
