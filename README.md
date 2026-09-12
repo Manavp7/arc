@@ -99,3 +99,9 @@ See the [local verification record](docs/VERIFICATION.md) for executed checks, b
 | `docs/` | Product requirements, architecture, integration and operating notes |
 
 The [PRD](docs/PRD.md) describes intended scope and includes future requirements. Older phase notes are historical design material; they are not completion evidence.
+
+## License
+
+Unless otherwise noted, SIO project code is licensed under the [Apache License 2.0](LICENSE). You may use, modify, and redistribute it, including commercially, subject to the license conditions such as retaining required notices and identifying modified files. The license includes a patent grant and provides the software without warranties; see the full license for its terms and limitations.
+
+Third-party dependencies and model assets retain their own licenses. Model weights are downloaded separately and are not covered by SIO's Apache license. In particular, **Ultralytics YOLO26 requires compliance with AGPL-3.0, including applicable source-disclosure obligations, or a separate Ultralytics Enterprise license**. SIO's Apache license does not replace those terms, and hosting this repository publicly does not by itself establish AGPL compliance. Review the [official Ultralytics licensing terms](https://www.ultralytics.com/license), [model details](docs/MODELS.md), and [model manifest](infra/models.json) before choosing or distributing model assets.
