@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import threading
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -69,6 +70,7 @@ class RtspCameraConnector(Connector):
         self.transport = str(options.get("transport", "tcp"))
         self.store_frames = bool(options.get("store_frames", True))
         self._capture: Any = None
+        self._capture_lock = threading.Lock()
         self._store: Any = None
         self._read = 0
         self._published = 0
@@ -119,7 +121,19 @@ class RtspCameraConnector(Connector):
         api = cv2.CAP_FFMPEG if self.backend == "opencv" else cv2.CAP_GSTREAMER
         # On a thread: opening an RTSP stream negotiates with the camera and can take seconds.
         parameters = [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000, cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000]
-        self._capture = await asyncio.to_thread(cv2.VideoCapture, target, api, parameters)
+        opening = asyncio.create_task(asyncio.to_thread(cv2.VideoCapture, target, api, parameters))
+        try:
+            self._capture = await asyncio.shield(opening)
+        except asyncio.CancelledError:
+            # Cancelling an asyncio wait cannot cancel the OpenCV worker. Release
+            # its eventual result instead of orphaning an authenticated stream.
+            def release_late_capture(done: asyncio.Task[Any]) -> None:
+                with contextlib.suppress(Exception):
+                    if not done.cancelled():
+                        done.result().release()
+
+            opening.add_done_callback(release_late_capture)
+            raise
         if not self._capture.isOpened():
             raise RuntimeError(
                 f"could not open {_redact(self.url)}. Check the URL, that the camera is reachable, and that "
@@ -144,10 +158,16 @@ class RtspCameraConnector(Connector):
         )
 
     async def stop(self) -> None:
-        if self._capture is not None:
-            with contextlib.suppress(Exception):
-                self._capture.release()
-            self._capture = None
+        # A cancelled read await may still have an OpenCV worker in progress.
+        # Never release its capture concurrently, and do not block the event loop.
+        await asyncio.to_thread(self._close_capture)
+
+    def _close_capture(self) -> None:
+        with self._capture_lock:
+            if self._capture is not None:
+                with contextlib.suppress(Exception):
+                    self._capture.release()
+                self._capture = None
 
     async def observations(self) -> AsyncIterator[Observation]:
         while True:
@@ -167,9 +187,10 @@ class RtspCameraConnector(Connector):
         desynchronises, which shows up as corrupt frames rather than as missing ones. Decimation happens AFTER
         the read, where it costs only an encode we skip.
         """
-        if self._capture is None:
-            return None
-        ok, frame = self._capture.read()
+        with self._capture_lock:
+            if self._capture is None:
+                return None
+            ok, frame = self._capture.read()
         if not ok:
             self._failures += 1
             return None

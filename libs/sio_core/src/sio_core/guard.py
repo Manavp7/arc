@@ -53,6 +53,8 @@ log = get_logger("sio.guard")
 #: Derived rather than hand-annotated per handler. A decorator on each route is a list somebody will forget
 #: to extend, and a forgotten entry is an unenforced endpoint that looks enforced — the worst of both.
 RESOURCE_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("/api/alert-deliveries", "integration"),
+    ("/alert-deliveries", "integration"),
     ("/api/notifications", "notifications"),
     ("/api/review/storage", "storage"),
     ("/api/case-inbox", "case"),
@@ -172,6 +174,8 @@ def action_for(method: str, path: str) -> str:
     Suffix first, because it is more specific: `/decisions/{id}/approve` must be `decision.approve` and not
     `decisions.write`.
     """
+    if method.upper() == "POST" and path == "/api/review/recorded-search/query":
+        return "review.read"
     if path.startswith(("/media/raw/", "/api/media/raw/")):
         return "media.raw"
     for suffix, action in ACTION_SUFFIXES:

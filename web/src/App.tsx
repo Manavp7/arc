@@ -15,7 +15,7 @@
  * relation — an alert, an event and a recommendation are all inspected the same way.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AuthGate, SessionControls } from "./components/AuthGate";
 import { IncidentPanel } from "./components/IncidentPanel";
 import { SourcesPanel } from "./components/SourcesPanel";
@@ -23,6 +23,11 @@ import { SitePanel } from "./components/SitePanel";
 import { VideoReviewPanel } from "./components/VideoReviewPanel";
 import { CasePanel } from "./components/CasePanel";
 import { SearchPanel } from "./components/SearchPanel";
+import { RecordedSearchPanel } from "./components/RecordedSearchPanel";
+import { RecordingTimelinePanel } from "./components/RecordingTimelinePanel";
+import { AlertDeliveryPanel } from "./components/AlertDeliveryPanel";
+import { TAB_WORKSPACE, authorizationKey, decodeNavigation, readResume, resumeKey, type InvestigationLocation, type RailTab, type Workspace } from "./lib/investigation-navigation";
+import { useInvestigationHistory } from "./lib/use-investigation-history";
 import { ObjectExplorerPanel } from "./components/ObjectExplorerPanel";
 import { ReviewMetricsPanel } from "./components/ReviewMetricsPanel";
 import { EvaluationPanel } from "./components/EvaluationPanel";
@@ -59,28 +64,6 @@ import { connectStream } from "./lib/stream";
 import { latestTimestamp } from "./lib/freshness";
 import { openAlerts, useSioStore } from "./store";
 import type { Alert, Entity, SioEvent } from "./types";
-
-type RailTab =
-  | "evaluation" | "queue" | "inbox" | "storage" | "camera" | "evidence" | "compare"
-  | "incident"
-  | "footage"
-  | "cases"
-  | "search"
-  | "objects"
-  | "quality"
-  | "site"
-  | "sources"
-  | "system"
-  | "events"
-  | "alerts"
-  | "decisions"
-  | "copilot"
-  | "missions"
-  | "playbooks"
-  | "twin"
-  | "forecast"
-  | "analytics"
-  | "builder";
 
 /**
  * How recently an entity must have been observed to appear in the live view.
@@ -284,41 +267,75 @@ function EntityDetail() {
   );
 }
 
-type Workspace = "monitor" | "review" | "investigate" | "respond" | "admin";
 const SECTIONS: Record<Workspace, { label: string; tabs: RailTab[] }> = {
   monitor: { label: "Monitor", tabs: ["alerts", "events", "analytics"] },
-  review: { label: "Footage & cases", tabs: ["footage", "objects", "evaluation", "queue", "inbox", "cases", "compare", "evidence", "search", "quality"] },
+  review: { label: "Footage & cases", tabs: ["footage", "visual-search", "recording-timeline", "objects", "evaluation", "queue", "inbox", "cases", "compare", "evidence", "search", "quality"] },
   investigate: { label: "Investigate", tabs: ["incident", "copilot", "forecast", "twin"] },
   respond: { label: "Respond", tabs: ["decisions", "missions", "playbooks"] },
-  admin: { label: "Administration", tabs: ["sources", "site", "camera", "storage", "system", "builder"] },
+  admin: { label: "Administration", tabs: ["sources", "deliveries", "site", "camera", "storage", "system", "builder"] },
 };
-const TAB_NAMES: Record<RailTab, string> = { objects: "Objects", compare: "Compare footage", evaluation: "Evaluation lab", queue: "Processing queue", inbox: "Operator inbox", storage: "Storage", camera: "Camera setup", evidence: "Evidence packages", footage: "Footage", cases: "Cases", search: "Search", quality: "Review quality", site: "Site editor", alerts: "Alerts", events: "Event feed", analytics: "Analytics", incident: "Incident", copilot: "Copilot", forecast: "Forecasts", twin: "3D twin", decisions: "Decisions", missions: "Missions", playbooks: "Response log", sources: "Sources", system: "System health", builder: "Workflow builder" };
-const TAB_PERMISSIONS: Partial<Record<RailTab, string>> = { objects: "review.read", compare: "case.read", storage: "storage.read", camera: "site.write", inbox: "case.read", evidence: "case.read", sources: "integration.read", missions: "mission.read", copilot: "copilot.ask", builder: "workflow.write" };
+const TAB_NAMES: Record<RailTab, string> = { "visual-search": "Visual search", "recording-timeline": "Camera timeline", deliveries: "Alert delivery", objects: "Objects", compare: "Compare footage", evaluation: "Evaluation lab", queue: "Processing queue", inbox: "Operator inbox", storage: "Storage", camera: "Camera setup", evidence: "Evidence packages", footage: "Footage", cases: "Cases", search: "Search", quality: "Review quality", site: "Site editor", alerts: "Alerts", events: "Event feed", analytics: "Analytics", incident: "Incident", copilot: "Copilot", forecast: "Forecasts", twin: "3D twin", decisions: "Decisions", missions: "Missions", playbooks: "Response log", sources: "Sources", system: "System health", builder: "Workflow builder" };
+const TAB_PERMISSIONS: Partial<Record<RailTab, string>> = { "visual-search": "review.read", "recording-timeline": "review.read", deliveries: "integration.read", footage: "review.read", cases: "case.read", objects: "review.read", compare: "case.read", storage: "storage.read", camera: "site.write", inbox: "case.read", evidence: "case.read", sources: "integration.read", missions: "mission.read", copilot: "copilot.ask", builder: "workflow.write" };
 function canOpenTab(name: RailTab): boolean {
   const permission = TAB_PERMISSIONS[name];
   return !permission || session.can(permission);
 }
 
 function Console() {
-  // Role changes on token renewal refresh existing controls without resetting the workspace.
+  // Normal renewal preserves the view; access changes remount this console below.
   const identity = session.useSession();
-  const [workspace, setWorkspace] = useState<Workspace>("monitor");
-  const [tab, setTab] = useState<RailTab>("alerts");
+  const accountKey = resumeKey(identity);
+  const [initialLocation] = useState<InvestigationLocation>(() => {
+    const candidate = decodeNavigation(window.location.search) ?? readResume(accountKey);
+    return candidate && canOpenTab(candidate.tab) ? candidate : { tab: "alerts" };
+  });
+  const [workspace, setWorkspace] = useState<Workspace>(TAB_WORKSPACE[initialLocation.tab]);
+  const [tab, setTab] = useState<RailTab>(initialLocation.tab);
+  const [videoNavigationKey, setVideoNavigationKey] = useState(0);
+  const [caseDirty, setCaseDirty] = useState(false);
+  const [timelineDirty, setTimelineDirty] = useState(false);
+  const [linkMessage, setLinkMessage] = useState<string | null>(null);
+  const [alertId, setAlertId] = useState(initialLocation.alertId);
   const [incident, setIncident] = useState<Alert | null>(null);
-  const [missionId, setMissionId] = useState<string | undefined>();
-  const [caseId, setCaseId] = useState<string | undefined>();
+  const [missionId, setMissionId] = useState<string | undefined>(initialLocation.missionId);
+  const [caseId, setCaseId] = useState<string | undefined>(initialLocation.caseId);
   const [comparisonDirty, setComparisonDirty] = useState(false);
   const [footageDirty, setFootageDirty] = useState(false);
   const [navigationNotice, setNavigationNotice] = useState<string | null>(null);
-  const [packageId, setPackageId] = useState<string | undefined>();
-  const [videoId, setVideoId] = useState<string | undefined>();
-  const [videoAt, setVideoAt] = useState<number | undefined>();
-  const [analysisId, setAnalysisId] = useState<string | undefined>();
-  const [siteId, setSiteId] = useState<string | undefined>();
+  const [packageId, setPackageId] = useState<string | undefined>(initialLocation.packageId);
+  const [videoId, setVideoId] = useState<string | undefined>(initialLocation.videoId);
+  const [videoAt, setVideoAt] = useState<number | undefined>(initialLocation.atS);
+  const [analysisId, setAnalysisId] = useState<string | undefined>(initialLocation.analysisId);
+  const [siteId, setSiteId] = useState<string | undefined>(initialLocation.siteId);
   const [explaining, setExplaining] = useState<Explainable | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [snapshotAt, setSnapshotAt] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
+  const anyDirty = comparisonDirty || footageDirty || caseDirty || timelineDirty;
+  const location: InvestigationLocation = { tab, videoId, analysisId, atS: videoAt, caseId, missionId, packageId, siteId, alertId };
+  function restoreLocation(next: InvestigationLocation): boolean {
+    if (!canOpenTab(next.tab)) return false;
+    setTab(next.tab); setWorkspace(TAB_WORKSPACE[next.tab]);
+    setVideoId(next.videoId); setAnalysisId(next.analysisId); setVideoAt(next.atS);
+    setCaseId(next.caseId); setMissionId(next.missionId); setPackageId(next.packageId);
+    setSiteId(next.siteId); setAlertId(next.alertId); setIncident(null);
+    setVideoNavigationKey(value => value + 1);
+    return true;
+  }
+  useInvestigationHistory(location, accountKey, restoreLocation, anyDirty, () => setNavigationNotice("Save or discard current edits before using browser history. The destination must also be permitted for your account."));
+  const reportVideoLocation = useCallback((id: string, atS: number, version?: string) => {
+    setVideoId(id); setVideoAt(atS); setAnalysisId(version);
+  }, []);
+  useEffect(() => {
+    if (tab !== "incident" || !alertId) return;
+    const controller = new AbortController();
+    void api.request<Alert>(`/alerts/${encodeURIComponent(alertId)}`, { signal: controller.signal }).then(setIncident).catch(() => { if (!controller.signal.aborted) setSnapshotError("The linked incident is unavailable or not permitted."); });
+    return () => controller.abort();
+  }, [tab, alertId]);
+  async function copyInvestigationLink() {
+    try { await navigator.clipboard.writeText(window.location.href); setLinkMessage("Link copied. Recipients need access to this evidence."); }
+    catch { setLinkMessage("Copy the address from your browser to share this view."); }
+  }
   const generation = useRef(0);
   const onExplain = useCallback((subject: Explainable) => setExplaining(subject), []);
   const closeDrawer = useCallback(() => setExplaining(null), []);
@@ -370,11 +387,18 @@ function Console() {
     },
   }), [loadSnapshot]);
   useEffect(() => {
-    if (!canOpenTab(tab)) setTab(SECTIONS[workspace].tabs.find(canOpenTab) ?? "alerts");
+    if (!canOpenTab(tab)) {
+      const next = SECTIONS[workspace].tabs.find(canOpenTab) ?? "alerts";
+      setTab(next); setWorkspace(TAB_WORKSPACE[next]);
+    }
   }, [identity, tab, workspace]);
-  useEffect(() => { if (!comparisonDirty && !footageDirty) setNavigationNotice(null); }, [comparisonDirty,footageDirty]);
+  useEffect(() => { if (!anyDirty) setNavigationNotice(null); }, [anyDirty]);
   function navigate(section: Workspace, target?: RailTab): boolean {
     const next = target && canOpenTab(target) ? target : SECTIONS[section].tabs.find(canOpenTab) ?? "alerts";
+    if ((caseDirty || timelineDirty) && next !== tab) {
+      setNavigationNotice("Save or discard your current edits before leaving this workspace.");
+      return false;
+    }
     if (tab === "compare" && comparisonDirty && next !== "compare") {
       setNavigationNotice("Save or discard your alignment changes before leaving Compare footage.");
       return false;
@@ -384,16 +408,16 @@ function Console() {
       return false;
     }
     setNavigationNotice(null);
-    setWorkspace(section);
+    setWorkspace(TAB_WORKSPACE[next]);
     setTab(next);
     return true;
   }
-  function investigate(alert: Alert) { setIncident(alert); navigate("investigate", "incident"); if (alert.entity_ids[0]) useSioStore.getState().selectEntity(alert.entity_ids[0]); }
+  function investigate(alert: Alert) { if (!navigate("investigate", "incident")) return; setIncident(alert); setAlertId(alert.alert_id); if (alert.entity_ids[0]) useSioStore.getState().selectEntity(alert.entity_ids[0]); }
   function openMission(id?: string) { if (navigate("respond", "missions")) setMissionId(id); }
-  function openCase(id: string) { if (navigate("review", "cases")) setCaseId(id); }
+  function openCase(id: string) { if (caseDirty) { setNavigationNotice("Save or discard current case edits before opening another case."); return; } if (navigate("review", "cases")) setCaseId(id); }
   function openComparison(id: string) { if (navigate("review", "compare")) setCaseId(id); }
   function openPackage(id: string, selectedPackageId?: string) { if (navigate("review", "evidence")) { setCaseId(id); setPackageId(selectedPackageId); } }
-  function openVideo(id: string, atS?: number, version?: string) { if (tab === "footage" && footageDirty) { setNavigationNotice("Save a movement snapshot or discard its draft, save or discard footage edits and bookmarks, and queue or reset changed analysis settings before opening another recording or analysis."); return; } if (navigate("review", "footage")) { setVideoId(id); setVideoAt(atS); setAnalysisId(version); } }
+  function openVideo(id: string, atS?: number, version?: string) { if (tab === "footage" && footageDirty) { setNavigationNotice("Save a movement snapshot or discard its draft, save or discard footage edits and bookmarks, and queue or reset changed analysis settings before opening another recording or analysis."); return; } if (navigate("review", "footage")) { setVideoId(id); setVideoAt(atS); setAnalysisId(version); setVideoNavigationKey(value => value + 1); } }
   function openNotification(target: NotificationTarget) {
     if (target.kind === "case") openCase(target.case_id ?? target.id);
     else if (target.kind === "analysis" && target.video_id) openVideo(target.video_id, undefined, target.analysis_id ?? target.id);
@@ -409,12 +433,12 @@ function Console() {
     else if (kind === "event") { void api.request<SioEvent>(`/events/${encodeURIComponent(id)}`).then(event => onExplain(fromEvent(event))).catch(() => setSnapshotError("This event could not be opened.")); }
   }
   return <div className={`app ${workspace === "review" || workspace === "admin" ? "app-review" : ""}`}>
-    <header className="topbar"><div className="brand"><span className="brand-mark">S</span><h1>SIO <span>Site operations</span></h1></div><div className="topbar-right"><NotificationCenter onOpenTarget={openNotification} /><ConnectionBadge /><SessionControls /></div></header>
+    <header className="topbar"><div className="brand"><span className="brand-mark">S</span><h1>SIO <span>Site operations</span></h1></div><div className="topbar-right"><button className="rv-button copy-view-link" aria-label="Copy view link" title="Copy view link" onClick={() => void copyInvestigationLink()}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7 .1l3-3a5 5 0 0 0-7-7l-2 2M14 11a5 5 0 0 0-7-.1l-3 3a5 5 0 0 0 7 7l2-2" /></svg><span>Copy view link</span></button><NotificationCenter onOpenTarget={openNotification} /><ConnectionBadge /><SessionControls /></div></header>
     <div className="workspace-bar"><nav className="workspace-nav" aria-label="Workspaces">{(Object.keys(SECTIONS) as Workspace[]).map(section => <button key={section} aria-current={workspace === section ? "page" : undefined} className={workspace === section ? "workspace-tab active" : "workspace-tab"} onClick={() => navigate(section)}>{SECTIONS[section].label}{section === "monitor" && unresolvedAlerts.length > 0 && <span className="tab-badge">{unresolvedAlerts.length}</span>}</button>)}</nav><OperatingModes /></div>
     <main className={`workspace workspace-${workspace}`}>
       {workspace !== "admin" && workspace !== "review" && <section className="map-pane" aria-label="Site map"><ErrorBoundary label="Site map"><LiveMap /></ErrorBoundary><div className="map-status"><strong>{replayAt ? "Historical picture" : "Live picture"}</strong><span>{entityCount} moving entities</span><span>{replayAt ? new Date(replayAt).toLocaleString() : age == null ? "Waiting for observations" : `Updated ${age}s ago`}</span></div><ErrorBoundary label="Entity detail"><EntityDetail /></ErrorBoundary></section>}
       <aside className="rail"><nav className="tabs" aria-label={`${SECTIONS[workspace].label} tools`}>{SECTIONS[workspace].tabs.filter(canOpenTab).map(name => <button key={name} aria-pressed={name === tab} className={name === tab ? "tab tab-active" : "tab"} onClick={() => navigate(workspace, name)}>{TAB_NAMES[name]}</button>)}</nav>
-        <div className="rail-body">{navigationNotice && <p className="snapshot-error" role="alert">{navigationNotice}</p>}{snapshotError && <div className="snapshot-error" role="status"><span>Live snapshot unavailable. {snapshotError}</span><button onClick={() => void loadSnapshot()}>Retry</button></div>}
+        <div className="rail-body">{linkMessage && <p className="rv-message" role="status">{linkMessage} <button onClick={() => setLinkMessage(null)} aria-label="Dismiss link message">×</button></p>}{navigationNotice && <p className="snapshot-error" role="alert">{navigationNotice}</p>}{snapshotError && <div className="snapshot-error" role="status"><span>Live snapshot unavailable. {snapshotError}</span><button onClick={() => void loadSnapshot()}>Retry</button></div>}
           <ErrorBoundary key={tab} label={TAB_NAMES[tab]}>
             {tab === "alerts" && <AlertsPanel onExplain={onExplain} onInvestigate={investigate} />}
             {tab === "events" && <EventFeed onExplain={onExplain} />}
@@ -428,10 +452,13 @@ function Console() {
             {tab === "analytics" && <AnalyticsPanel />}
             {tab === "builder" && session.can("workflow.write") && <WorkflowBuilderPanel />}
             {tab === "sources" && <SourcesPanel />}
+            {tab === "deliveries" && <AlertDeliveryPanel />}
+            {tab === "visual-search" && <RecordedSearchPanel onOpenVideo={openVideo} onOpenCase={openCase} />}
+            {tab === "recording-timeline" && <RecordingTimelinePanel onOpenVideo={openVideo} onDirtyChange={setTimelineDirty} />}
             {tab === "system" && <SystemPanel />}
             {tab === "site" && <SitePanel initialSiteId={siteId} />}
-            {tab === "footage" && <VideoReviewPanel initialVideoId={videoId} initialAtS={videoAt} initialAnalysisId={analysisId} onOpenCase={openCase} onDirtyChange={setFootageDirty} />}
-            {tab === "cases" && <CasePanel initialCaseId={caseId} onOpenVideo={openVideo} onOpenMission={openMission} onPrepareEvidence={openPackage} onCompareEvidence={openComparison} />}
+            {tab === "footage" && <VideoReviewPanel initialVideoId={videoId} initialAtS={videoAt} initialAnalysisId={analysisId} navigationKey={videoNavigationKey} onLocationChange={reportVideoLocation} onOpenCase={openCase} onDirtyChange={setFootageDirty} />}
+            {tab === "cases" && <CasePanel initialCaseId={caseId} onSelectCase={setCaseId} onDirtyChange={setCaseDirty} onOpenVideo={openVideo} onOpenMission={openMission} onPrepareEvidence={openPackage} onCompareEvidence={openComparison} />}
             {tab === "evaluation" && <EvaluationPanel onOpenVideo={openVideo} onOpenCase={openCase} />}
             {tab === "queue" && <ProcessingQueuePanel onOpenVideo={openVideo} />}
             {tab === "inbox" && <OperatorInboxPanel onOpenCase={openCase} />}
@@ -451,4 +478,11 @@ function Console() {
   </div>;
 }
 
-export default function App() { return <AuthGate><OperationsProvider><Console /></OperationsProvider></AuthGate>; }
+function AuthorizedConsole() {
+  const identity = session.useSession();
+  const scope = authorizationKey(identity, session.claimsOf(identity?.token ?? ""));
+  useLayoutEffect(() => { useSioStore.getState().reset(); }, [scope]);
+  return <OperationsProvider key={scope}><Console /></OperationsProvider>;
+}
+
+export default function App() { return <AuthGate><AuthorizedConsole /></AuthGate>; }

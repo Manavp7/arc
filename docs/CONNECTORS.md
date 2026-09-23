@@ -39,6 +39,41 @@ One bad entry does not stop the others: a connector whose options are wrong is r
 `/connectors` by name, with the reason. A plugin that silently fails to load is indistinguishable from one that
 loaded and does nothing, and debugging that difference through log archaeology is how people stop using plugins.
 
+### Saved configuration and reviewed activation
+
+The console's **Administration → Sources** manages saved source overrides in
+`SIO_DATA_DIR/sources.json`; these are distinct from the bootstrap/plugin declarations
+above. Save connection settings before activating them. Secret fields remain masked
+in responses, and the server keeps credentials and rollback checkpoints in its
+owner-only configuration file.
+
+**Test connection** reads a bounded sample without publishing it. **Preview
+activation** compares the selected connector's running configuration with its saved
+settings. **Activate and verify incoming data** applies that reviewed revision to
+only this source and checks a fresh observation from the replacement connector after
+publication succeeds. Unrelated connectors continue running. Saving or toggling a
+source without activation leaves the running version unchanged until activation or
+an ingestion restart. The built-in simulator remains restart-managed.
+
+Failed activation attempts restore the previous running configuration; the result
+distinguishes restored, disabled and failed-recovery states. A successful change can
+be returned through **Preview rollback**. Preview tickets expire, are single-use and
+bind the actual stored credentials as well as visible fields. A lost HTTP response
+requires checking activation status before retrying.
+
+Connector implementations must make startup, observation iteration and shutdown
+asynchronous and cancellation-safe. Startup/pump cancellation and cleanup have
+bounded waits; a connector that refuses to stop blocks replacement rather than
+creating another connection alongside it. A synchronous blocking plugin cannot be
+forcibly interrupted by an asyncio timeout. See [SOURCE_ACTIVATION.md](SOURCE_ACTIVATION.md)
+for the exact contract and recovery behavior.
+
+Fresh ingestion does not prove downstream redaction, detection accuracy, camera
+coverage or surveyed calibration. Camera setup's measurement validation and source
+activation are separate operations; activation does not write pose measurements to
+fusion calibration. Authored connector tests do not establish compatibility with a
+physical RTSP camera, MQTT broker or drone.
+
 ## Optional dependencies
 
 Phase 7 connectors are behind extras, and each looks its dependency up **inside `start()`** so a default install

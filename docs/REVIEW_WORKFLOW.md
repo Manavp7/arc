@@ -1,6 +1,6 @@
 # Footage, cases and site planning
 
-The **Footage & cases** workspace connects saved recordings to human investigations. Its tools are Footage, Evaluation lab, Processing queue, Operator inbox, Cases, Compare footage, Evidence packages, Search and Review quality. Administration includes Site editor, Camera setup and Storage. These features use the existing authenticated tenant and role policies.
+The **Footage & cases** workspace connects saved recordings to human investigations. Its tools are Footage, Visual search, Camera timeline, Objects, Evaluation lab, Processing queue, Operator inbox, Cases, Compare footage, Evidence packages, Search and Review quality. Administration includes Site editor, Camera setup, Sources, Alert delivery and Storage. These features use the existing authenticated tenant and role policies.
 
 ## Review a recording
 
@@ -13,6 +13,8 @@ The **Footage & cases** workspace connects saved recordings to human investigati
 
 Reopening a case's footage selects the retained analysis version that produced its evidence. A later rerun does not replace that evidence. A draft rule preview is not a persisted finding and cannot be used as authoritative case evidence.
 
+**Copy view link** copies the selected case or recording/analysis/playback position from the address bar. Refresh restores that address, and browser Back/Forward moves through investigation locations; playback updates replace the current history entry. Without an explicit view address, the console resumes the last location saved for that tenant and account in this browser. Every record and media request is authorized again. Case, footage, comparison and capture-clock drafts must be saved or discarded before protected navigation. These links do not save drafts or grant access. See [INVESTIGATION_NAVIGATION.md](INVESTIGATION_NAVIGATION.md).
+
 **Analysis profiles** choose motion or the compatible detector already configured on the server, with 1 or 2 fps sampling and an ONNX confidence threshold from 0.05 to 0.95. Availability is checked locally; the controls do not download models. Jobs retain their profile and model hash through retries and restart recovery. Explicit ONNX failures do not silently switch to motion. Motion has no confidence score, and neither mode establishes real-camera accuracy. See [ANALYSIS_PROFILES.md](ANALYSIS_PROFILES.md).
 
 **Footage navigation** provides Space to play/pause, J/L to seek five seconds, K to pause, arrow keys for approximate playback-frame steps, and a speed selector. Shortcuts yield to text editing and zone drawing. Frame steps use the protected rendition's known `playback_fps`; source fps and detector sampling rate are different. The thumbnail strip shows up to 12 actual saved analysis samples, with gaps left visible. See [FOOTAGE_NAVIGATION.md](FOOTAGE_NAVIGATION.md).
@@ -23,13 +25,19 @@ Reopening a case's footage selects the retained analysis version that produced i
 
 **Attach an existing evidence source** adds a persisted recorded event or platform alert to an existing case. Each source keeps its saved configuration, model provenance, authenticated author and attachment context. The timeline supports up to 20 sources including the original. Recording offsets remain relative to their own clips; unknown recording clocks are labelled. Reports include all attached snapshots, and evidence packages can select any attached recording. See [CASE_ATTACHMENTS.md](CASE_ATTACHMENTS.md).
 
-**Compare footage** opens two recording sources attached to a case with their exact retained analyses and sampled overlays. Reviewers set a signed offset explicitly, seek or play within the shared interval, and save the alignment note with authenticated authorship. Source capture clocks remain unknown; this is manual alignment. See [EVIDENCE_COMPARISON.md](EVIDENCE_COMPARISON.md).
+**Compare footage** opens two recording sources attached to a case with their exact retained analyses and sampled overlays. Reviewers set a signed offset explicitly, seek or play within the shared interval, and save the alignment note with authenticated authorship. Saved evidence keeps its original capture-clock provenance; comparison uses manual alignment and does not automatically apply Camera timeline declarations. See [EVIDENCE_COMPARISON.md](EVIDENCE_COMPARISON.md).
+
+**Camera timeline** provides a separate shared clock across retained recordings. Declare a camera ID, capture start including its timezone, a signed correction and the measurement/source note. Positive correction moves the recording later; optional uncertainty is shown explicitly and remains unknown when blank. Choose a UTC cursor to open each covering recording at its corresponding offset and latest accessible completed analysis. Unknown clocks are listed separately, and upload time never substitutes for capture time. Saving a clock does not rewrite case evidence or saved manual comparison alignments. See [INVESTIGATION_NAVIGATION.md](INVESTIGATION_NAVIGATION.md#camera-timeline).
 
 **Cases from human observations** capture a frozen annotation and a completed analysis even when no detector event exists. Open a case from a saved evaluation miss to include its exact report context, or use a frozen observation as case evidence. Human evidence has no invented detector confidence and stays separate in review-quality counts. See [CASE_ANNOTATIONS.md](CASE_ANNOTATIONS.md).
 
 Existing live alerts also offer **Open case** in the Incident panel. Linked platform events are copied into the case. When stored detection/observation references resolve to indexed redacted frames, those frames are attached. Unresolved historical references are identified rather than replaced with unrelated footage.
 
 ## Search and quality
+
+**Visual search** indexes one selected completed analysis per recording after explicit consent to process the private original locally. The pinned ONNX CLIP model samples at most one retained frame every two seconds, up to 90 samples. Describe a scene or choose **Find similar** on a result, then inspect protected pixelated thumbnails and open the exact source moment. Save a private bookmark for review; where a real retained event overlaps the sample, create a case from that event. A similarity result does not fabricate an event or a human annotation. Unmatched incidents can use the existing frozen-annotation case workflow. Missing models, interrupted jobs and stale indexes are visible; model installation and indexing are explicit actions. See [RECORDED_SEARCH.md](RECORDED_SEARCH.md).
+
+**Objects** filters saved detector tracks by class, zone, confidence and clip time. This is distinct from CLIP similarity. Directional crossings and sampled occupancy can be saved as immutable movement reports. See [RECORDED_INSIGHTS.md](RECORDED_INSIGHTS.md).
 
 **Operator inbox** groups active, assigned, overdue and upcoming cases using server time. Assign a case to yourself and set its priority, or select cases to capture a permanent shift handover. Handovers retain each case's revision and authenticated author. They remain in the console; this feature does not send external notifications.
 
@@ -49,7 +57,9 @@ An integrator or administrator can create a named site, upload a PNG/JPEG floorp
 
 Optional camera pose drafts hold source ID, measured latitude/longitude, bearing, height, tilt, horizontal/vertical field of view and actual frame dimensions. Site layouts and pose drafts do **not** commission live sources, change the simulator's yard or establish geographic accuracy. Commissioning requires surveyed calibration and validation against actual camera footage. Image-space video rules remain separate from floorplan polygons.
 
-**Camera setup** connects an existing RTSP source and site camera to a saved readiness draft. Test the source, review available indexed pixelated imagery, enter a measured pose and at least three non-collinear ground checkpoints, then inspect projection errors against the chosen tolerance. Missing measurements remain missing. Passing these checks records readiness; it does not activate the source or establish survey accuracy. See [CAMERA_COMMISSIONING.md](CAMERA_COMMISSIONING.md).
+**Camera setup** connects an existing RTSP source and site camera to a saved readiness draft. Test the source, review available indexed pixelated imagery, enter a measured pose and at least three non-collinear ground checkpoints, then inspect projection errors against the chosen tolerance. Missing measurements remain missing. Passing these checks records readiness; it does not activate the source or establish survey accuracy. The separate [reviewed activation controls](SOURCE_ACTIVATION.md) apply the selected source's already-saved connection settings and verify incoming data. Save or discard setup edits before using those controls. Activation does not install measured pose into fusion calibration. See [CAMERA_COMMISSIONING.md](CAMERA_COMMISSIONING.md).
+
+**Alert delivery** shows whether raised/escalated alerts reached the alerts service's configured external webhook, including persisted failures and retry history. An integrator or administrator can retry an eligible failed or blocked delivery with a reason. This is separate from in-app notifications, and from the general webhook subscription service. Local authored tests do not establish receipt by a real endpoint. See [alert-deliveries.md](alert-deliveries.md).
 
 ## Local verification installation
 

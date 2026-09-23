@@ -1,7 +1,7 @@
 """Local source configuration and bounded read-only connection diagnostics.
 
-Changes are saved atomically and take effect after ingest restarts. Existing
-connectors continue with their active configuration until that restart.
+Changes are saved atomically. Reviewed activation applies one source at a time;
+other connectors continue with their active configuration.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from sio_core.tenancy import current_tenant
 from sio_schemas import Modality, Observation, utc_now
 
 from .connectors.base import Connector, ConnectorConfig, build_connector, connector_kinds
+from .source_activation import ActivationInput, SourceActivation
 
 SECRET = "••••••"
 _SECRET_KEY = re.compile(r"password|secret|token|credential|authorization|api.?key", re.I)
@@ -75,10 +76,28 @@ class SourceManager:
     def __init__(self, service: Any) -> None:
         self.service = service
         self.path: Path = service.settings.data_dir / "sources.json"
+        self.revisions: dict[str, int] = {}
+        self.activation_records: dict[str, dict[str, Any]] = {}
         self.saved: dict[str, dict[str, Any]] = self._load()
         self.changed: set[str] = set()
         self.status: dict[str, dict[str, Any]] = {}
         self.test_lock = asyncio.Lock()
+        self.activation = SourceActivation(self)
+        recovered = False
+        for source_id, record in self.activation_records.items():
+            if record.get("status") in ("applying", "recovering"):
+                self.saved[source_id] = record["rollback_config"]
+                self.revisions[source_id] = self.revisions.get(source_id, 0) + 1
+                record.update(
+                    status="recovered_after_restart",
+                    message="An interrupted activation was reverted before connector startup; live receipt has not yet been verified",
+                    rollback_available=False,
+                    sample=None,
+                    verified_at=None,
+                )
+                recovered = True
+        if recovered:
+            self._persist()
 
     def _load(self) -> dict[str, dict[str, Any]]:
         if not self.path.exists():
@@ -89,6 +108,8 @@ class SourceManager:
             raise ValueError("invalid sources.json; expected version 1")
         if data.get("tenant_id") != self.service.settings.tenant_id:
             raise ValueError("sources.json belongs to a different deployment tenant")
+        self.revisions = data.get("revisions", {})
+        self.activation_records = data.get("activations", {})
         return {entry["source_id"]: entry for entry in data["sources"]}
 
     def _persist(self) -> None:
@@ -101,6 +122,8 @@ class SourceManager:
                     "version": 1,
                     "tenant_id": self.service.settings.tenant_id,
                     "sources": list(self.saved.values()),
+                    "revisions": self.revisions,
+                    "activations": self.activation_records,
                 },
                 handle,
                 indent=2,
@@ -151,6 +174,7 @@ class SourceManager:
         }
 
     def observed(self, connector: Connector, observation: Observation) -> None:
+        self.activation.observed(connector, observation)
         self.status.setdefault(connector.source_id, {}).update(
             status="connected",
             last_success=utc_now().isoformat(),
@@ -184,6 +208,8 @@ class SourceManager:
             "last_observation": status.get("last_observation"),
             "error": status.get("error"),
             "last_test": status.get("last_test"),
+            "config_revision": self.revisions.get(source_id, 0),
+            "activation": self.activation.status(source_id),
         }
 
     async def listing(self) -> dict[str, Any]:
@@ -194,11 +220,12 @@ class SourceManager:
             "sources": [self.view(k, v) for k, v in configs.items()],
             "registered_kinds": connector_kinds(),
             "restart_required": bool(self.changed),
-            "note": "Saved changes apply after restarting ingest. Connection tests do not publish observations.",
+            "note": "Preview and activate saved changes to restart only the selected source. Connection tests do not publish observations.",
         }
 
     def save(self, source_id: str, body: SourceInput) -> dict[str, Any]:
         self._check_tenant()
+        self.activation.ensure_idle()
         if not _SOURCE_ID.fullmatch(source_id):
             raise HTTPException(
                 422, "Source ID must use letters, numbers, dots, hyphens or underscores"
@@ -221,13 +248,25 @@ class SourceManager:
             build_connector(ConnectorConfig(**data))
         except Exception as exc:
             raise HTTPException(422, f"Invalid connector options ({type(exc).__name__})") from exc
+        previous = self.saved.get(source_id)
+        old_revision = self.revisions.get(source_id, 0)
         self.saved[source_id] = data
-        self._persist()
+        self.revisions[source_id] = old_revision + 1
+        try:
+            self._persist()
+        except Exception:
+            if previous is None:
+                self.saved.pop(source_id, None)
+            else:
+                self.saved[source_id] = previous
+            self.revisions[source_id] = old_revision
+            raise HTTPException(503, "Could not save source configuration") from None
         self.changed.add(source_id)
         return self.view(source_id, data)
 
     async def test(self, source_id: str) -> dict[str, Any]:
         self._check_tenant()
+        self.activation.ensure_idle()
         data = self._entry(source_id)
         if self.test_lock.locked():
             raise HTTPException(409, "Another source test is running")
@@ -274,7 +313,13 @@ class SourceManager:
 
     def routes(self, app: FastAPI) -> None:
         app.add_api_route("/sources", self.listing, methods=["GET"], tags=["ingest"])
-        app.add_api_route("/sources/{source_id}", self.save, methods=["PUT"], tags=["ingest"])
+
+        # Run the short synchronous save on the event loop so its idle check and
+        # atomic write cannot race a lifecycle mutation in a thread-pool handler.
+        @app.put("/sources/{source_id}", tags=["ingest"])
+        async def save_source(source_id: str, body: SourceInput) -> dict[str, Any]:
+            return self.save(source_id, body)
+
         app.add_api_route("/sources/{source_id}/test", self.test, methods=["POST"], tags=["ingest"])
 
         @app.post("/sources/{source_id}/enabled", tags=["ingest"])
@@ -282,3 +327,23 @@ class SourceManager:
             self._check_tenant()
             data = {**self._entry(source_id), "enabled": body.enabled}
             return self.save(source_id, SourceInput.model_validate(data))
+
+        @app.get("/sources/{source_id}/activation", tags=["ingest"])
+        async def activation_status(source_id: str) -> dict[str, Any]:
+            return self.activation.status(source_id)
+
+        @app.post("/sources/{source_id}/activation/preview", tags=["ingest"])
+        async def activation_preview(source_id: str) -> dict[str, Any]:
+            return self.activation.preview(source_id)
+
+        @app.post("/sources/{source_id}/activation", tags=["ingest"])
+        async def activate_source(source_id: str, body: ActivationInput) -> dict[str, Any]:
+            return await self.activation.apply(source_id, body)
+
+        @app.post("/sources/{source_id}/activation/rollback-preview", tags=["ingest"])
+        async def rollback_preview(source_id: str) -> dict[str, Any]:
+            return self.activation.preview(source_id, rollback=True)
+
+        @app.post("/sources/{source_id}/activation/rollback", tags=["ingest"])
+        async def rollback_source(source_id: str, body: ActivationInput) -> dict[str, Any]:
+            return await self.activation.apply(source_id, body, rollback=True)

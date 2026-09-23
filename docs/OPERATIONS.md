@@ -10,6 +10,8 @@
 
 **Administration** contains sources, system health and workflow authoring. The 3D twin is optional and only loaded when opened from Investigate.
 
+**Footage & cases** includes Visual search for opt-in local CLIP retrieval and Camera timeline for a shared view of declared recording clocks. The top bar's **Copy view link** retains a case or exact recording analysis/position; refresh, Back/Forward and browser-local per-account resume reopen authorized records. Unsaved investigation drafts remain protected and are not included in links. See [investigation navigation and capture clocks](INVESTIGATION_NAVIGATION.md) and [recorded visual search](RECORDED_SEARCH.md).
+
 ## Data and action modes
 
 The header reports data/source mode, workflow action mode and scripted-copilot mode. Unknown or unreachable services are labelled unknown. Dry-run steps record proposed effects. The included build has no physical gate or drone command adapter, including when dry run is disabled.
@@ -24,11 +26,24 @@ Sources require `integration.write` (integrator or administrator) to configure o
 2. Supply its connection options. For a camera, `kind=camera_rtsp`, `modality=video`, and `options.url=rtsp://...` or `rtsps://...`.
 3. Save. Configuration is stored in `SIO_DATA_DIR/sources.json` with owner-only permissions. Responses mask secret values; unchanged masked values preserve their stored originals.
 4. Test the connection. This reads at most a bounded sample and does not publish it to the live world. A successful test does not imply continuous ingest has started.
-5. Restart ingestion or the full supervised stack to apply saved changes.
+5. Choose **Preview activation**, inspect the redacted running and saved configurations, then **Activate and verify incoming data**. This replaces only the selected connector and requires a fresh observation from that replacement to be successfully published. The preview is revision-bound and expires; saving another edit requires a new preview.
+6. Read the activation result. Failed activation attempts restoration of the prior configuration. **Preview rollback** allows an explicit reviewed return to the retained prior configuration. If recovery fails, inspect the reported failure before restarting ingestion; do not assume that a disconnected browser cancelled server recovery.
 
-Enable/disable changes also require restart. The UI shows pending changes and the latest successful observation, separately from saved configuration. Existing connectors stay active under their current configuration until restarted.
+Enable/disable changes follow the same saved-configuration flow. Saving alone leaves existing connectors on their current configuration; ingestion restart also applies saved settings. The built-in simulator remains restart-managed. Camera setup exposes activation controls separately from measured readiness; save or discard setup edits first. A disabled source has no fresh-observation verification claim. See [SOURCE_ACTIVATION.md](SOURCE_ACTIVATION.md) for checkpoint persistence, rollback, timeouts and connector cancellation requirements.
 
 Real camera bytes first enter a private `pending/` namespace. The media API rejects that namespace. Perception promotes processed frames and emits `frames.ready`; only then does the world model index a retrievable frame. No real hardware validation is implied by synthetic connector tests.
+
+## Recorded search and clocks
+
+Recorded visual search requires the installed pinned CLIP image/text/tokenizer assets and explicit consent for each original recording. Embeddings are local private files, not API responses or append-only document history. Revisions or original-media changes invalidate the index; the operator must review and rebuild it. Removing an index preserves the recording, while purge removes the containing media directory. The single-process indexer shares native video-processing capacity. See [RECORDED_SEARCH.md](RECORDED_SEARCH.md) for limits and installation.
+
+Camera timeline uses operator-declared capture time plus signed correction. Enter a timezone and document the measurement source. Blank capture time remains unknown, and blank uncertainty remains unknown rather than zero. Uncertainty is displayed as a qualification; it is not automatic clock synchronization or proof of overlap. Existing case snapshots and comparison offsets are unchanged. See [INVESTIGATION_NAVIGATION.md](INVESTIGATION_NAVIGATION.md#camera-timeline).
+
+## Outbound alert delivery
+
+Apply migration `009_alert_deliveries.sql` through the normal database migration workflow before starting the updated alerts service. When `SIO_ALERT_WEBHOOK_URL` is configured, raising/escalating an alert atomically queues its immutable notification in PostgreSQL. **Administration → Alert delivery** displays status, attempts, sanitized failures and recent history for permitted source zones. Eligible manual retries require `integration.write` and an explanation.
+
+Automatic retries are bounded; interrupted requests recover after their lease expires. A changed or disabled destination blocks pending deliveries instead of forwarding them elsewhere. Alerts created with no configured destination are not retrospectively queued. Receivers must deduplicate the stable delivery ID because an unconfirmed HTTP attempt may already have been accepted. The separate general webhook subscription service is unchanged. See [alert-deliveries.md](alert-deliveries.md) for retry timing, access and receiver requirements. Local mocked endpoints verify the protocol path, not actual third-party delivery or production throughput.
 
 ## Authentication
 

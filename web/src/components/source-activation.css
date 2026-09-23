@@ -1,0 +1,9 @@
+.source-activation { margin-top: 12px; border-top: 1px solid var(--border, #d5dbe1); padding-top: 12px; min-width: 0; }
+.source-activation-review { background: var(--panel-bg, rgba(128, 128, 128, .05)); border: 1px solid var(--border, #d5dbe1); border-radius: 8px; padding: 14px; margin-top: 10px; }
+.source-activation-review > header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+.source-activation-review > header span, .source-activation-review li { font-size: 12px; line-height: 1.5; }
+.source-activation-diff { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.source-activation-diff h4 { font-size: 12px; margin: 10px 0 6px; }
+.source-activation-diff pre { font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 250px; overflow: auto; padding: 10px; background: rgba(128,128,128,.08); border-radius: 6px; }
+.source-activation-review ul { padding-left: 18px; }
+@media (max-width: 600px) { .source-activation-diff { grid-template-columns: 1fr; } }

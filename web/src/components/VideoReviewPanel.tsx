@@ -16,9 +16,9 @@ import type { AnalysisOptions } from "../lib/review-types";
 import type { ReviewBookmark } from "../lib/review-bookmarks";
 import "./review.css";
 
-export interface VideoReviewPanelProps { initialVideoId?: string; initialAtS?: number; initialAnalysisId?: string; onOpenCase?: (id: string) => void; onDirtyChange?: (dirty: boolean) => void }
+export interface VideoReviewPanelProps { navigationKey?: number; onLocationChange?: (id: string, atS: number, analysisId?: string) => void; initialVideoId?: string; initialAtS?: number; initialAnalysisId?: string; onOpenCase?: (id: string) => void; onDirtyChange?: (dirty: boolean) => void }
 const freshId = (prefix: string) => `${prefix}_${crypto.randomUUID().slice(0, 12)}`;
-export function VideoReviewPanel({ initialVideoId, initialAtS = 0, initialAnalysisId, onOpenCase, onDirtyChange }: VideoReviewPanelProps) {
+export function VideoReviewPanel({ navigationKey, onLocationChange, initialVideoId, initialAtS = 0, initialAnalysisId, onOpenCase, onDirtyChange }: VideoReviewPanelProps) {
   session.useSession();
   const [pinnedAnalysis, setPinnedAnalysis] = useState(initialAnalysisId);
   const historical = Boolean(pinnedAnalysis);
@@ -67,7 +67,19 @@ export function VideoReviewPanel({ initialVideoId, initialAtS = 0, initialAnalys
   useEffect(() => { onDirtyChange?.(workbenchDirty); return () => onDirtyChange?.(false); }, [workbenchDirty,onDirtyChange]);
   useEffect(() => { if (!workbenchDirty) return; const protect = (event:BeforeUnloadEvent) => { event.preventDefault(); event.returnValue=""; }; window.addEventListener("beforeunload",protect); return () => window.removeEventListener("beforeunload",protect); }, [workbenchDirty]);
 
-  useEffect(() => { if (initialVideoId) { setSelectedId(initialVideoId); setPinnedAnalysis(initialAnalysisId); pendingSeek.current = initialAtS; setAtS(initialAtS); } }, [initialVideoId, initialAtS, initialAnalysisId]);
+  const appliedNavigation = useRef(navigationKey);
+  useEffect(() => {
+    if (navigationKey !== undefined && appliedNavigation.current === navigationKey) return;
+    appliedNavigation.current = navigationKey;
+    if (initialVideoId) {
+      setSelectedId(initialVideoId); setPinnedAnalysis(initialAnalysisId); pendingSeek.current = initialAtS; setAtS(initialAtS);
+      if (playerRef.current) playerRef.current.currentTime = initialAtS;
+    }
+  }, [navigationKey, initialVideoId, initialAtS, initialAnalysisId]);
+  useEffect(() => {
+    if (video && video.video_id === selectedId) onLocationChange?.(video.video_id, Math.floor(atS * 10) / 10,
+      analysis?.status === "completed" ? analysis.analysis_id : undefined);
+  }, [video?.video_id, selectedId, analysis?.analysis_id, analysis?.status, Math.floor(atS * 10), onLocationChange]);
   useEffect(() => {
     const controller = new AbortController();
     void reviewApi.videos(controller.signal).then(result => {

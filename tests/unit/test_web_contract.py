@@ -240,26 +240,27 @@ def test_the_heatmap_is_drawn_beneath_the_entities() -> None:
 def test_every_rail_tab_has_a_panel() -> None:
     """Every declared tab is reachable from one workspace and renders a panel.
 
-    The grouped navigation replaces the old flat RailTab array. Check exact coverage against both
-    type unions so a missing workspace, orphaned tab, duplicate entry or empty panel still fails.
+    Check exact coverage against the shared URL navigation map, including each tab's workspace.
+    A missing workspace, orphaned tab, duplicate entry or empty panel must still fail.
     """
     app = (WEB / "App.tsx").read_text()
-    declared_tabs = re.search(r"type RailTab\s*=([^;]+);", app)
-    declared_workspaces = re.search(r"type Workspace\s*=([^;]+);", app)
+    navigation = (WEB / "lib" / "investigation-navigation.ts").read_text()
+    declared = re.search(r"const TAB_WORKSPACE\s*=\s*\{(.*?)\}\s*as const", navigation, re.DOTALL)
     sections = re.search(r"const SECTIONS\b.*?=\s*\{(.*?)\n\};", app, re.DOTALL)
-    assert declared_tabs and declared_workspaces and sections, (
-        "the grouped navigation declarations are missing"
-    )
-    tab_names = set(re.findall(r'"([a-z]+)"', declared_tabs.group(1)))
-    workspace_names = set(re.findall(r'"([a-z]+)"', declared_workspaces.group(1)))
+    assert declared and sections, "the grouped navigation declarations are missing"
+    mapping = dict(re.findall(r'"?([a-z-]+)"?\s*:\s*"([a-z]+)"', declared.group(1)))
+    tab_names, workspace_names = set(mapping), set(mapping.values())
     groups = re.findall(r"(\w+)\s*:\s*\{[^{}]*tabs\s*:\s*\[([^]]*)\]", sections.group(1))
     assert {name for name, _ in groups} == workspace_names, (
         "every workspace needs a navigation group"
     )
     reachable: list[str] = []
     for workspace, entries in groups:
-        names = re.findall(r'"([a-z]+)"', entries)
+        names = re.findall(r'"([a-z-]+)"', entries)
         assert names, f"the {workspace!r} workspace has no tabs"
+        assert all(mapping.get(name) == workspace for name in names), (
+            "URL and rail workspace must agree"
+        )
         reachable.extend(names)
     assert len(tab_names) >= 7, f"expected the operator panels, found {sorted(tab_names)}"
     assert set(reachable) == tab_names, (

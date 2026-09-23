@@ -3310,3 +3310,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .detail { max-height: 90%; overflow-y: auto; width: min(320px, 100%); }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+
+/* Exact investigation links remain accessible without crowding the mobile session controls. */
+.copy-view-link { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; flex-shrink: 0; }
+@media (max-width: 700px) { .copy-view-link span { display: none; } .copy-view-link { padding: 8px; } }

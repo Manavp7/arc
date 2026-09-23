@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Query, Request
+from pydantic import BaseModel, Field, field_validator
 
-from sio_core import MessageContext, PgPool, SioService, describe_error, get_pg_pool
+from sio_core import MessageContext, PgPool, SioService, get_pg_pool
 from sio_core.explain import ExplanationBuilder
 from sio_schemas import (
     Alert,
@@ -21,6 +20,7 @@ from sio_schemas import (
     utc_now,
 )
 
+from .outbox import AlertOutbox, enqueue_with_alert
 from .scoring import (
     DEDUP_WINDOW_S,
     group_key,
@@ -37,13 +37,16 @@ from .scoring import (
 #: system's usefulness.
 ALERTABLE = (Severity.MEDIUM, Severity.HIGH, Severity.CRITICAL)
 
-#: Consecutive webhook failures before the circuit opens, and how long it stays open.
-#:
-#: Measured the hard way: a misconfigured URL produced one warning per alert, and on a backlog of a few
-#: thousand alerts the log became unreadable. An endpoint that has refused five times in a row is down or
-#: wrong, and hammering it neither helps it nor informs us.
-WEBHOOK_FAILURES_BEFORE_PAUSE = 5
-WEBHOOK_PAUSE_S = 60.0
+
+class RetryDeliveryRequest(BaseModel):
+    reason: str = Field(min_length=3, max_length=240)
+
+    @field_validator("reason")
+    @classmethod
+    def meaningful_reason(cls, value: str) -> str:
+        if len(value.strip()) < 3:
+            raise ValueError("Explain why the delivery should be retried.")
+        return value.strip()
 
 
 class AckRequest(BaseModel):
@@ -75,8 +78,7 @@ class AlertsService(SioService):
         self._resolved = 0
         self._webhooks_sent = 0
         self._webhooks_failed = 0
-        self._webhook_consecutive_failures = 0
-        self._webhook_open_until = 0.0
+        self.outbox = AlertOutbox(self.pool, self.client)
 
     async def setup(self) -> None:
         await self.pool.open()
@@ -92,11 +94,9 @@ class AlertsService(SioService):
 
     async def health_checks(self) -> dict[str, str]:
         checks = {"postgres": "ok" if await self.pool.ping() else "unreachable"}
-        if self._webhooks_failed:
-            paused = time.monotonic() < self._webhook_open_until
-            checks["webhook"] = f"degraded: {self._webhooks_failed} delivery failure(s)" + (
-                f", paused for {self._webhook_open_until - time.monotonic():.0f}s" if paused else ""
-            )
+        checks["webhook"] = (
+            "ok (configured)" if self.settings.alert_webhook_url else "ok (unconfigured)"
+        )
         return checks
 
     async def health_info(self) -> dict[str, str]:
@@ -173,10 +173,9 @@ class AlertsService(SioService):
             explanation=explanation.build(),
             urgency_reason=scored.reason,
         )
-        await self._persist(alert)
+        await self._persist(alert, notification="raised")
         self._raised += 1
         await self._emit(alert, ctx)
-        await self._webhook(alert, "raised")
         self.log.info(
             "alerts.raised",
             alert=alert.alert_id,
@@ -298,16 +297,24 @@ class AlertsService(SioService):
             # not change — and overwriting it produced an inbox where every row's justification for its
             # priority was the escalation timer, still reading "unacknowledged" after being acknowledged.
             alert.escalation_reason = reason
-            await self._persist(alert)
+            if not await self._persist(
+                alert, notification="escalated", expected_state=AlertState.OPEN
+            ):
+                continue
             self._escalated += 1
             await self._emit(alert, None)
-            await self._webhook(alert, "escalated")
             self.log.warning(
                 "alerts.escalated",
                 alert=alert.alert_id,
                 severity=str(alert.severity),
                 reason=reason,
             )
+
+        outcomes = await self.outbox.dispatch(
+            self.settings.tenant_id, self.settings.alert_webhook_url
+        )
+        self._webhooks_sent += outcomes.count("delivered")
+        self._webhooks_failed += sum(result in {"pending", "failed"} for result in outcomes)
 
     # ---------------------------------------------------------------- persistence
     async def _open_alert_for(self, key: str) -> Alert | None:
@@ -318,9 +325,14 @@ class AlertsService(SioService):
         )
         return Alert.model_validate(row["payload"]) if row else None
 
-    async def _persist(self, alert: Alert) -> None:
-        await self.pool.execute(
-            """
+    async def _persist(
+        self,
+        alert: Alert,
+        notification: str | None = None,
+        *,
+        expected_state: AlertState | None = None,
+    ) -> bool:
+        statement = """
             INSERT INTO alerts (
                 tenant_id, alert_id, title, group_key, severity, score, state, count, ts, last_ts,
                 geom, zone_id, event_ids, entity_ids, decision_ids, ack_by, ack_ts, escalated_ts,
@@ -344,33 +356,40 @@ class AlertsService(SioService):
                 urgency_reason = EXCLUDED.urgency_reason,
                 escalation_reason = EXCLUDED.escalation_reason,
                 payload        = EXCLUDED.payload
-            """,
-            (
-                alert.tenant_id,
-                alert.alert_id,
-                alert.title,
-                alert.group_key,
-                str(alert.severity),
-                alert.score,
-                str(alert.state),
-                alert.count,
-                alert.ts,
-                alert.last_ts,
-                f"SRID=4326;POINT({alert.geo.lon} {alert.geo.lat})" if alert.geo else None,
-                alert.zone_id,
-                alert.event_ids,
-                alert.entity_ids,
-                alert.decision_ids,
-                alert.ack_by,
-                alert.ack_ts,
-                alert.escalated_ts,
-                alert.resolved_ts,
-                alert.assignee,
-                alert.urgency_reason,
-                alert.escalation_reason,
-                alert.to_json(),
-            ),
+            """
+        params: tuple[Any, ...] = (
+            alert.tenant_id,
+            alert.alert_id,
+            alert.title,
+            alert.group_key,
+            str(alert.severity),
+            alert.score,
+            str(alert.state),
+            alert.count,
+            alert.ts,
+            alert.last_ts,
+            f"SRID=4326;POINT({alert.geo.lon} {alert.geo.lat})" if alert.geo else None,
+            alert.zone_id,
+            alert.event_ids,
+            alert.entity_ids,
+            alert.decision_ids,
+            alert.ack_by,
+            alert.ack_ts,
+            alert.escalated_ts,
+            alert.resolved_ts,
+            alert.assignee,
+            alert.urgency_reason,
+            alert.escalation_reason,
+            alert.to_json(),
         )
+        if expected_state is not None:
+            statement += " WHERE alerts.state = %s"
+            params = (*params, str(expected_state))
+        if notification and self.settings.alert_webhook_url:
+            statement, params = enqueue_with_alert(
+                statement, params, alert, notification, self.settings.alert_webhook_url
+            )
+        return bool(await self.pool.execute(statement, params))
 
     async def _emit(self, alert: Alert, ctx: MessageContext | None) -> None:
         if ctx is not None:
@@ -378,56 +397,39 @@ class AlertsService(SioService):
         else:
             await self.publish(Topic.ALERTS, alert)
 
-    async def _webhook(self, alert: Alert, action: str) -> None:
-        """Fan out to an external endpoint, if one is configured.
-
-        Failures are counted and surfaced in `/health`, never retried in-line. A webhook that blocks alert
-        processing turns somebody else's outage into ours, and the alert is already durable in Postgres — the
-        webhook is a convenience, not the record.
-        """
-        url = self.settings.alert_webhook_url
-        if not url:
-            return
-        if time.monotonic() < self._webhook_open_until:
-            # Circuit open. A dead endpoint used to produce one warning per alert, and during a busy
-            # minute that buries everything else in the log — the noise costs more than the webhook is
-            # worth. Health still reports the failures, so this is quieter, not hidden.
-            return
-        try:
-            response = await self.client.post(
-                url,
-                json={
-                    "action": action,
-                    "alert_id": alert.alert_id,
-                    "title": alert.title,
-                    "severity": str(alert.severity),
-                    "score": alert.score,
-                    "zone_id": alert.zone_id,
-                    "count": alert.count,
-                    "urgency_reason": alert.urgency_reason,
-                    "ts": alert.last_ts.isoformat(),
-                },
-            )
-            response.raise_for_status()
-            self._webhooks_sent += 1
-            self._webhook_consecutive_failures = 0
-        except httpx.HTTPError as exc:
-            self._webhooks_failed += 1
-            self._webhook_consecutive_failures += 1
-            if self._webhook_consecutive_failures >= WEBHOOK_FAILURES_BEFORE_PAUSE:
-                self._webhook_open_until = time.monotonic() + WEBHOOK_PAUSE_S
-                self.log.warning(
-                    "alerts.webhook_paused",
-                    url=url,
-                    failures=self._webhook_consecutive_failures,
-                    resuming_in_s=WEBHOOK_PAUSE_S,
-                    error=describe_error(exc),
-                )
-            else:
-                self.log.warning("alerts.webhook_failed", url=url, error=describe_error(exc))
-
     # -------------------------------------------------------------------- routes
     def routes(self, app: FastAPI) -> None:
+        @app.get("/alert-deliveries", tags=["alerts"])
+        async def delivery_history(
+            request: Request,
+            status: str | None = Query(
+                None, pattern="^(pending|sending|delivered|failed|blocked)$"
+            ),
+            alert_id: str | None = None,
+            limit: int = Query(100, ge=1, le=200),
+        ) -> dict[str, Any]:
+            return await self.outbox.list(
+                self.settings.tenant_id,
+                self.settings.alert_webhook_url,
+                status=status,
+                alert_id=alert_id,
+                limit=limit,
+                allowed_zones=tuple(request.state.principal.zones),
+            )
+
+        @app.post("/alert-deliveries/{delivery_id}/retry", tags=["alerts"])
+        async def retry_delivery(
+            delivery_id: str, body: RetryDeliveryRequest, request: Request
+        ) -> dict[str, Any]:
+            return await self.outbox.retry(
+                self.settings.tenant_id,
+                delivery_id,
+                self.settings.alert_webhook_url,
+                request.state.principal.subject,
+                body.reason,
+                allowed_zones=tuple(request.state.principal.zones),
+            )
+
         @app.get("/alerts", tags=["alerts"])
         async def alerts(
             state: str | None = None,
@@ -519,14 +521,21 @@ class AlertsService(SioService):
         @app.post("/alerts/{alert_id}/escalate", tags=["alerts"])
         async def escalate_now(alert_id: str, reason: str = "escalated by hand") -> dict[str, Any]:
             alert = await self._load(alert_id)
+            if alert.state == AlertState.ESCALATED:
+                return alert.to_wire()
+            if alert.state == AlertState.RESOLVED:
+                raise HTTPException(409, "A resolved alert cannot be escalated.")
+            previous_state = alert.state
             alert.state = AlertState.ESCALATED
             alert.escalated_ts = utc_now()
             alert.escalation_reason = reason
             alert.explanation.notes.append(f"escalated by hand: {reason}")
-            await self._persist(alert)
+            if not await self._persist(
+                alert, notification="escalated", expected_state=previous_state
+            ):
+                return (await self._load(alert_id)).to_wire()
             self._escalated += 1
             await self._emit(alert, None)
-            await self._webhook(alert, "escalated")
             return alert.to_wire()
 
         @app.get("/alerts/stats/summary", tags=["alerts"])

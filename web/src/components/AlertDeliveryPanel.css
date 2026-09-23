@@ -1,0 +1,37 @@
+.alert-delivery-panel { padding: 20px; color: var(--text-primary, #d4ded8); min-width: 0; overflow: auto; height: 100%; }
+.delivery-heading { display: flex; gap: 16px; justify-content: space-between; align-items: flex-start; }
+.delivery-heading h2 { margin: 0; font-size: 18px; }
+.delivery-heading p, .delivery-meta, .delivery-footnote { color: var(--text-secondary, #94a39b); font-size: 12px; line-height: 1.55; }
+.alert-delivery-panel button, .alert-delivery-panel select, .alert-delivery-panel input { color: inherit; background: var(--bg-panel, #14231c); border: 1px solid var(--border, #35483c); border-radius: 5px; padding: 7px 10px; font: inherit; }
+.alert-delivery-panel button { cursor: pointer; white-space: nowrap; }
+.alert-delivery-panel button:disabled { opacity: .5; cursor: not-allowed; }
+.alert-delivery-panel button:focus-visible, .alert-delivery-panel select:focus-visible, .alert-delivery-panel input:focus-visible, .alert-delivery-panel summary:focus-visible { outline: 2px solid #82bf91; outline-offset: 3px; }
+.delivery-config { display: grid; gap: 5px; padding: 12px; margin: 12px 0; background: #14342144; border: 1px solid #477858; border-radius: 6px; font-size: 12px; line-height: 1.5; }
+.delivery-config.is-unconfigured { background: #49391d33; border-color: #857443; }
+.delivery-filters { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin: 16px 0; font-size: 12px; }
+.delivery-filters label { display: flex; gap: 8px; align-items: center; }
+.delivery-list { display: grid; gap: 12px; }
+.delivery-card { background: var(--bg-panel, #111c16); padding: 15px; border: 1px solid var(--border, #35483c); border-radius: 7px; min-width: 0; }
+.delivery-card-title { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
+.delivery-card-title strong { overflow-wrap: anywhere; font-size: 14px; }
+.delivery-status { flex: none; border: 1px solid #68796f; border-radius: 20px; padding: 2px 8px; text-transform: uppercase; font-size: 10px; letter-spacing: .04em; }
+.delivery-status.is-delivered { color: #a3dfab; border-color: #4e7f57; }
+.delivery-status.is-failed, .delivery-status.is-blocked { color: #f4c69d; border-color: #996044; }
+.delivery-facts { display: flex; flex-wrap: wrap; gap: 14px 24px; font-size: 12px; margin: 14px 0; }
+.delivery-facts dt { color: #91a297; margin-bottom: 3px; }
+.delivery-facts dd { margin: 0; }
+.delivery-error, .delivery-failure { color: #f0bcab; overflow-wrap: anywhere; font-size: 12px; }
+.delivery-notice { color: #a3dfab; font-size: 12px; }
+.delivery-card summary { cursor: pointer; font-size: 12px; }
+.delivery-id { display: block; overflow-wrap: anywhere; margin: 10px 0; font-size: 11px; }
+.delivery-history { padding-left: 20px; font-size: 12px; line-height: 1.7; }
+.delivery-history li { margin-bottom: 8px; }
+.delivery-history p { margin: 0; overflow-wrap: anywhere; }
+.delivery-retry { display: grid; gap: 10px; margin-top: 15px; }
+.delivery-retry label { display: grid; gap: 6px; font-size: 12px; }
+.delivery-retry input { width: 100%; box-sizing: border-box; }
+.delivery-retry div { display: flex; gap: 8px; }
+.delivery-retry-button { margin-top: 12px; }
+.delivery-empty { padding: 32px 10px; text-align: center; color: #a8b6ad; }
+.delivery-footnote { margin-top: 20px; }
+@media (max-width: 600px) { .alert-delivery-panel { padding: 12px; } .delivery-filters { align-items: flex-start; flex-direction: column; } .delivery-heading { gap: 8px; } }

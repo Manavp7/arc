@@ -8,8 +8,8 @@ import { CaseEvidenceAttachments } from "./CaseEvidenceAttachments";
 import type { CaseRecord } from "../lib/review-types";
 import "./review.css";
 
-export interface CasePanelProps { initialCaseId?: string; onOpenVideo?: (id: string, atS?: number, analysisId?: string) => void; onOpenMission?: (id: string) => void; onPrepareEvidence?: (id: string) => void; onCompareEvidence?: (caseId: string) => void }
-export function CasePanel({ initialCaseId, onOpenVideo, onOpenMission, onPrepareEvidence, onCompareEvidence }: CasePanelProps) {
+export interface CasePanelProps { onSelectCase?: (id: string) => void; onDirtyChange?: (dirty: boolean) => void; initialCaseId?: string; onOpenVideo?: (id: string, atS?: number, analysisId?: string) => void; onOpenMission?: (id: string) => void; onPrepareEvidence?: (id: string) => void; onCompareEvidence?: (caseId: string) => void }
+export function CasePanel({ onSelectCase, onDirtyChange, initialCaseId, onOpenVideo, onOpenMission, onPrepareEvidence, onCompareEvidence }: CasePanelProps) {
   session.useSession();
   const [cases, setCases] = useState<CaseRecord[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(initialCaseId ?? null);
@@ -29,6 +29,15 @@ export function CasePanel({ initialCaseId, onOpenVideo, onOpenMission, onPrepare
   const [busy, setBusy] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const canWrite = session.can("case.write");
+  const workbenchDirty = dirty || evidenceDirty || Boolean(note.trim()) || Boolean(busy);
+  useEffect(() => { onDirtyChange?.(workbenchDirty); return () => onDirtyChange?.(false); }, [workbenchDirty, onDirtyChange]);
+  useEffect(() => { if (record && record.case_id === selectedId) onSelectCase?.(record.case_id); }, [record?.case_id, selectedId, onSelectCase]);
+  useEffect(() => {
+    if (!workbenchDirty) return;
+    const protect = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", protect);
+    return () => window.removeEventListener("beforeunload", protect);
+  }, [workbenchDirty]);
   useEffect(() => { if (initialCaseId) setSelectedId(initialCaseId); }, [initialCaseId]);
   useEffect(() => {
     const controller = new AbortController();

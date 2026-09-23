@@ -8,6 +8,8 @@ The [recorded review workflow](docs/REVIEW_WORKFLOW.md) connects batch MP4 uploa
 
 [Analysis profiles](docs/ANALYSIS_PROFILES.md) select motion or a compatible locally configured ONNX detector, confidence threshold and 1/2 fps sampling; queued runs pin those settings and model hashes through retries. [Private bookmarks](docs/REVIEW_BOOKMARKS.md) retain personal notes against an exact analysis. [Footage navigation](docs/FOOTAGE_NAVIGATION.md) adds keyboard transport, speed controls, approximate protected-playback frame steps and saved sample thumbnails. Recordings remain limited to 180 seconds and 100 MiB. These controls neither install models nor establish live-camera accuracy.
 
+[Investigation links and resume](docs/INVESTIGATION_NAVIGATION.md) preserve a selected case or recording analysis and playback position through refresh and browser history. **Copy view link** shares that location; recipients still need source permissions. **Camera timeline** aligns recordings using operator-declared capture clocks, signed corrections and stated uncertainty; unknown clocks remain separate. [Recorded visual search](docs/RECORDED_SEARCH.md) adds opt-in local CLIP indexing, text and sample-image similarity, protected thumbnails, exact footage jumps and review bookmarks. Similarity matches are leads for human review.
+
 ## Current scope
 
 [Recorded object and movement tools](docs/RECORDED_INSIGHTS.md) search local tracks by class, zone, confidence and clip time, open exact saved samples, and calculate finite directional crossings and sampled occupancy. Immutable movement snapshots preserve their configuration and model provenance and export to CSV.
@@ -15,6 +17,8 @@ The [recorded review workflow](docs/REVIEW_WORKFLOW.md) connects batch MP4 uploa
 The repository contains 20 Python services, shared schema/runtime/SDK libraries, a React console, a TypeScript SDK, infrastructure migrations, and regression/integration tests. It is an actively developed prototype, not a completed production deployment.
 
 Implemented paths include Redis streaming, PostgreSQL/PostGIS/pgvector storage, tracking/fusion, rules and alerts, forecasting, decision approval, inline playbooks, mission control, historical replay, source configuration/testing, and operational status. Authentication supports explicit development sign-in and a browser OIDC authorization-code flow with PKCE.
+
+[Reviewed source activation](docs/SOURCE_ACTIVATION.md) applies a saved configuration to one connector, verifies a fresh published observation and supports reviewed rollback. [Alert delivery history](docs/alert-deliveries.md) uses a PostgreSQL outbox for the alerts service's configured webhook, with bounded retries and audited manual retry. Receivers must deduplicate the stable delivery ID; HTTP delivery is not an exactly-once guarantee.
 
 The following limits are deliberate and visible:
 
@@ -24,7 +28,7 @@ The following limits are deliberate and visible:
 - Workflow execution is **inline**. Temporal is not implemented; selecting it fails configuration instead of silently using a different runner.
 - Kafka, Qdrant, DeepStream, TimesFM, and Cosmos adapters are stubs. The GPU profile is an extension map, not a working GPU deployment.
 - Domain services serve one deployment tenant and reject requests from other tenants. API streams, history, and media are tenant-scoped. A general shared multi-tenant production deployment requires further work.
-- Source configuration changes, including enable/disable, are persisted and require an ingestion restart. Connection tests read a sample without publishing it.
+- Source configuration changes, including enable/disable, are saved before activation. Reviewed activation applies a selected source without restarting unrelated connectors; ingestion restart also applies saved configuration. The built-in simulator remains restart-managed. Connection tests read a sample without publishing it; activation deliberately checks fresh published data.
 - Real camera hardware, live identity-provider deployments, production load, and physical effects require deployment-specific validation.
 
 ## Local setup
@@ -61,7 +65,9 @@ just models --llm           # additionally pull the configured local LLM; needs 
 
 Select the desired adapters explicitly, for example `SIO_LLM_PROVIDER=ollama` and `SIO_EMBEDDER=clip`, and restart the affected services. Missing dependencies or unavailable models must be resolved before trusting their output.
 
-In **Administration → Sources**, configure a camera or sensor, save it, test its connection, inspect a safe sample, and restart ingestion to apply changes. Camera credentials stay in the server-side source configuration with restrictive file permissions; listings mask secrets. Real camera buffers are private until perception finishes processing/redaction and publishes a ready-frame reference.
+In **Administration → Sources**, configure a camera or sensor and save it. A connection test reads a bounded sample without publishing. To apply the saved change, choose **Preview activation**, review the redacted running/saved difference, then **Activate and verify incoming data**. Camera setup exposes the same source controls separately from measured readiness. Failed activation attempts recovery to the prior running configuration; review the result before retrying. Camera credentials stay in the server-side source configuration with restrictive file permissions; listings mask secrets. Real camera buffers are private until perception finishes processing/redaction and publishes a ready-frame reference.
+
+Recorded visual search uses the three pinned CLIP assets even if the live pipeline remains configured with hash embeddings. Index each recording explicitly after reviewing private-original consent. Camera timeline clocks are human declarations, not automatically extracted or independently verified capture times.
 
 See [connector options](docs/CONNECTORS.md), [model details](docs/MODELS.md), and [operations and authentication](docs/OPERATIONS.md).
 

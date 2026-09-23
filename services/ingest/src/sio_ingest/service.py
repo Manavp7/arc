@@ -66,6 +66,9 @@ class IngestService(SioService):
         self.connectors: list[Connector] = []
         self.simulator_connector: SimulatorConnector | None = None
         self._tasks: list[asyncio.Task[None]] = []
+        self._connector_tasks: dict[str, asyncio.Task[None]] = {}
+        self._cleanup_tasks: dict[str, asyncio.Task[None]] = {}
+        self._startup_tasks: dict[str, asyncio.Task[None]] = {}
         self._published_by_topic: dict[str, int] = {}
         self._entity_task: asyncio.Task[None] | None = None
         self.blob = get_blob(self.settings)
@@ -210,9 +213,7 @@ class IngestService(SioService):
                     "connector.start_failed", source=connector.source_id, error=describe_error(exc)
                 )
                 continue
-            self._tasks.append(
-                asyncio.create_task(self._pump(connector), name=f"connector-{connector.source_id}")
-            )
+            self._launch_pump(connector)
             self.log.info("connector.started", **connector.describe())
 
         # Publish the fixed cast once so the map has context immediately rather than after the
@@ -232,11 +233,88 @@ class IngestService(SioService):
                     note="Phase 1 bridge; set SIO_SIM_PUBLISH_ENTITIES=false once fusion is live",
                 )
 
+    def _launch_pump(self, connector: Connector) -> None:
+        task = asyncio.create_task(self._pump(connector), name=f"connector-{connector.source_id}")
+        self._connector_tasks[connector.source_id] = task
+        self._tasks.append(task)
+        self.sources.status.setdefault(connector.source_id, {}).update(
+            status="starting", error=None
+        )
+
+    async def start_source(self, connector: Connector) -> None:
+        """Start only the replacement source; retain it for cleanup if start fails."""
+        if any(c.source_id == connector.source_id for c in self.connectors):
+            raise RuntimeError("source must be stopped before replacement")
+        self.connectors.append(connector)
+        startup = asyncio.create_task(connector.start())
+        self._startup_tasks[connector.source_id] = startup
+        try:
+            await asyncio.shield(startup)
+        except asyncio.CancelledError:
+            startup.cancel()
+            raise
+        finally:
+            if startup.done():
+                self._startup_tasks.pop(connector.source_id, None)
+        self._launch_pump(connector)
+
+    async def stop_source(self, source_id: str) -> None:
+        """Stop one connector with bounded cooperative cancellation.
+
+        A plugin that ignores cancellation leaves the source blocked rather than
+        allowing a duplicate connection to be started alongside it.
+        """
+        connector = next((c for c in self.connectors if c.source_id == source_id), None)
+        startup = self._startup_tasks.get(source_id)
+        if startup is not None:
+            startup.cancel()
+            _, pending = await asyncio.wait({startup}, timeout=5)
+            if pending:
+                raise TimeoutError("connector startup did not stop")
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                startup.result()
+            self._startup_tasks.pop(source_id, None)
+        task = self._connector_tasks.get(source_id)
+        if task is not None:
+            task.cancel()
+            _, pending = await asyncio.wait({task}, timeout=5)
+            if pending:
+                raise TimeoutError("connector pump did not stop")
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                task.result()
+            self._connector_tasks.pop(source_id, None)
+            if task in self._tasks:
+                self._tasks.remove(task)
+        if connector is not None:
+            cleanup = self._cleanup_tasks.get(source_id)
+            if cleanup is None:
+                cleanup = asyncio.create_task(connector.stop())
+                self._cleanup_tasks[source_id] = cleanup
+            _, pending = await asyncio.wait({cleanup}, timeout=5)
+            if pending:
+                cleanup.cancel()
+                raise TimeoutError("connector cleanup did not finish")
+            if cleanup.cancelled():
+                raise RuntimeError("connector cleanup was interrupted; restart ingestion")
+            cleanup.result()
+            self._cleanup_tasks.pop(source_id, None)
+            self.connectors.remove(connector)
+
     async def teardown(self) -> None:
-        for task in [*self._tasks, self._entity_task]:
+        for task in [
+            *self._tasks,
+            *self._cleanup_tasks.values(),
+            *self._startup_tasks.values(),
+            self._entity_task,
+        ]:
             if task is not None:
                 task.cancel()
-        for task in [*self._tasks, self._entity_task]:
+        for task in [
+            *self._tasks,
+            *self._cleanup_tasks.values(),
+            *self._startup_tasks.values(),
+            self._entity_task,
+        ]:
             if task is not None:
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await task
@@ -262,6 +340,7 @@ class IngestService(SioService):
                     self.sources.observed(connector, observation)
                     self._published_by_topic[topic] = self._published_by_topic.get(topic, 0) + 1
                     await self._apply_backpressure(topic)
+                await asyncio.sleep(0.1)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

@@ -103,6 +103,7 @@ class ApiService(SioService):
         self.video_review: Any = None
         self.evidence_packages: Any = None
         self.notifications: Any = None
+        self.recorded_search: Any = None
         global _hub
         _hub = self.hub
 
@@ -114,10 +115,14 @@ class ApiService(SioService):
             await self.evidence_packages.start()
         if self.notifications:
             await self.notifications.start()
+        if self.recorded_search:
+            await self.recorded_search.start()
         await self.hub.start()
         self.log.info("api.ready", port=self.port, base_url=self.settings.api_base_url)
 
     async def teardown(self) -> None:
+        if self.recorded_search:
+            await self.recorded_search.close()
         if self.notifications:
             await self.notifications.close()
         if self.video_review:
@@ -184,6 +189,8 @@ class ApiService(SioService):
         from .evidence_packages import install_evidence_package_routes
         from .notifications import install_notification_routes
         from .recorded_insights import install_recorded_insight_routes
+        from .recorded_search import install_recorded_search_routes
+        from .recording_timeline import install_recording_timeline_routes
         from .review_bookmarks import install_review_bookmark_routes
         from .rule_presets import install_rule_preset_routes
         from .sites import install_site_routes
@@ -202,6 +209,10 @@ class ApiService(SioService):
         install_rule_preset_routes(app, self.workbench)
         install_review_bookmark_routes(app, self.workbench)
         install_recorded_insight_routes(app, self.workbench)
+        install_recording_timeline_routes(app, self.workbench)
+        self.recorded_search = install_recorded_search_routes(
+            app, self.settings, self.workbench, self.video_review
+        )
         install_camera_commissioning_routes(app, self.settings, self.workbench, self.pool)
         self.evidence_packages = install_evidence_package_routes(
             app, self.settings, self.workbench, self.pool
@@ -551,6 +562,71 @@ class ApiService(SioService):
                 "ingest",
                 self.settings.ingest_port,
                 f"/sources/{source_id}/enabled",
+                method="POST",
+                body=body,
+                request=request,
+            )
+
+        @api.get("/sources/{source_id}/activation", tags=["ingest"])
+        async def source_activation_status(request: Request, source_id: str) -> Any:
+            return await _forward(
+                "ingest",
+                self.settings.ingest_port,
+                f"/sources/{source_id}/activation",
+                request=request,
+            )
+
+        @api.post("/sources/{source_id}/activation", tags=["ingest"])
+        async def activate_source(request: Request, source_id: str, body: dict[str, Any]) -> Any:
+            return await _forward(
+                "ingest",
+                self.settings.ingest_port,
+                f"/sources/{source_id}/activation",
+                method="POST",
+                body=body,
+                http_timeout_s=90.0,
+                request=request,
+            )
+
+        @api.post("/sources/{source_id}/activation/{action}", tags=["ingest"])
+        async def source_activation_action(
+            request: Request, source_id: str, action: str, body: dict[str, Any]
+        ) -> Any:
+            if action not in {"preview", "rollback-preview", "rollback"}:
+                raise HTTPException(404, "Unknown source activation action")
+            return await _forward(
+                "ingest",
+                self.settings.ingest_port,
+                f"/sources/{source_id}/activation/{action}",
+                method="POST",
+                body=body,
+                http_timeout_s=90.0 if action == "rollback" else 15.0,
+                request=request,
+            )
+
+        @api.get("/alert-deliveries", tags=["alert-delivery"])
+        async def alert_deliveries(
+            request: Request,
+            status: str | None = None,
+            alert_id: str | None = None,
+            limit: int = Query(default=100, ge=1, le=100),
+        ) -> Any:
+            return await _forward(
+                "alerts",
+                self.settings.alerts_port,
+                "/alert-deliveries",
+                params={"status": status, "alert_id": alert_id, "limit": limit},
+                request=request,
+            )
+
+        @api.post("/alert-deliveries/{delivery_id}/retry", tags=["alert-delivery"])
+        async def retry_alert_delivery(
+            request: Request, delivery_id: str, body: dict[str, Any]
+        ) -> Any:
+            return await _forward(
+                "alerts",
+                self.settings.alerts_port,
+                f"/alert-deliveries/{delivery_id}/retry",
                 method="POST",
                 body=body,
                 request=request,

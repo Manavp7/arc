@@ -1,20 +1,38 @@
 # Camera readiness
 
-**Administration → Camera setup** records a measured readiness check for an existing RTSP camera. It does not activate a source, change its calibration, restart ingestion or modify the site layout.
+**Administration → Camera setup** records a measured readiness check for an existing RTSP camera. Saving or validating that readiness draft does not activate a source, change fusion calibration, restart ingestion or modify the site layout. The panel also exposes a separate [reviewed source activation](SOURCE_ACTIVATION.md) flow for the selected source's already-saved connection settings.
 
 ## Prepare and validate
 
 1. Sign in as an **integrator or administrator**. Configure an RTSP source in Sources and place a camera on a saved site in Site editor. A simulator does not satisfy the camera requirement.
-2. Create a setup, name it, and select the source, site and placed camera. Review source status, last successful observation and any restart requirement. **Test configured connection** uses the existing bounded source test; it neither starts ingestion nor stores preview footage.
+2. Create a setup, name it, and select the source, site and placed camera. Review source status, last successful observation and any pending saved configuration changes. **Test configured connection** uses the existing bounded source test; it neither starts ingestion nor stores preview footage.
 3. Enter measured latitude/longitude, bearing, mounting height, downward tilt, horizontal/vertical field of view, original frame dimensions and projection range. Confirm any values copied from the site draft against the installed camera.
 4. Add at least **three noncollinear surveyed checkpoints**, spread across the image and ground area. Click an available sanitized preview or enter normalized image coordinates from 0 to 1. Enter surveyed east/north distances in metres relative to the camera's ground position; west/south values are negative. Record the survey method and date.
 5. Choose an allowed residual between **0.1 and 20 m**, save the draft, then select **Validate saved measurements**. Review each point's error, root mean square error, maximum error and any failed checks.
 
 The checker compares the fixed entered pose with the entered survey points using a flat-ground projection. It refuses points outside its ground view or configured range. Passing records numerical agreement with those inputs; it does not independently verify the survey, lens distortion, terrain slope, geolocation or live detection accuracy. Physical commissioning still requires a qualified field verification process.
 
+## Apply saved source settings
+
+Save connection changes in Sources, and save or discard outstanding camera setup
+edits before opening the activation controls. Choose **Preview activation**, review
+the current and proposed connection settings, then **Activate and verify incoming
+data**. This affects only the selected connector and checks a fresh successfully
+published observation; a stored-frame RTSP source must provide a media reference.
+The observation is a receipt check, not evidence that downstream perception,
+redaction or calibrated positioning succeeded.
+
+Failed activation attempts restoration of the prior running configuration. After a
+successful change, **Preview rollback** reviews a return to the retained previous
+settings. Read the reported recovery result before retrying or restarting ingestion.
+Saving a source alone still leaves the running version unchanged until activation
+or restart. Activation does not install this setup's measured pose in the fusion
+calibration table. See [SOURCE_ACTIVATION.md](SOURCE_ACTIVATION.md) for revision-bound
+previews, persisted checkpoints, cancellation and recovery limits.
+
 ## Access, state and limits
 
-Setup reads use `site.read`; saving and validation require `site.write` (integrator/admin). Connection tests require `integration.write`. Source inventory remains subject to the ingestion deployment's tenant and integration permissions. Every saved record is tenant-scoped and attributed to the signed-in operator.
+Setup reads use `site.read`; saving and validation require `site.write` (integrator/admin). Connection tests and activation/rollback require `integration.write`. Source inventory remains subject to the ingestion deployment's tenant and integration permissions. Every saved record is tenant-scoped and attributed to the signed-in operator.
 
 Preview requires `media.read` and a sanitized frame indexed within the last five minutes. It is unavailable when no suitable frame exists, the source is missing, or the account has zone restrictions that cannot safely cover a whole-camera image. Pixelation or sanitization is **not a guarantee of anonymity**; context may still identify people, vehicles or locations.
 

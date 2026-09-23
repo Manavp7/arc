@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, explainError } from "../lib/api";
 import * as session from "../lib/session";
+import { SourceActivationControls } from "./SourceActivationControls";
 
 interface Source {
   source_id: string; kind: string; modality: string; label: string | null; enabled: boolean;
@@ -39,7 +40,7 @@ export function SourcesPanel() {
       const parsed: unknown = JSON.parse(options);
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Options must be a JSON object.");
       await api.request(`/sources/${encodeURIComponent(sourceId)}`, { method: "PUT", body: JSON.stringify({ kind, modality, label, enabled, rate_hz: rate, options: kind === "camera_rtsp" ? { ...parsed, url: cameraUrl } : parsed }) });
-      setEditing(false); setMessage("Configuration saved. Restart ingestion to apply it; active sources keep their current configuration until then."); await load();
+      setEditing(false); setMessage("Configuration saved. Preview activation on this source to review and apply the change."); await load();
     } catch (cause) { setError(explainError(cause)); } finally { setBusy(null); }
   }
   async function test(source: Source) {
@@ -56,13 +57,13 @@ export function SourcesPanel() {
     setBusy(source.source_id);
     try {
       await api.request(`/sources/${encodeURIComponent(source.source_id)}/enabled`, { method: "POST", body: JSON.stringify({ enabled: !source.enabled }) });
-      setMessage("Change saved. Restart ingestion to apply the new enabled state."); await load();
+      setMessage("Enabled state saved. Preview activation to apply it to this source."); await load();
     } catch (cause) { setError(explainError(cause)); } finally { setBusy(null); }
   }
   return <div className="panel-body operations-panel">
     <header className="section-heading"><div><span className="eyebrow">Administration / inputs</span><h2>Sources</h2></div><button className="small-button" onClick={() => void load()}>Refresh</button></header>
     <p className="section-intro">Connect a camera or sensor, inspect its latest observation, and check whether data is arriving.</p>
-    {data?.restart_required && <p className="mode-notice">Saved changes are waiting for an ingestion restart. Current connections have not changed.</p>}
+    {data?.restart_required && <p className="mode-notice">Saved changes are waiting for activation. Preview and activate each affected source to apply its settings.</p>}
     {error && <p className="panel-error" role="alert">{error}</p>}
     {message && <p className="panel-flash" role="status">{message}</p>}
     {!data && !error && <p className="panel-empty">Loading sources…</p>}
@@ -76,6 +77,7 @@ export function SourcesPanel() {
         <button onClick={() => { setSourceId(source.source_id); setLabel(source.label ?? ""); setKind(source.kind); setModality(source.modality); setOptions(JSON.stringify(source.kind === "camera_rtsp" ? Object.fromEntries(Object.entries(source.options).filter(([key]) => key !== "url")) : source.options, null, 2)); setCameraUrl(String(source.options.url ?? "rtsp://")); setRate(source.rate_hz); setEnabled(source.enabled); setEditing(true); }}>Configure</button>
         <button disabled={busy !== null} onClick={() => void toggle(source)}>{source.enabled ? "Disable" : "Enable"}</button></>}
       </div>
+      {canEdit && source.kind !== "simulator" && <SourceActivationControls sourceId={source.source_id} disabled={busy !== null} onApplied={load} />}
     </article>)}</div>
     {sample && <section className="sample-view"><header><strong>Observation · {sample.id}</strong><button aria-label="Close sample" onClick={() => setSample(null)}>×</button></header><pre>{sample.value ? JSON.stringify(sample.value, null, 2) : "No observation is available yet."}</pre><p className="feed-note">Connection tests read one sample without publishing it to the live world.</p></section>}
     {canEdit && !editing && <button className="primary wide-button" onClick={() => { setSourceId(""); setLabel(""); setKind("camera_rtsp"); setModality("video"); setOptions("{}"); setCameraUrl("rtsp://"); setRate(1); setEnabled(true); setEditing(true); }}>Add a source</button>}
@@ -89,7 +91,7 @@ export function SourcesPanel() {
       <label>Sampling rate (observations / second)<input required type="number" min="0.01" max="120" step="any" value={rate} onChange={event => setRate(Number(event.target.value))} /></label>
       <label>Additional connection options<textarea rows={5} spellCheck={false} value={options} onChange={event => setOptions(event.target.value)} /></label>
       <p className="feed-note">{kind === "camera_rtsp" ? "Enter the RTSP stream in Camera address. " : "Use the connector's documented options. "}Existing masked credentials are preserved when unchanged. Saved credentials stay on the server.</p>
-      <label className="checkbox-label"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} /> Enabled after restart</label>
+      <label className="checkbox-label"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} /> Enabled when activated</label>
       <div className="source-actions"><button className="primary" disabled={busy !== null} type="submit">{busy === "save" ? "Saving…" : "Save configuration"}</button><button type="button" onClick={() => setEditing(false)}>Cancel</button></div>
     </form>}
   </div>;
