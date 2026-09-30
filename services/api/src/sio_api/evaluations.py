@@ -9,10 +9,12 @@ from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
 
+from sio_core.source_scope import zones_for
 from sio_core.tenancy import current_tenant
 
+from .case_evidence import source_evidence_zones
 from .case_helpers import iso_now
-from .cases import actor, allowed, need
+from .cases import actor, need
 from .evaluation_metrics import (
     AnnotationDraft,
     EvaluationRequest,
@@ -21,6 +23,7 @@ from .evaluation_metrics import (
     fingerprint,
     measures,
 )
+from .review_access import review_scope
 from .video_jobs import video_mutation_lock
 
 LIMIT = 5000
@@ -32,10 +35,12 @@ LIMITATIONS = [
 ]
 
 
-def can_read(principal, record: dict) -> bool:
-    return allowed(principal, "review.read") and all(
-        allowed(principal, "review.read", scope["zone_id"]) for scope in record.get("scopes", [])
-    )
+def can_read(principal, *records: dict) -> bool:
+    try:
+        review_scope(principal, *records)
+    except HTTPException:
+        return False
+    return True
 
 
 class EvaluationLab:
@@ -46,12 +51,29 @@ class EvaluationLab:
         video = await self.store.get(current_tenant(), "video", video_id)
         if not video:
             raise HTTPException(404, "Video not found")
-        need(principal, "review.write" if writable else "review.read")
-        for zone in video.get("zones", []):
-            need(principal, "review.read", zone["zone_id"])
+        review_scope(principal, video, write=writable)
         if writable and (video.get("archived_at") or video.get("purged_at")):
             raise HTTPException(409, "Restore the recording before creating evaluation references")
         return video
+
+    async def readable(self, principal, record):
+        if not can_read(principal, record):
+            return False
+        try:
+            for video_id in record.get("video_ids", [record.get("video_id")]):
+                if video_id:
+                    await self.video(video_id, principal)
+            for item in record.get("inputs", []):
+                video = await self.video(item["video_id"], principal)
+                for analysis_id in item.get("analysis_ids", []):
+                    analysis = await self.store.get(current_tenant(), "analysis", analysis_id)
+                    if analysis:
+                        review_scope(principal, video, analysis)
+                    elif zones_for(principal) is not None:
+                        return False
+        except HTTPException:
+            return False
+        return True
 
     async def versions(self, video_id: str, principal):
         video = await self.video(video_id, principal)
@@ -60,9 +82,7 @@ class EvaluationLab:
             for row in await self.store.list(current_tenant(), "analysis", limit=LIMIT)
             if row.get("video_id") == video_id
             and row.get("status") == "completed"
-            and all(
-                allowed(principal, "review.read", zone["zone_id"]) for zone in row.get("zones", [])
-            )
+            and can_read(principal, video, row)
         ]
         draft = await self.store.get(current_tenant(), "evaluation_draft", video_id)
         if draft and not can_read(principal, draft):
@@ -143,6 +163,7 @@ class EvaluationLab:
                     "video_id": video_id,
                     "duration_s": video["duration_s"],
                     "video_title": video["title"],
+                    "evidence_zone_ids": sorted(source_evidence_zones({"evidence": video})),
                     "updated_by": principal.subject,
                 },
                 expected_revision=body.revision,
@@ -155,6 +176,7 @@ class EvaluationLab:
             draft = await self.store.get(tenant, "evaluation_draft", video_id)
             if not draft:
                 raise HTTPException(404, "Save reviewed annotations first")
+            review_scope(principal, draft, write=True)
             if draft["revision"] != revision:
                 raise HTTPException(409, "Annotations changed. Reload before freezing a version.")
             for scope in draft["scopes"]:
@@ -196,8 +218,8 @@ class EvaluationLab:
             row = await self.store.get(tenant, "evaluation_annotations", item.annotation_set_id)
             if row is None:
                 raise HTTPException(404, "Frozen annotations not found")
-            for scope in row["scopes"]:
-                need(principal, "review.read", scope["zone_id"])
+            if not await self.readable(principal, row):
+                raise HTTPException(403, "Your source access does not permit these annotations")
             sets.append(row)
         if len({row["video_id"] for row in sets}) != len(sets):
             raise HTTPException(422, "Each clip can appear only once in a report")
@@ -212,6 +234,9 @@ class EvaluationLab:
                 for index in range(len(body.inputs[0].analysis_ids))
             ]
             refs = []
+            evidence_zones = set().union(
+                *(source_evidence_zones({"evidence": row}) for row in sets)
+            )
             for item, annotations in zip(body.inputs, sets, strict=True):
                 refs.append(
                     {
@@ -228,8 +253,10 @@ class EvaluationLab:
                         )
                     if analysis.get("status") != "completed":
                         raise HTTPException(409, "Evaluation requires completed analysis versions")
-                    for zone in analysis.get("zones", []):
-                        need(principal, "review.read", zone["zone_id"])
+                    video = await self.video(annotations["video_id"], principal)
+                    review_scope(principal, video, analysis)
+                    evidence_zones.update(source_evidence_zones({"evidence": video}))
+                    evidence_zones.update(source_evidence_zones({"evidence": analysis}))
                     candidates[index]["clips"].append(
                         evaluate(annotations, analysis, body.tolerance_s)
                     )
@@ -258,6 +285,7 @@ class EvaluationLab:
                         {version for item in body.inputs for version in item.analysis_ids}
                     ),
                     "scopes": [scope for row in sets for scope in row["scopes"]],
+                    "evidence_zone_ids": sorted(evidence_zones),
                     "annotation_snapshots": deepcopy(sets),
                     "candidates": candidates,
                     "tolerance_s": body.tolerance_s,
@@ -279,7 +307,7 @@ def install_evaluation_routes(app: FastAPI, store: Any) -> EvaluationLab:
         reports = [
             row
             for row in await store.list(current_tenant(), "evaluation_report", limit=LIMIT)
-            if can_read(principal, row)
+            if await lab.readable(principal, row)
         ]
         return {
             "reports": [
@@ -315,7 +343,7 @@ def install_evaluation_routes(app: FastAPI, store: Any) -> EvaluationLab:
         report = await store.get(current_tenant(), "evaluation_report", report_id)
         if not report:
             raise HTTPException(404, "Evaluation report not found")
-        if not can_read(principal, report):
+        if not await lab.readable(principal, report):
             raise HTTPException(403, "Your role or zone access does not permit this report")
         return report
 

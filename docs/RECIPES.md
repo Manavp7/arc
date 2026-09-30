@@ -8,7 +8,7 @@ it sends somebody to a command that does not exist and they conclude the docs ca
 The descriptions come from the comments above each recipe, so `just --list` and this page cannot
 disagree.
 
-There are **55**.
+There are **56**.
 
 ## Setup
 
@@ -76,7 +76,8 @@ There are **55**.
 | `just eval-tools *args` | Verify the copilot's model can actually select tools (gate for Phase 4). |
 | `just schemas` | Regenerate the JSON Schema exports from the pydantic contracts. |
 | `just schemas-check` | that is off whenever that place is. |
-| `just web-check` | Typecheck and build the web console. |
+| `just web-check` | Test, typecheck and build the web console. |
+| `just sdk-check` | Verify the saved OpenAPI contract, generated SDK types and TypeScript client. |
 
 ## Utility
 
@@ -89,7 +90,7 @@ There are **55**.
 | `just keycloak` | Start Keycloak and import the SIO realm (optional; the default dev issuer needs nothing). |
 | `just opa` | Start OPA with the generated policy (optional; the embedded engine evaluates the same rules). |
 | `just grafana` | Start Grafana with the provisioned SIO datasources and dashboards (optional). |
-| `just sdk-ts` | Regenerate the TypeScript SDK types from the running API, then typecheck |
+| `just sdk-ts` | Export the API schema offline, regenerate TypeScript SDK types, then typecheck |
 | `just sdk-ts-demo` | Run the TypeScript SDK quickstart against a running platform |
 | `just sdk-demo` | Run the SDK quickstart against a running platform (docs/SDK.md) |
 | `just plugin-demo` | about extensibility, so it declares plain dependencies exactly as a third party's package would. |

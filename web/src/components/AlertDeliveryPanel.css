@@ -35,3 +35,5 @@
 .delivery-empty { padding: 32px 10px; text-align: center; color: #a8b6ad; }
 .delivery-footnote { margin-top: 20px; }
 @media (max-width: 600px) { .alert-delivery-panel { padding: 12px; } .delivery-filters { align-items: flex-start; flex-direction: column; } .delivery-heading { gap: 8px; } }
+
+.delivery-filters{flex-wrap:wrap}.delivery-filters form{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.delivery-filters input{min-width:0;max-width:100%;box-sizing:border-box;background:var(--surface,#111f16);color:inherit;border:1px solid #35513e;border-radius:4px;padding:7px}

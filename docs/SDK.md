@@ -174,7 +174,7 @@ for (const entity of await sio.entities({ limit: 10 })) {
 ```bash
 cd sdk/ts
 npx tsx examples/quickstart.mts     # against a running platform
-npm run generate                    # regenerate from the live API
+npm run generate                    # regenerate from checked sdk/ts/openapi.json
 npm run typecheck
 ```
 
@@ -254,3 +254,100 @@ rather than a design one.
 
 `request()` exists so an endpoint the SDK has not wrapped is one line away rather than a fork. A client that can
 only do what its author anticipated is one people abandon at the first gap.
+
+## Recorded review and operations
+
+Python and TypeScript now expose `client.investigations`, using the same authenticated
+transport as the rest of the SDK. Python responses validate stable fields with Pydantic
+and retain additive server metadata. TypeScript provides exported request and response
+interfaces from `@sio/sdk`. Server permissions, tenant and zone scopes apply to every call.
+The namespace is on the asynchronous Python client; the legacy sync wrapper remains
+available for its existing world-view methods.
+
+```python
+from sio_sdk import SioClient
+from sio_sdk.investigations import CaseUpdate
+
+async with SioClient(token=access_token) as client:
+    review = client.investigations
+    page = await review.timeline(camera_id="north-gate", from_time="2026-09-30T00:00:00Z")
+    if page.next_cursor:
+        older = await review.timeline(
+            camera_id="north-gate", from_time="2026-09-30T00:00:00Z", cursor=page.next_cursor
+        )
+    case = await review.case("case_id")
+    # An explicit write, protected by the case revision and authenticated actor:
+    case = await review.update_case(
+        case.case_id, CaseUpdate(expected_revision=case.revision, owner=None)
+    )
+```
+
+```typescript
+import { SioClient } from "@sio/sdk";
+const client = new SioClient({ token: accessToken });
+const page = await client.investigations.analyses(videoId, { limit: 50 });
+const matches = await client.investigations.searchRecordings({ text: "a red vehicle" });
+for (const match of matches.results) console.log(match.video_id, match.analysis_id, match.at_s);
+```
+
+Available typed operations:
+
+| Area | Python / TypeScript methods |
+| --- | --- |
+| Recordings | `videos`, `video`, `upload`, `analyses`, `analysis`, `jobs` |
+| Cases | `cases`, `case`, `create_case` / `createCase`, `update_case` / `updateCase` |
+| Recorded search | `search_catalog` / `searchCatalog`, `index_recording` / `indexRecording`, `search_recordings` / `searchRecordings`, `remove_search_index` / `removeSearchIndex` |
+| Shared clock | `timeline`, `save_clock` / `saveClock` |
+| Source activation | `activation_status` / `activationStatus`, `preview_activation` / `previewActivation`, `apply_activation` / `applyActivation` |
+| Alert deliveries | `deliveries`, `delivery_history` / `deliveryHistory`, `retry_delivery` / `retryDelivery` |
+| Calibration | `calibration_status` / `calibrationStatus`, `preview_calibration` / `previewCalibration`, `apply_calibration` / `applyCalibration` |
+
+Pagination cursors are opaque and bound to the original query and access scope. Keep
+filters unchanged while following `next_cursor`; reset pagination when filters change.
+`jobs` accepts `view="all"`, `"active"` or `"finished"`, applied on the server before pagination.
+Uploads accept MP4 bytes/Blob and an optional `access_zone_id` / `accessZoneId`; explicitly
+zone-scoped accounts must select an allowed zone. This label controls access and does not
+create image geometry.
+
+Indexing requires an explicit `consent_private_original=True` in Python or `true` argument
+in TypeScript. Text and sample queries are mutually exclusive. Search similarities remain
+retrieval leads, not probabilities or identity matches.
+
+For activation and calibration, first request a preview, review its before/after state,
+and pass that preview to the explicit apply method. Rollback uses the same flow with
+`rollback=True` / `true` when obtaining the preview. Apply methods send only the server
+ticket and required revision/timeout, never a caller-supplied pose, credential or actor.
+Calibration status distinguishes persistence from fresh fusion acknowledgement.
+Python allows 90 seconds for source activation/recovery; callers still receive the actual
+result or timeout and should read activation status before another attempt.
+
+A read-only example is provided in `examples/sdk_review_quickstart.py`:
+
+```bash
+# SIO_TOKEN must already contain an authorized token; never commit it.
+uv run python examples/sdk_review_quickstart.py --url http://127.0.0.1:8000
+```
+
+The example only lists existing accessible records. SDK regression tests use mocked HTTP
+transports; they do not activate cameras, deliver webhooks or establish field accuracy.
+An externally provided Python token that receives HTTP401 now fails with that authentication
+error instead of falling back to a development identity.
+
+
+The OpenAPI snapshot is exported directly from the API application factory without starting
+its lifespan, workers or datastore connections. To update and verify generated query/input
+schemas from the repository root:
+
+```bash
+uv run --no-sync python sdk/ts/scripts/export_openapi.py
+npm ci --ignore-scripts --no-audit --prefix sdk/ts
+npm run generate --prefix sdk/ts
+uv run --no-sync python sdk/ts/scripts/export_openapi.py --check
+npm run generate:check --prefix sdk/ts
+```
+
+The two check commands fail on drift without rewriting committed files. The generator uses
+only its installed, lockfile-pinned dependency; it does not download tools implicitly.
+A supplied schema path or HTTP URL remains supported. Some forwarded API responses have
+incomplete OpenAPI declarations; `investigations` provides typed wrappers and transport
+regressions for those operations, while server validation remains authoritative.

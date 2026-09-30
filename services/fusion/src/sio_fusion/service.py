@@ -127,17 +127,32 @@ class FusionService(SioService):
         """
         rows = await self.pool.fetch(
             """
-            SELECT source_id, zone_id, config,
+            SELECT source_id, zone_id, config, calibration_revision,
                    ST_Y(geom::geometry) AS lat, ST_X(geom::geometry) AS lon
               FROM sources
              WHERE tenant_id = %s AND kind = 'camera'
             """,
             (self.settings.tenant_id,),
         )
+        projectors = {}
         for row in rows:
             calibration = CameraCalibration.from_source_row(dict(row))
             if calibration is not None:
-                self.projectors[calibration.source_id] = GroundProjector(calibration)
+                projectors[calibration.source_id] = GroundProjector(calibration)
+        # Swap a complete snapshot before acknowledging; removed/rolled-back poses disappear too.
+        self.projectors = projectors
+        for row in rows:
+            if row.get("calibration_revision", 0):
+                await self.pool.execute(
+                    "INSERT INTO camera_calibration_ack (tenant_id,source_id,calibration_revision,valid) VALUES (%s,%s,%s,%s) "
+                    "ON CONFLICT (tenant_id,source_id) DO UPDATE SET calibration_revision=EXCLUDED.calibration_revision,valid=EXCLUDED.valid,acknowledged_at=now()",
+                    (
+                        self.settings.tenant_id,
+                        row["source_id"],
+                        row["calibration_revision"],
+                        row["source_id"] in self.projectors,
+                    ),
+                )
         if not self.projectors:
             self.log.warning(
                 "fusion.no_cameras",
@@ -359,6 +374,7 @@ class FusionService(SioService):
 
     # ---------------------------------------------------------------------- tick
     async def tick(self) -> None:
+        await self._load_calibrations()
         await self._publish_entities(None)
         if self.fusion is None:
             return

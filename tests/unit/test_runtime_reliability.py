@@ -146,17 +146,17 @@ def context(client, **kwargs):
 async def test_report_authenticates_and_keeps_unrelated_events_out():
     def respond(request):
         assert request.headers["authorization"] == "Bearer service-token"
+        assert request.url.params["zone_id"] == "dock_3"
         return httpx.Response(
             200,
             json=[
                 {"tenant_id": "acme", "event_id": "evt-trigger", "zone_id": "dock_3"},
-                {"tenant_id": "acme", "event_id": "other", "zone_id": "other"},
             ],
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         result = await generate_report(context(client), "report")
-    assert result["report"]["events_considered"] == 2
+    assert result["report"]["events_considered"] == 1
     assert result["report"]["events_included"] == 1
 
 
@@ -167,6 +167,8 @@ async def test_report_authenticates_and_keeps_unrelated_events_out():
         httpx.Response(503, json={"detail": "unavailable"}),
         httpx.Response(200, json={"unexpected": []}),
         httpx.Response(200, json=[{"tenant_id": "other", "event_id": "secret"}]),
+        httpx.Response(200, json=[{"tenant_id": "acme", "zone_id": "other"}]),
+        httpx.Response(200, json=[{"tenant_id": "acme", "zone_id": None}]),
     ],
 )
 async def test_failed_report_is_failed_optional_step(response):

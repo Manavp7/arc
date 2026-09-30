@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
@@ -10,6 +12,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from sio_core import MessageContext, PgPool, SioService, get_pg_pool
 from sio_core.explain import ExplanationBuilder
+from sio_core.guard import principal_of
+from sio_core.source_scope import zones_for
 from sio_schemas import (
     Alert,
     AlertState,
@@ -20,6 +24,7 @@ from sio_schemas import (
     utc_now,
 )
 
+from .atomic import AlertTransactions
 from .outbox import AlertOutbox, enqueue_with_alert
 from .scoring import (
     DEDUP_WINDOW_S,
@@ -79,9 +84,33 @@ class AlertsService(SioService):
         self._webhooks_sent = 0
         self._webhooks_failed = 0
         self.outbox = AlertOutbox(self.pool, self.client)
+        self.transactions = AlertTransactions()
+
+    @property
+    def _db(self) -> Any:
+        return self.transactions.current.get() or self.pool
+
+    @asynccontextmanager
+    async def _mutation(self) -> AsyncIterator[None]:
+        nested = self.transactions.current.get() is not None
+        async with self.transactions.mutation(self.pool, self.settings.tenant_id) as publications:
+            yield
+        if not nested:
+            for alert, ctx in publications:
+                await self._emit(alert, ctx)
+
+    @staticmethod
+    def _zones(request: Request) -> tuple[str, ...]:
+        return tuple(zones_for(principal_of(request)) or ())
+
+    @classmethod
+    def _check_zone(cls, request: Request, alert: Alert) -> None:
+        zones = cls._zones(request)
+        if zones and (not alert.zone_id or alert.zone_id not in zones):
+            raise HTTPException(404, "Alert not found")
 
     async def setup(self) -> None:
-        await self.pool.open()
+        await self._db.open()
         self.log.info(
             "alerts.ready",
             alertable=[str(severity) for severity in ALERTABLE],
@@ -93,14 +122,14 @@ class AlertsService(SioService):
         await self.client.aclose()
 
     async def health_checks(self) -> dict[str, str]:
-        checks = {"postgres": "ok" if await self.pool.ping() else "unreachable"}
+        checks = {"postgres": "ok" if await self._db.ping() else "unreachable"}
         checks["webhook"] = (
             "ok (configured)" if self.settings.alert_webhook_url else "ok (unconfigured)"
         )
         return checks
 
     async def health_info(self) -> dict[str, str]:
-        row = await self.pool.fetchrow(
+        row = await self._db.fetchrow(
             "SELECT count(*) FILTER (WHERE state = 'open') AS open, "
             "       count(*) FILTER (WHERE state = 'escalated') AS escalated "
             "  FROM alerts WHERE tenant_id = %s",
@@ -119,25 +148,50 @@ class AlertsService(SioService):
 
     # ------------------------------------------------------------------ handling
     async def on_message(self, message: BusMessage, ctx: MessageContext) -> None:
-        if message.kind == "Event":
-            await self._on_event(message.decode(Event), ctx)
-        elif message.kind == "Decision":
-            await self._link_decision(message)
+        if message.tenant_id != self.settings.tenant_id:
+            return
+        async with self._mutation():
+            if message.kind == "Event":
+                await self._on_event(message.decode(Event), ctx)
+            elif message.kind == "Decision":
+                await self._link_decision(message)
 
     async def _on_event(self, event: Event, ctx: MessageContext | None) -> None:
-        if event.severity not in ALERTABLE:
+        if event.tenant_id != self.settings.tenant_id or event.severity not in ALERTABLE:
             return
         if event.rule_id and event.rule_id.startswith("workflow."):
             # Playbook progress is not an alert. It is the *response* to one, and putting it in the inbox
             # would double every incident: one row for the fire, five for the response to it.
             return
 
+        receipt = await self._db.fetchrow(
+            "INSERT INTO alert_consumed_events (tenant_id, event_id) VALUES (%s, %s) "
+            "ON CONFLICT DO NOTHING RETURNING event_id",
+            (event.tenant_id, event.event_id),
+        )
+        if receipt is None:
+            # A process may have committed the mutation and died before publishing/acking.
+            # Republish the authoritative state without counting the event a second time.
+            row = await self._db.fetchrow(
+                "SELECT a.payload FROM alert_consumed_events r JOIN alerts a "
+                "ON a.tenant_id = r.tenant_id AND a.alert_id = r.alert_id "
+                "WHERE r.tenant_id = %s AND r.event_id = %s",
+                (event.tenant_id, event.event_id),
+            )
+            if row:
+                await self._emit(Alert.model_validate(row["payload"]), ctx)
+            return
         key = group_key(event)
         existing = await self._open_alert_for(key)
         if existing is not None and within_dedup_window(existing.last_ts):
             await self._fold(existing, event, ctx)
-            return
-        await self._raise(event, key, ctx)
+            alert = existing
+        else:
+            alert = await self._raise(event, key, ctx)
+        await self._db.execute(
+            "UPDATE alert_consumed_events SET alert_id = %s WHERE tenant_id = %s AND event_id = %s",
+            (alert.alert_id, event.tenant_id, event.event_id),
+        )
 
     async def _raise(self, event: Event, key: str, ctx: MessageContext | None) -> Alert:
         scored = score_alert(
@@ -227,7 +281,7 @@ class AlertsService(SioService):
         decision = message.decode(Decision)
         if not decision.trigger_event:
             return
-        row = await self.pool.fetchrow(
+        row = await self._db.fetchrow(
             "SELECT payload FROM alerts WHERE tenant_id = %s AND %s = ANY(event_ids) "
             "ORDER BY last_ts DESC LIMIT 1",
             (self.settings.tenant_id, decision.trigger_event),
@@ -246,69 +300,68 @@ class AlertsService(SioService):
     # ---------------------------------------------------------------------- tick
     async def tick(self) -> None:
         """Escalate what has been waiting too long."""
-        rows = await self.pool.fetch(
-            # Both states, because ageing changes the ranking of escalated alerts too — and because an
-            # escalated row is the one that might need its reason backfilled.
-            "SELECT payload FROM alerts WHERE tenant_id = %s AND state IN ('open', 'escalated') "
-            "ORDER BY score DESC LIMIT 200",
-            (self.settings.tenant_id,),
-        )
-        now = utc_now()
-        for row in rows:
-            alert = Alert.model_validate(row["payload"])
-            escalate, reason = should_escalate(
-                severity=alert.severity,
-                state=alert.state,
-                ts=alert.ts,
-                ack_ts=alert.ack_ts,
-                now=now,
+        async with self._mutation():
+            rows = await self._db.fetch(
+                # Both states, because ageing changes the ranking of escalated alerts too — and because an
+                # escalated row is the one that might need its reason backfilled.
+                "SELECT payload FROM alerts WHERE tenant_id = %s AND state IN ('open', 'escalated') "
+                "ORDER BY score DESC LIMIT 200",
+                (self.settings.tenant_id,),
             )
-            if alert.state == AlertState.ESCALATED and not alert.escalation_reason:
-                # An escalated alert with no recorded reason. Reachable two ways: a row escalated before
-                # this field existed, and any future path that sets the state without the sentence. Either
-                # way the UI would show an escalated alert with nothing saying why, and the information is
-                # recoverable from the timestamps — so recover it rather than displaying a blank.
-                waited = (alert.escalated_ts or alert.last_ts) - alert.ts
-                alert.escalation_reason = (
-                    f"escalated after {waited.total_seconds() / 60:.0f} min without acknowledgement"
-                )
-                await self._persist(alert)
-
-            if not escalate:
-                # Rescore anyway, so the inbox order reflects ageing rather than only arrival.
-                fresh = score_alert(
+            now = utc_now()
+            for row in rows:
+                alert = Alert.model_validate(row["payload"])
+                escalate, reason = should_escalate(
                     severity=alert.severity,
-                    confidence=alert.explanation.confidence or 0.9,
-                    zone_id=alert.zone_id,
-                    last_ts=alert.last_ts,
-                    count=alert.count,
+                    state=alert.state,
+                    ts=alert.ts,
+                    ack_ts=alert.ack_ts,
                     now=now,
                 )
-                if abs(fresh.score - alert.score) > 0.05:
-                    alert.score = fresh.score
-                    alert.urgency_reason = fresh.reason
+                if alert.state == AlertState.ESCALATED and not alert.escalation_reason:
+                    # An escalated alert with no recorded reason. Reachable two ways: a row escalated before
+                    # this field existed, and any future path that sets the state without the sentence. Either
+                    # way the UI would show an escalated alert with nothing saying why, and the information is
+                    # recoverable from the timestamps — so recover it rather than displaying a blank.
+                    waited = (alert.escalated_ts or alert.last_ts) - alert.ts
+                    alert.escalation_reason = f"escalated after {waited.total_seconds() / 60:.0f} min without acknowledgement"
                     await self._persist(alert)
-                continue
 
-            alert.state = AlertState.ESCALATED
-            alert.escalated_ts = now
-            alert.explanation.notes.append(f"escalated: {reason}")
-            # The scoring reason is NOT overwritten. It answers "why is this here", which escalation does
-            # not change — and overwriting it produced an inbox where every row's justification for its
-            # priority was the escalation timer, still reading "unacknowledged" after being acknowledged.
-            alert.escalation_reason = reason
-            if not await self._persist(
-                alert, notification="escalated", expected_state=AlertState.OPEN
-            ):
-                continue
-            self._escalated += 1
-            await self._emit(alert, None)
-            self.log.warning(
-                "alerts.escalated",
-                alert=alert.alert_id,
-                severity=str(alert.severity),
-                reason=reason,
-            )
+                if not escalate:
+                    # Rescore anyway, so the inbox order reflects ageing rather than only arrival.
+                    fresh = score_alert(
+                        severity=alert.severity,
+                        confidence=alert.explanation.confidence or 0.9,
+                        zone_id=alert.zone_id,
+                        last_ts=alert.last_ts,
+                        count=alert.count,
+                        now=now,
+                    )
+                    if abs(fresh.score - alert.score) > 0.05:
+                        alert.score = fresh.score
+                        alert.urgency_reason = fresh.reason
+                        await self._persist(alert)
+                    continue
+
+                alert.state = AlertState.ESCALATED
+                alert.escalated_ts = now
+                alert.explanation.notes.append(f"escalated: {reason}")
+                # The scoring reason is NOT overwritten. It answers "why is this here", which escalation does
+                # not change — and overwriting it produced an inbox where every row's justification for its
+                # priority was the escalation timer, still reading "unacknowledged" after being acknowledged.
+                alert.escalation_reason = reason
+                if not await self._persist(
+                    alert, notification="escalated", expected_state=AlertState.OPEN
+                ):
+                    continue
+                self._escalated += 1
+                await self._emit(alert, None)
+                self.log.warning(
+                    "alerts.escalated",
+                    alert=alert.alert_id,
+                    severity=str(alert.severity),
+                    reason=reason,
+                )
 
         outcomes = await self.outbox.dispatch(
             self.settings.tenant_id, self.settings.alert_webhook_url
@@ -318,7 +371,7 @@ class AlertsService(SioService):
 
     # ---------------------------------------------------------------- persistence
     async def _open_alert_for(self, key: str) -> Alert | None:
-        row = await self.pool.fetchrow(
+        row = await self._db.fetchrow(
             "SELECT payload FROM alerts WHERE tenant_id = %s AND group_key = %s "
             "  AND state IN ('open', 'escalated') ORDER BY last_ts DESC LIMIT 1",
             (self.settings.tenant_id, key),
@@ -389,9 +442,13 @@ class AlertsService(SioService):
             statement, params = enqueue_with_alert(
                 statement, params, alert, notification, self.settings.alert_webhook_url
             )
-        return bool(await self.pool.execute(statement, params))
+        return bool(await self._db.execute(statement, params))
 
     async def _emit(self, alert: Alert, ctx: MessageContext | None) -> None:
+        pending = self.transactions.publications.get()
+        if pending is not None:
+            pending.append((alert.model_copy(deep=True), ctx))
+            return
         if ctx is not None:
             await ctx.publish(Topic.ALERTS, alert)
         else:
@@ -406,6 +463,7 @@ class AlertsService(SioService):
                 None, pattern="^(pending|sending|delivered|failed|blocked)$"
             ),
             alert_id: str | None = None,
+            cursor: str | None = Query(None, max_length=4096),
             limit: int = Query(100, ge=1, le=200),
         ) -> dict[str, Any]:
             return await self.outbox.list(
@@ -413,8 +471,24 @@ class AlertsService(SioService):
                 self.settings.alert_webhook_url,
                 status=status,
                 alert_id=alert_id,
+                cursor=cursor,
                 limit=limit,
-                allowed_zones=tuple(request.state.principal.zones),
+                allowed_zones=self._zones(request),
+            )
+
+        @app.get("/alert-deliveries/{delivery_id}/history", tags=["alerts"])
+        async def delivery_attempts(
+            delivery_id: str,
+            request: Request,
+            cursor: str | None = Query(None, max_length=4096),
+            limit: int = Query(20, ge=1, le=100),
+        ) -> dict[str, Any]:
+            return await self.outbox.history(
+                self.settings.tenant_id,
+                delivery_id,
+                cursor=cursor,
+                limit=limit,
+                allowed_zones=self._zones(request),
             )
 
         @app.post("/alert-deliveries/{delivery_id}/retry", tags=["alerts"])
@@ -427,11 +501,12 @@ class AlertsService(SioService):
                 self.settings.alert_webhook_url,
                 request.state.principal.subject,
                 body.reason,
-                allowed_zones=tuple(request.state.principal.zones),
+                allowed_zones=self._zones(request),
             )
 
         @app.get("/alerts", tags=["alerts"])
         async def alerts(
+            request: Request,
             state: str | None = None,
             grouped: bool = True,
             limit: int = Query(50, ge=1, le=500),
@@ -441,16 +516,24 @@ class AlertsService(SioService):
             Grouped by default: an operator wants "three fires, one intrusion", not sixty rows. The count is
             on the group, and the individual events are reachable from the alert.
             """
-            rows = await self.pool.fetch(
+            rows = await self._db.fetch(
                 """
                 SELECT payload FROM alerts
                  WHERE tenant_id = %s AND (%s::text IS NULL OR state = %s)
+                   AND (cardinality(%s::text[]) = 0 OR zone_id = ANY(%s::text[]))
                  ORDER BY
                    CASE state WHEN 'escalated' THEN 0 WHEN 'open' THEN 1 ELSE 2 END,
                    score DESC, last_ts DESC
                  LIMIT %s
                 """,
-                (self.settings.tenant_id, state, state, limit),
+                (
+                    self.settings.tenant_id,
+                    state,
+                    state,
+                    list(self._zones(request)),
+                    list(self._zones(request)),
+                    limit,
+                ),
             )
             items = [row["payload"] for row in rows]
             if not grouped:
@@ -472,93 +555,112 @@ class AlertsService(SioService):
             }
 
         @app.get("/alerts/{alert_id}", tags=["alerts"])
-        async def alert_detail(alert_id: str) -> dict[str, Any]:
-            return (await self._load(alert_id)).to_wire()
+        async def alert_detail(alert_id: str, http_request: Request) -> dict[str, Any]:
+            alert = await self._load(alert_id)
+            self._check_zone(http_request, alert)
+            return alert.to_wire()
 
         @app.post("/alerts/{alert_id}/ack", tags=["alerts"])
-        async def acknowledge(alert_id: str, request: AckRequest) -> dict[str, Any]:
+        async def acknowledge(
+            alert_id: str, request: AckRequest, http_request: Request
+        ) -> dict[str, Any]:
             """Acknowledge an alert: somebody has seen it and owns it.
 
             Acknowledging stops the escalation timer, which is the whole point — escalation is about whether
             a human is engaged, not about the event getting worse.
             """
-            alert = await self._load(alert_id)
-            if alert.state == AlertState.RESOLVED:
-                raise HTTPException(status_code=409, detail="this alert is already resolved")
-            alert.state = AlertState.ACKNOWLEDGED
-            alert.ack_by = request.ack_by
-            alert.ack_ts = utc_now()
-            alert.assignee = request.assignee or request.ack_by
-            # No longer unacknowledged, so the sentence saying it is must go. A stale reason is worse than
-            # none: it contradicts the state shown beside it.
-            alert.escalation_reason = None
-            alert.explanation.notes.append(
-                f"acknowledged by {request.ack_by}"
-                + (f": {request.note}" if request.note else "")
-                + f" after {(alert.ack_ts - alert.ts).total_seconds() / 60:.1f} min"
-            )
-            await self._persist(alert)
-            self._acked += 1
-            await self._emit(alert, None)
-            self.log.info("alerts.acknowledged", alert=alert_id, by=request.ack_by)
-            return alert.to_wire()
+            async with self._mutation():
+                alert = await self._load(alert_id)
+                self._check_zone(http_request, alert)
+                if alert.state == AlertState.RESOLVED:
+                    raise HTTPException(status_code=409, detail="this alert is already resolved")
+                alert.state = AlertState.ACKNOWLEDGED
+                alert.ack_by = principal_of(http_request).subject
+                alert.ack_ts = utc_now()
+                alert.assignee = request.assignee or principal_of(http_request).subject
+                # No longer unacknowledged, so the sentence saying it is must go. A stale reason is worse than
+                # none: it contradicts the state shown beside it.
+                alert.escalation_reason = None
+                alert.explanation.notes.append(
+                    f"acknowledged by {principal_of(http_request).subject}"
+                    + (f": {request.note}" if request.note else "")
+                    + f" after {(alert.ack_ts - alert.ts).total_seconds() / 60:.1f} min"
+                )
+                await self._persist(alert)
+                self._acked += 1
+                await self._emit(alert, None)
+                self.log.info(
+                    "alerts.acknowledged", alert=alert_id, by=principal_of(http_request).subject
+                )
+                return alert.to_wire()
 
         @app.post("/alerts/{alert_id}/resolve", tags=["alerts"])
-        async def resolve(alert_id: str, request: ResolveRequest) -> dict[str, Any]:
-            alert = await self._load(alert_id)
-            alert.state = AlertState.RESOLVED
-            alert.resolved_ts = utc_now()
-            alert.explanation.notes.append(
-                f"resolved by {request.resolved_by}"
-                + (f": {request.note}" if request.note else " (no note)")
-                + f" after {(alert.resolved_ts - alert.ts).total_seconds() / 60:.1f} min"
-            )
-            await self._persist(alert)
-            self._resolved += 1
-            await self._emit(alert, None)
-            return alert.to_wire()
+        async def resolve(
+            alert_id: str, request: ResolveRequest, http_request: Request
+        ) -> dict[str, Any]:
+            async with self._mutation():
+                alert = await self._load(alert_id)
+                self._check_zone(http_request, alert)
+                if alert.state == AlertState.RESOLVED:
+                    return alert.to_wire()
+                alert.state = AlertState.RESOLVED
+                alert.resolved_ts = utc_now()
+                alert.explanation.notes.append(
+                    f"resolved by {principal_of(http_request).subject}"
+                    + (f": {request.note}" if request.note else " (no note)")
+                    + f" after {(alert.resolved_ts - alert.ts).total_seconds() / 60:.1f} min"
+                )
+                await self._persist(alert)
+                self._resolved += 1
+                await self._emit(alert, None)
+                return alert.to_wire()
 
         @app.post("/alerts/{alert_id}/escalate", tags=["alerts"])
-        async def escalate_now(alert_id: str, reason: str = "escalated by hand") -> dict[str, Any]:
-            alert = await self._load(alert_id)
-            if alert.state == AlertState.ESCALATED:
+        async def escalate_now(
+            alert_id: str, http_request: Request, reason: str = "escalated by hand"
+        ) -> dict[str, Any]:
+            async with self._mutation():
+                alert = await self._load(alert_id)
+                self._check_zone(http_request, alert)
+                if alert.state == AlertState.ESCALATED:
+                    return alert.to_wire()
+                if alert.state == AlertState.RESOLVED:
+                    raise HTTPException(409, "A resolved alert cannot be escalated.")
+                previous_state = alert.state
+                alert.state = AlertState.ESCALATED
+                alert.escalated_ts = utc_now()
+                alert.escalation_reason = reason
+                alert.explanation.notes.append(f"escalated by hand: {reason}")
+                if not await self._persist(
+                    alert, notification="escalated", expected_state=previous_state
+                ):
+                    return (await self._load(alert_id)).to_wire()
+                self._escalated += 1
+                await self._emit(alert, None)
                 return alert.to_wire()
-            if alert.state == AlertState.RESOLVED:
-                raise HTTPException(409, "A resolved alert cannot be escalated.")
-            previous_state = alert.state
-            alert.state = AlertState.ESCALATED
-            alert.escalated_ts = utc_now()
-            alert.escalation_reason = reason
-            alert.explanation.notes.append(f"escalated by hand: {reason}")
-            if not await self._persist(
-                alert, notification="escalated", expected_state=previous_state
-            ):
-                return (await self._load(alert_id)).to_wire()
-            self._escalated += 1
-            await self._emit(alert, None)
-            return alert.to_wire()
 
         @app.get("/alerts/stats/summary", tags=["alerts"])
-        async def summary() -> dict[str, Any]:
+        async def summary(request: Request) -> dict[str, Any]:
             """Inbox health: how much is open, how old, and how long acknowledgement takes.
 
             The last figure is the one that matters. A queue of open alerts is normal; a *rising* time to
             acknowledge means the inbox is being ignored, and that is the failure that makes alerting
             worthless.
             """
-            rows = await self.pool.fetch(
+            rows = await self._db.fetch(
                 """
                 SELECT state, count(*) AS n,
                        avg(extract(epoch from (coalesce(ack_ts, now()) - ts))) AS mean_age_s,
                        max(score) AS top_score
-                  FROM alerts WHERE tenant_id = %s GROUP BY state
+                  FROM alerts WHERE tenant_id = %s AND (cardinality(%s::text[]) = 0 OR zone_id = ANY(%s::text[])) GROUP BY state
                 """,
-                (self.settings.tenant_id,),
+                (self.settings.tenant_id, list(self._zones(request)), list(self._zones(request))),
             )
-            acked = await self.pool.fetchrow(
+            acked = await self._db.fetchrow(
                 "SELECT avg(extract(epoch from (ack_ts - ts))) AS mean_ack_s, count(*) AS n "
-                "  FROM alerts WHERE tenant_id = %s AND ack_ts IS NOT NULL",
-                (self.settings.tenant_id,),
+                "  FROM alerts WHERE tenant_id = %s AND ack_ts IS NOT NULL "
+                "AND (cardinality(%s::text[]) = 0 OR zone_id = ANY(%s::text[]))",
+                (self.settings.tenant_id, list(self._zones(request)), list(self._zones(request))),
             )
             return {
                 "by_state": {
@@ -581,7 +683,7 @@ class AlertsService(SioService):
             }
 
     async def _load(self, alert_id: str) -> Alert:
-        row = await self.pool.fetchrow(
+        row = await self._db.fetchrow(
             "SELECT payload FROM alerts WHERE tenant_id = %s AND alert_id = %s",
             (self.settings.tenant_id, alert_id),
         )

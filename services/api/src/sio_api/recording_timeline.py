@@ -2,12 +2,13 @@
 
 from datetime import UTC, datetime, timedelta
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import Field, field_validator, model_validator
 
 from .case_helpers import StrictBody
 from .recorded_insights import RecordedInsights
 from .video_jobs import video_mutation_lock
+from .workbench_store import decode_cursor, record_cursor
 
 KIND = "recording_clock"
 
@@ -61,20 +62,36 @@ class RecordingTimeline(RecordedInsights):
                 **body.model_dump(mode="json", exclude={"revision"}),
                 "video_id": video_id,
                 "zones": video.get("zones", []),
+                "evidence_zone_ids": video.get("evidence_zone_ids", []),
                 "declared_by": principal.subject,
                 "basis": "operator_declared",
             }
             return await self.store.put(tenant, KIND, video_id, payload, body.revision)
 
-    async def timeline(self, principal):
+    async def timeline(self, principal, *, cursor="", limit=20, camera_id="", start=None, end=None):
         tenant = self.identity(principal)
-        videos = await self.store.list(tenant, "video", limit=21)
-        metadata = await self.store.list_analysis_metadata(tenant, limit=500)
-        metadata.sort(
-            key=lambda item: (item.get("created_at", ""), item["analysis_id"]), reverse=True
-        )
+        for bound in (start, end):
+            if bound and (bound.tzinfo is None or bound.utcoffset() is None):
+                raise HTTPException(422, "Timeline dates must include a timezone")
+        if start and end and start > end:
+            raise HTTPException(422, "Timeline start must not exceed end")
+        if hasattr(self.store, "iter_records"):
+            videos = self.store.iter_records(tenant, "video", cursor=cursor, active_only=True)
+        else:
+
+            async def memory_rows():
+                records = await self.store.list(tenant, "video", limit=5000)
+                records.sort(key=lambda row: (row["created_at"], row["record_id"]), reverse=True)
+                after = decode_cursor(cursor) if cursor else None
+                for row in records:
+                    if not after or (row["created_at"], row["record_id"]) < after:
+                        yield row
+
+            videos = memory_rows()
         rows = []
-        for entry in videos[:20]:
+        last_cursor = None
+        has_more = False
+        async for entry in videos:
             video_id = entry["video_id"]
             try:
                 async with video_mutation_lock(self.store, tenant, video_id):
@@ -82,8 +99,34 @@ class RecordingTimeline(RecordedInsights):
                     clock = await self.store.get(tenant, KIND, video_id)
                     if clock:
                         self.scopes(principal, video, clock)
+                    interval = clock_interval(clock, video["duration_s"])
+                    if camera_id and (clock or {}).get("camera_id") != camera_id:
+                        continue
+                    if start and (not interval or datetime.fromisoformat(interval["end"]) < start):
+                        continue
+                    if end and (not interval or datetime.fromisoformat(interval["start"]) > end):
+                        continue
+                    if len(rows) == limit:
+                        has_more = True
+                        break
                     version = None
-                    for analysis in metadata:
+                    if hasattr(self.store, "iter_records"):
+                        metadata = self.store.iter_records(
+                            tenant, "analysis", video_id=video_id, statuses=("completed",)
+                        )
+                    else:
+
+                        async def memory_analyses():
+                            analyses = await self.store.list_analysis_metadata(tenant, limit=5000)
+                            analyses.sort(
+                                key=lambda row: (row.get("created_at", ""), row["analysis_id"]),
+                                reverse=True,
+                            )
+                            for row in analyses:
+                                yield row
+
+                        metadata = memory_analyses()
+                    async for analysis in metadata:
                         if (
                             analysis.get("video_id") != video_id
                             or analysis.get("status") != "completed"
@@ -104,9 +147,10 @@ class RecordingTimeline(RecordedInsights):
                             "duration_s": video["duration_s"],
                             "analysis_id": version,
                             "clock": clock,
-                            "interval": clock_interval(clock, video["duration_s"]),
+                            "interval": interval,
                         }
                     )
+                    last_cursor = record_cursor(entry)
             except HTTPException as error:
                 if error.status_code not in {403, 404, 409}:
                     raise
@@ -119,7 +163,15 @@ class RecordingTimeline(RecordedInsights):
         )
         return {
             "recordings": rows,
-            "possibly_truncated": len(videos) > 20 or len(metadata) >= 500,
+            "possibly_truncated": has_more,
+            "next_cursor": last_cursor if has_more else None,
+            "camera_ids": sorted(
+                {
+                    row["clock"]["camera_id"]
+                    for row in rows
+                    if row.get("clock") and row["clock"].get("camera_id")
+                }
+            ),
             "note": "Capture clocks are operator declarations, not independently verified. "
             "Corrected time = declared capture time + clock correction. Unknown clocks stay separate; "
             "saved case evidence and manual comparison offsets remain unchanged.",
@@ -130,8 +182,22 @@ def install_recording_timeline_routes(app: FastAPI, store):
     manager = RecordingTimeline(store)
 
     @app.get("/api/review/recording-timeline", tags=["recording-timeline"])
-    async def timeline(request: Request):
-        return await manager.timeline(request.state.principal)
+    async def timeline(
+        request: Request,
+        cursor: str = "",
+        limit: int = Query(default=20, ge=1, le=100),
+        camera_id: str = Query(default="", max_length=100),
+        start: datetime | None = Query(default=None, alias="from"),
+        end: datetime | None = Query(default=None, alias="to"),
+    ):
+        return await manager.timeline(
+            request.state.principal,
+            cursor=cursor,
+            limit=limit,
+            camera_id=camera_id,
+            start=start,
+            end=end,
+        )
 
     @app.put("/api/review/videos/{video_id}/clock", tags=["recording-timeline"])
     async def save_clock(video_id: str, body: RecordingClock, request: Request):

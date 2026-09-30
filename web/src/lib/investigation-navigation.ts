@@ -13,7 +13,7 @@ export type RailTab = keyof typeof TAB_WORKSPACE;
 export type Workspace = typeof TAB_WORKSPACE[RailTab];
 export interface InvestigationLocation {
   tab: RailTab; videoId?: string; analysisId?: string; atS?: number;
-  caseId?: string; missionId?: string; packageId?: string; siteId?: string; alertId?: string;
+  caseId?: string; missionId?: string; packageId?: string; siteId?: string; setupId?: string; alertId?: string;
 }
 const validId = (value: string | null) => value && /^[A-Za-z0-9_.-]{1,160}$/.test(value) ? value : undefined;
 
@@ -35,6 +35,7 @@ export function decodeNavigation(search: string): InvestigationLocation | null {
   if (tab === "evidence" && result.caseId) result.packageId = validId(params.get("package"));
   if (tab === "missions") result.missionId = validId(params.get("mission"));
   if (["site", "camera"].includes(tab)) result.siteId = validId(params.get("site"));
+  if (tab === "camera") result.setupId = validId(params.get("setup"));
   if (tab === "incident") result.alertId = validId(params.get("alert"));
   return result;
 }
@@ -42,7 +43,7 @@ export function decodeNavigation(search: string): InvestigationLocation | null {
 export function encodeNavigation(location: InvestigationLocation): string {
   const params = new URLSearchParams({ view: location.tab });
   for (const [name, value] of Object.entries({ video: location.videoId, analysis: location.analysisId,
-    case: location.caseId, package: location.packageId, mission: location.missionId, site: location.siteId,
+    case: location.caseId, package: location.packageId, mission: location.missionId, site: location.siteId, setup: location.setupId,
     alert: location.alertId, at: location.atS })) {
     if (value !== undefined) params.set(name, String(value));
   }
@@ -50,7 +51,7 @@ export function encodeNavigation(location: InvestigationLocation): string {
   const clean = decodeNavigation(params.toString()) ?? { tab: "alerts" as RailTab };
   const output = new URLSearchParams({ view: clean.tab });
   for (const [name, value] of Object.entries({ video: clean.videoId, analysis: clean.analysisId,
-    case: clean.caseId, package: clean.packageId, mission: clean.missionId, site: clean.siteId,
+    case: clean.caseId, package: clean.packageId, mission: clean.missionId, site: clean.siteId, setup: clean.setupId,
     alert: clean.alertId, at: clean.atS })) {
     if (value !== undefined) output.set(name, String(value));
   }

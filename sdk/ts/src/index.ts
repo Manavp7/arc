@@ -27,3 +27,5 @@ export type { components, operations, paths } from "./generated/api.d.ts";
 export { readSse } from "./sse.ts";
 export type { SseFrame } from "./sse.ts";
 export type { Forecast, Mission, Zone, ReplayPlan, ReplayFrame, Explanation, HealthStatus, SioEvent } from "./contracts.ts";
+
+export * from "./investigations.ts";

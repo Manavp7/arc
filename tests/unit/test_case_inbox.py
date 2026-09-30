@@ -192,6 +192,11 @@ def bearer(settings, *, tenant="tenant-a", role="operator", zones=(), subject="a
 async def inbox_app(casework, principal, settings):
     settings.audit_enabled = False
     with tenant_scope("tenant-a"):
+        # Restricted case access requires independently identified source membership.
+        video = await casework.store.get("tenant-a", "video", "vid_a")
+        await casework.store.put(
+            "tenant-a", "video", "vid_a", {**video, "evidence_zone_ids": ["zone-a"]}
+        )
         first = await casework.create(source_request(owner="alice", priority="high"), principal)
     # The second case includes evidence from another zone, so narrow access must hide it entirely.
     second = await casework.store.put(

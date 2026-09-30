@@ -41,3 +41,11 @@ Each setup supports up to **20 checkpoints**; a workspace supports up to **200 s
 ## Verification
 
 Run `.venv/bin/pytest tests/unit/test_camera_commissioning.py` from the repository root. The focused implementation run passed **14 tests**, covering measured geometry, missing/invalid measurements, out-of-view rays, tenant permissions, authorship, revision conflicts, safe preview lookup and unchanged source/site records. Fixtures are authored geometry, not a real-camera accuracy assessment. Frontend draft and validation regressions are in `web/tests/commissioning.test.mjs` (`npm --prefix web test`).
+
+## Publish a measured calibration
+
+After saving and validating measurements, choose **Preview calibration**. Review the old and proposed poses, then publish using the ten-minute actor-bound ticket. The server atomically checks the setup revision and the registered source snapshot, writes a new calibration revision and appends an immutable publication receipt. A source or setup change invalidates the preview. Publishing affects calibration only and never starts a connector.
+
+The status remains **pending fusion** until fusion loads the exact revision and acknowledges it; fusion refreshes its calibration snapshot on its five-second tick. A stale acknowledgement is not reported as live acceptance. **Preview rollback** and the separately reviewed rollback restore the previous pose as a new revision. Rebinding a setup to another source or replacing its published source revision prevents rollback to the wrong camera. Whole-camera calibration requires unrestricted zone access plus site/integration write permissions. Saving a new draft still clears readiness validation.
+
+Calibration receipts and acknowledgement require migration 013. Synthetic SQL/geometry tests exercise revision conflicts, actor binding, live acknowledgement, rollback and setup rebinding; they do not verify any actual camera survey.

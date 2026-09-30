@@ -493,3 +493,33 @@ def test_backup_cannot_accept_unavailable_or_mismatched_bookmark_sources(broken,
     assert any(item.startswith("review_bookmark:bookmark:") for item in refs["missing_records"])
     with pytest.raises(backup.BackupError, match="missing or unsupported"):
         backup.validate_references(tmp_path, refs)
+
+
+async def test_bookmark_snapshot_scope_survives_source_narrowing_and_every_direct_write(work):
+    manager, _ = work
+    narrow = Principal(
+        subject="alice", tenant_id=TENANT, roles=frozenset({"operator"}), zones=frozenset({"gate"})
+    )
+    with tenant_scope(TENANT):
+        video = await manager.store.get(TENANT, "video", VIDEO)
+        await manager.store.put(TENANT, "video", VIDEO, {**video, "evidence_zone_ids": ["other"]})
+        saved = await manager.create(VIDEO, body(), ALICE)
+        assert saved["evidence_zone_ids"] == ["gate", "other"]
+        await manager.store.put(TENANT, "video", VIDEO, {**video, "evidence_zone_ids": ["gate"]})
+        assert (await manager.list(VIDEO, narrow))["bookmarks"] == []
+        for operation in (
+            manager.create(VIDEO, body(), narrow),
+            manager.patch(
+                saved["bookmark_id"], BookmarkPatch(expected_revision=1, note="Rewrite"), narrow
+            ),
+            manager.delete(saved["bookmark_id"], BookmarkDelete(expected_revision=1), narrow),
+        ):
+            with pytest.raises(HTTPException) as denied:
+                await operation
+            assert denied.value.status_code == 403
+        assert (await manager.list(VIDEO, ALICE))["bookmarks"] == [saved]
+        edited = await manager.patch(
+            saved["bookmark_id"], BookmarkPatch(expected_revision=1, note="Allowed edit"), ALICE
+        )
+        assert edited["evidence_zone_ids"] == ["gate", "other"]
+        assert (await manager.list(VIDEO, narrow))["bookmarks"] == []

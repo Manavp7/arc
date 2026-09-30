@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import math
 import uuid
 from typing import Any
@@ -15,6 +14,8 @@ from sio_core.tenancy import current_tenant
 from .case_evidence import source_evidence_zones
 from .case_helpers import StrictBody
 from .cases import actor, need, review_video_available
+from .media_coordination import shared_lock
+from .review_access import review_scope
 from .video_jobs import video_mutation_lock
 from .workbench_store import WorkbenchConflict
 
@@ -62,9 +63,7 @@ class BookmarkDelete(StrictBody):
 def write_lock(store):
     # Quotas span recordings. All bookmark writers acquire this before the video
     # lifecycle lock; cleanup acquires only the latter, so there is no lock cycle.
-    if not hasattr(store, "_review_bookmark_write_lock"):
-        store._review_bookmark_write_lock = asyncio.Lock()
-    return store._review_bookmark_write_lock
+    return shared_lock(store, "review-bookmark-admission")
 
 
 class ReviewBookmarks:
@@ -87,13 +86,7 @@ class ReviewBookmarks:
 
     @staticmethod
     def scopes(principal, *records, write=False):
-        zones = set().union(*(source_evidence_zones({"evidence": row}) for row in records))
-        scope_zones: list[str | None] = list(zones) or [None]
-        for zone in scope_zones:
-            need(principal, "review.read", zone)
-            need(principal, "media.read", zone)
-            if write:
-                need(principal, "review.write", zone)
+        review_scope(principal, *records, write=write)
 
     async def video(self, tenant, video_id, principal, *, write=False):
         video = await self.store.get(tenant, "video", video_id)
@@ -129,6 +122,7 @@ class ReviewBookmarks:
         row = await self.store.get(tenant, KIND, bookmark_id)
         if not row or row.get("author") != principal.subject:
             raise HTTPException(404, "Bookmark not found")
+        self.scopes(principal, row, write=True)
         return row
 
     async def scan(self, tenant, *, complete=False):
@@ -165,6 +159,12 @@ class ReviewBookmarks:
                         source_access[source_id] = False
                 if not source_access[source_id]:
                     continue
+                try:
+                    self.scopes(principal, row)
+                except HTTPException as error:
+                    if error.status_code != 403:
+                        raise
+                    continue
                 visible.append(row)
             visible.sort(key=lambda row: (row["at_s"], row["analysis_id"], row["bookmark_id"]))
             return {
@@ -177,7 +177,7 @@ class ReviewBookmarks:
         tenant = self.identity(principal, write=True)
         async with write_lock(self.store), video_mutation_lock(self.store, tenant, video_id):
             video = await self.video(tenant, video_id, principal, write=True)
-            await self.source(tenant, video, body.analysis_id, principal, write=True)
+            analysis = await self.source(tenant, video, body.analysis_id, principal, write=True)
             self.position(video, body.at_s)
             rows = [
                 row
@@ -194,6 +194,7 @@ class ReviewBookmarks:
                 None,
             )
             if duplicate:
+                self.scopes(principal, duplicate, write=True)
                 return duplicate
             if len(same_video) >= MAX_PER_VIDEO or len(rows) >= MAX_PER_AUTHOR:
                 raise HTTPException(
@@ -209,6 +210,10 @@ class ReviewBookmarks:
                     "bookmark_id": bookmark_id,
                     "video_id": video_id,
                     "author": principal.subject,
+                    "evidence_zone_ids": sorted(
+                        source_evidence_zones({"evidence": video})
+                        | source_evidence_zones({"evidence": analysis})
+                    ),
                 },
                 expected_revision=0,
             )
@@ -219,7 +224,9 @@ class ReviewBookmarks:
             row = await self.owned(tenant, bookmark_id, principal)
             async with video_mutation_lock(self.store, tenant, row["video_id"]):
                 video = await self.video(tenant, row["video_id"], principal, write=True)
-                await self.source(tenant, video, row["analysis_id"], principal, write=True)
+                analysis = await self.source(
+                    tenant, video, row["analysis_id"], principal, write=True
+                )
                 changes = body.model_dump(exclude={"expected_revision"}, exclude_unset=True)
                 self.position(video, changes.get("at_s", row["at_s"]))
                 if (
@@ -242,7 +249,15 @@ class ReviewBookmarks:
                         tenant,
                         KIND,
                         bookmark_id,
-                        {**row, **changes},
+                        {
+                            **row,
+                            **changes,
+                            "evidence_zone_ids": sorted(
+                                source_evidence_zones({"evidence": row})
+                                | source_evidence_zones({"evidence": video})
+                                | source_evidence_zones({"evidence": analysis})
+                            ),
+                        },
                         expected_revision=body.expected_revision,
                     )
                 except WorkbenchConflict as error:

@@ -34,6 +34,8 @@ from typing import Any, TypeVar
 import httpx
 from pydantic import BaseModel
 
+from .investigations import InvestigationClient
+
 DEFAULT_URL = "http://127.0.0.1:8000"
 
 #: Renew a token this long before it expires, so a request never starts with one that dies mid-flight.
@@ -122,7 +124,11 @@ class SioClient:
         clearance: int = 1,
         timeout_s: float = 30.0,
     ) -> None:
+        if token is not None and not token.strip():
+            raise ValueError("An explicitly supplied token must not be empty")
         self.url = url.rstrip("/")
+        self._external_token = token is not None
+        self.investigations = InvestigationClient(self.request)
         self.subject = subject
         self.roles = roles
         self.clearance = clearance
@@ -183,22 +189,34 @@ class SioClient:
 
     # ------------------------------------------------------------------ requests
     async def request(
-        self, method: str, path: str, *, params: dict[str, Any] | None = None, json_body: Any = None
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json_body: Any = None,
+        content: bytes | None = None,
+        headers: dict[str, str] | None = None,
+        timeout_s: float | None = None,
     ) -> Any:
         """One request, authenticated, with a single retry on 401.
 
         Once, not in a loop: a misconfigured secret would otherwise become a request storm against the token
         endpoint. The console's first version did exactly that.
         """
+        if content is not None and json_body is not None:
+            raise ValueError("Choose raw content or a JSON body")
         for attempt in (1, 2):
             response = await self._client.request(
                 method,
                 f"{self.url}{path}",
                 params={key: value for key, value in (params or {}).items() if value is not None},
                 json=json_body,
-                headers=await self._headers(),
+                content=content,
+                timeout=self._client.timeout if timeout_s is None else timeout_s,
+                headers={**(headers or {}), **await self._headers()},
             )
-            if response.status_code == 401 and attempt == 1:
+            if response.status_code == 401 and attempt == 1 and not self._external_token:
                 self._session = Session()
                 continue
             if response.status_code >= 400:
@@ -318,7 +336,7 @@ class SioClient:
             await self.request(
                 "POST",
                 f"/api/decisions/{decision_id}/approve",
-                json_body={"option_id": option_id, "approved_by": self.subject},
+                json_body={"option_id": option_id},
             )
         )
 

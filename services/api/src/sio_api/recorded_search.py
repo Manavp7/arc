@@ -18,6 +18,7 @@ from pydantic import Field, field_validator, model_validator
 
 from .case_helpers import StrictBody
 from .cases import actor
+from .media_coordination import WorkerPresence, claim, shared_lock
 from .recorded_insights import RecordedInsights
 from .recorded_search_model import MODEL_ID, FrameReader, check_model, file_hash, load_model, vector
 from .video_jobs import timestamp, video_mutation_lock, video_processor_lock
@@ -150,31 +151,39 @@ class RecordedSearch(RecordedInsights):
         super().__init__(store)
         self.settings = settings
         self.video_manager = video_manager
-        self.enqueue_lock = asyncio.Lock()
+        self.enqueue_lock = shared_lock(store, "recorded-search-admission")
+        self.presence = WorkerPresence(store)
         self.model_lock = asyncio.Lock()
         self.task = None
         self.closing = False
         self.model = None
 
     async def start(self):
+        await self.presence.start()
         self.closing = False
         tenants = {self.settings.tenant_id}
         if hasattr(self.store, "list_tenants"):
             tenants.update(await self.store.list_tenants(KIND))
         for tenant in tenants:
             for row in await self.store.list(tenant, KIND, limit=5000):
-                if row.get("status") in {"queued", "running"}:
-                    await self.store.put(
-                        tenant,
-                        KIND,
-                        row["video_id"],
-                        {
-                            **row,
-                            "status": "interrupted",
-                            "error": "Indexing stopped. Review consent and retry.",
-                        },
-                        expected_revision=row["revision"],
-                    )
+                if row.get("status") in {"queued", "running"} and not await self.presence.alive(
+                    row.get("worker_id")
+                ):
+                    async with claim(
+                        self.store, "recorded-search-job", tenant, row["video_id"]
+                    ) as acquired:
+                        if acquired:
+                            await self.store.put(
+                                tenant,
+                                KIND,
+                                row["video_id"],
+                                {
+                                    **row,
+                                    "status": "interrupted",
+                                    "error": "Indexing stopped. Review consent and retry.",
+                                },
+                                expected_revision=row["revision"],
+                            )
 
     async def close(self):
         self.closing = True
@@ -184,6 +193,7 @@ class RecordedSearch(RecordedInsights):
             if self.model is not None:
                 await blocking_media(self.model.close)
                 self.model = None
+        await self.presence.close()
 
     async def runtime(self):
         available = await blocking_media(check_model, self.settings)
@@ -266,12 +276,29 @@ class RecordedSearch(RecordedInsights):
 
     async def enqueue(self, body, principal):
         tenant = self.identity(principal, write=True)
+        await self.presence.start()
         async with self.enqueue_lock:
             if self.closing or (self.task and not self.task.done()):
                 raise HTTPException(
                     409, "One recording is already indexing. Wait for it to finish before retrying."
                 )
             async with video_mutation_lock(self.store, tenant, body.video_id):
+                current = await self.store.get(tenant, KIND, body.video_id)
+                if (
+                    current
+                    and current.get("status") in {"queued", "running"}
+                    and await self.presence.alive(current.get("worker_id"))
+                ):
+                    raise HTTPException(409, "This recording is already indexing in another worker")
+                if current and current.get("status") in {"queued", "running"}:
+                    async with claim(
+                        self.store, "recorded-search-job", tenant, body.video_id
+                    ) as available:
+                        if not available:
+                            raise HTTPException(
+                                409,
+                                "The previous index attempt is still finishing; retry when its processor is released",
+                            )
                 video = await self.video(tenant, body.video_id, principal, write=True)
                 analysis = await self.source(tenant, video, body.analysis_id, principal, write=True)
                 try:
@@ -290,6 +317,7 @@ class RecordedSearch(RecordedInsights):
                         "video_id": body.video_id,
                         "analysis_id": body.analysis_id,
                         "status": "queued",
+                        "worker_id": self.presence.identifier,
                         "progress": 0,
                         "sample_count": len(samples),
                         "model_id": MODEL_ID,
@@ -309,6 +337,11 @@ class RecordedSearch(RecordedInsights):
         )
 
     async def run(self, tenant, row, principal):
+        async with claim(self.store, "recorded-search-job", tenant, row["video_id"]) as acquired:
+            if acquired:
+                await self._run(tenant, row, principal)
+
+    async def _run(self, tenant, row, principal):
         reader = None
         directory = self.directory(tenant, row["video_id"])
         # Share native decoder capacity with video analysis. The lifecycle lock prevents

@@ -6,11 +6,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Request
 
 from sio_core import MessageContext, PgPool, SioService, get_pg_pool
 from sio_core.authn import ServiceIdentity
 from sio_core.explain import ExplanationBuilder
+from sio_core.guard import principal_of
+from sio_core.source_scope import zone_visible, zones_for
 from sio_core.tenancy import current_tenant
 from sio_schemas import (
     BusMessage,
@@ -21,11 +23,11 @@ from sio_schemas import (
     Topic,
     WorkflowRun,
     WorkflowStep,
-    new_id,
     utc_now,
 )
 
 from .activities import ActivityContext
+from .durable import DurableRunner, WorkflowStore, frozen_playbook
 from .nocode import (
     OPERATORS,
     SEVERITIES,
@@ -37,7 +39,7 @@ from .nocode import (
     validate,
 )
 from .playbooks import PLAYBOOKS, Playbook, playbooks_for
-from .runner import InlineRunner, RunLedger, RunOutcome
+from .runner import RunLedger, RunOutcome
 
 
 def _severity_rank(severity: str) -> int:
@@ -62,9 +64,10 @@ class WorkflowService(SioService):
         if self.settings.workflow_runner != "inline":
             raise ValueError(
                 "SIO_WORKFLOW_RUNNER=temporal is not implemented; select inline. "
-                "Inline execution does not resume after process failure."
+                "The inline runner persists PostgreSQL checkpoints."
             )
-        self.runner = InlineRunner()
+        self.runner = DurableRunner()
+        self.durable = WorkflowStore(self.pool)
         self.ledger = RunLedger()
         self._authored: dict[str, WorkflowSpec] = {}
         self._authored_problems: list[Problem] = []
@@ -103,24 +106,35 @@ class WorkflowService(SioService):
 
     async def health_checks(self) -> dict[str, str]:
         checks = {"postgres": "ok" if await self.pool.ping() else "unreachable"}
+        self._needing_human = int(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM workflow_executions WHERE tenant_id=%s AND state='needs_human'",
+                (self.settings.tenant_id,),
+            )
+            or 0
+        )
         if self._needing_human:
             # A failed compensation leaves the world in a state nobody chose. That must not be a log line
             # nobody reads — it degrades health until someone looks.
             checks["compensation"] = (
-                f"degraded: {self._needing_human} run(s) had a compensation fail and need a human"
+                f"degraded: {self._needing_human} run(s) require effect reconciliation"
             )
         return checks
 
     async def health_info(self) -> dict[str, str]:
+        suppressed = await self.pool.fetchval(
+            "SELECT count(*) FROM workflow_trigger_receipts WHERE tenant_id=%s AND run_id IS NULL",
+            (self.settings.tenant_id,),
+        )
         return {
             "runs_started": str(self._started),
             "completed": str(self._completed),
             "failed": str(self._failed),
-            "suppressed_by_cooldown": str(self.ledger.suppressed),
+            "suppressed_by_cooldown": str(suppressed or 0),
             "needing_human": str(self._needing_human),
             "runner": self.runner.name,
             "dry_run": str(self.settings.workflow_dry_run).lower(),
-            "durability": "in-process; interrupted runs do not resume",
+            "durability": "PostgreSQL checkpoints; safe steps resume, uncertain effects require reconciliation",
             "action_mode": "dry_run"
             if self.settings.workflow_dry_run
             else "armed; actuators unsupported",
@@ -189,7 +203,7 @@ class WorkflowService(SioService):
         return selected
 
     async def on_message(self, message: BusMessage, ctx: MessageContext) -> None:
-        if message.kind != "Event":
+        if message.kind != "Event" or message.tenant_id != self.settings.tenant_id:
             return
         event = message.decode(Event)
         if event.rule_id and event.rule_id.startswith("workflow."):
@@ -199,7 +213,10 @@ class WorkflowService(SioService):
 
         for playbook in self._playbooks_for(event, message):
             subject = self._subject(playbook, event)
-            if not self.ledger.may_start(playbook, subject, tenant_id=event.tenant_id):
+            identifier = await self.durable.enqueue(
+                playbook, event, subject, dry_run=self.settings.workflow_dry_run
+            )
+            if identifier is None:
                 self.log.info(
                     "workflow.suppressed",
                     playbook=playbook.name,
@@ -207,7 +224,7 @@ class WorkflowService(SioService):
                     why=f"within the {playbook.cooldown_s:.0f}s cooldown",
                 )
                 continue
-            await self._run(playbook, event, ctx)
+            await self._resume(identifier, ctx)
 
     @staticmethod
     def _subject(playbook: Playbook, event: Event) -> str:
@@ -229,60 +246,81 @@ class WorkflowService(SioService):
     async def _run(
         self, playbook: Playbook, event: Event, ctx: MessageContext | None
     ) -> RunOutcome:
-        run_id = new_id("wfr")
-        context = ActivityContext(
-            api_url=f"http://127.0.0.1:{self.settings.api_port}",
-            ingest_url=f"http://127.0.0.1:{self.settings.ingest_port}",
-            tenant_id=event.tenant_id,
-            run_id=run_id,
-            trigger_event_id=event.event_id,
-            zone_id=event.zone_id,
-            entity_ids=list(event.entities),
-            dry_run=self.settings.workflow_dry_run,
-            bearer_token=self._report_token(event.tenant_id),
+        identifier = await self.durable.enqueue(
+            playbook, event, self._subject(playbook, event), dry_run=self.settings.workflow_dry_run
         )
-        self._started += 1
-        self.log.info(
-            "workflow.started",
-            run_id=run_id,
-            playbook=playbook.name,
-            trigger=str(event.type),
-            zone=event.zone_id,
-            steps=playbook.step_count,
-        )
-
-        async def on_progress(run: WorkflowRun, step: WorkflowStep) -> None:
-            await self._publish_step(run, step, playbook, ctx)
-            await self._persist(run)
-
-        try:
-            outcome = await self.runner.execute(
-                playbook, context, trigger_event_id=event.event_id, on_progress=on_progress
+        if identifier is None:
+            raise HTTPException(409, "A run for this subject is within its persisted cooldown.")
+        outcome = await self._resume(identifier, ctx)
+        if outcome is None:
+            raise HTTPException(
+                409, "This run is already executing or has finished; read its saved status."
             )
-        finally:
-            await context.close()
-
-        outcome.run.explanation = self._explain(playbook, outcome, event)
-        await self._persist(outcome.run)
-        self.ledger.record(outcome.run)
-        if outcome.ok:
-            self._completed += 1
-        else:
-            self._failed += 1
-        if outcome.needs_human:
-            self._needing_human += 1
-            self.log.error(
-                "workflow.needs_human",
-                run_id=run_id,
-                failures=outcome.compensation_failures,
-                effect="the world is in a state nobody chose",
-            )
-        await self._publish_summary(outcome, playbook, ctx)
         return outcome
+
+    async def _resume(
+        self, identifier: str, ctx: MessageContext | None = None
+    ) -> RunOutcome | None:
+        async with self.durable.claim(self.settings.tenant_id, identifier) as execution:
+            if execution is None:
+                return None
+            playbook = frozen_playbook(execution.record)
+            saved = execution.record["context"]
+            event = Event.model_validate(saved["trigger"])
+            context = ActivityContext(
+                api_url=f"http://127.0.0.1:{self.settings.api_port}",
+                ingest_url=f"http://127.0.0.1:{self.settings.ingest_port}",
+                tenant_id=saved["tenant_id"],
+                run_id=identifier,
+                trigger_event_id=saved["trigger_event_id"],
+                zone_id=saved["zone_id"],
+                entity_ids=saved["entity_ids"],
+                dry_run=saved["dry_run"],
+                bearer_token=self._report_token(saved["tenant_id"]),
+            )
+            self._started += 1
+
+            async def on_progress(run: WorkflowRun, step: WorkflowStep) -> None:
+                await self._publish_step(run, step, playbook, ctx, zone_id=context.zone_id)
+
+            try:
+                outcome = await self.runner.execute(execution, context, on_progress)
+            finally:
+                await context.close()
+            recovery_notes = list(outcome.run.explanation.notes)
+            outcome.run.explanation = self._explain(playbook, outcome, event)
+            outcome.run.explanation.notes.extend(recovery_notes)
+            await execution.save(execution.record["state"])
+            self.ledger.record(outcome.run)
+            if outcome.ok:
+                self._completed += 1
+            else:
+                self._failed += 1
+            if outcome.needs_human:
+                self._needing_human += 1
+            await self._publish_summary(outcome, playbook, ctx, zone_id=context.zone_id)
+            return outcome
+
+    async def tick(self) -> None:
+        for identifier in await self.durable.recoverable(self.settings.tenant_id):
+            await self._resume(identifier)
+        self._needing_human = int(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM workflow_executions WHERE tenant_id=%s AND state='needs_human'",
+                (self.settings.tenant_id,),
+            )
+            or 0
+        )
 
     # ---------------------------------------------------------------- publishing
     async def _publish_step(
-        self, run: WorkflowRun, step: WorkflowStep, playbook: Playbook, ctx: MessageContext | None
+        self,
+        run: WorkflowRun,
+        step: WorkflowStep,
+        playbook: Playbook,
+        ctx: MessageContext | None,
+        *,
+        zone_id: str | None = None,
     ) -> None:
         """One event per step transition, so the console can show a response happening.
 
@@ -303,6 +341,7 @@ class WorkflowService(SioService):
 
         event = Event(
             tenant_id=run.tenant_id,
+            zone_id=zone_id,
             type=EventType.WORKFLOW_STEP,
             severity=Severity.HIGH if step.status == RunStatus.FAILED else Severity.INFO,
             entities=list(run.entity_ids),
@@ -324,7 +363,12 @@ class WorkflowService(SioService):
         await self._emit(event, ctx)
 
     async def _publish_summary(
-        self, outcome: RunOutcome, playbook: Playbook, ctx: MessageContext | None
+        self,
+        outcome: RunOutcome,
+        playbook: Playbook,
+        ctx: MessageContext | None,
+        *,
+        zone_id: str | None = None,
     ) -> None:
         run = outcome.run
         summary = (
@@ -346,14 +390,17 @@ class WorkflowService(SioService):
             explanation.add_note(f"rolled back: {undone}")
         for failure in outcome.compensation_failures:
             explanation.add_note(f"ROLLBACK FAILED: {failure}")
+        for uncertainty in outcome.uncertain_effects:
+            explanation.add_note(f"EFFECT UNCERTAIN: {uncertainty}")
         if outcome.needs_human:
             explanation.degraded(
-                "a compensation failed, so the world is in a state nobody chose — this needs a human"
+                "A failed compensation or uncertain effect requires human reconciliation"
             )
 
         await self._emit(
             Event(
                 tenant_id=run.tenant_id,
+                zone_id=zone_id,
                 type=EventType.WORKFLOW_STEP,
                 severity=Severity.CRITICAL
                 if outcome.needs_human
@@ -370,6 +417,7 @@ class WorkflowService(SioService):
                     "progress": round(run.progress, 3),
                     "compensated": outcome.compensated,
                     "compensation_failures": outcome.compensation_failures,
+                    "uncertain_effects": outcome.uncertain_effects,
                     "final": True,
                 },
             ),
@@ -381,38 +429,6 @@ class WorkflowService(SioService):
             await ctx.publish(Topic.EVENTS, event)
         else:
             await self.publish(Topic.EVENTS, event)
-
-    async def _persist(self, run: WorkflowRun) -> None:
-        """Upsert the run, steps and all.
-
-        Upsert rather than append because a run's *current* state is what a UI reads, and the step history
-        is inside the payload. The append-only record of what happened is the event stream, which is a
-        different table with a trigger enforcing it.
-        """
-        await self.pool.execute(
-            """
-            INSERT INTO workflow_runs (
-                tenant_id, run_id, playbook, status, trigger_event, runner, external_id,
-                started_ts, finished_ts, payload
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
-            ON CONFLICT (tenant_id, run_id) DO UPDATE SET
-                status      = EXCLUDED.status,
-                finished_ts = EXCLUDED.finished_ts,
-                payload     = EXCLUDED.payload
-            """,
-            (
-                run.tenant_id,
-                run.run_id,
-                run.playbook,
-                str(run.status),
-                run.trigger_event,
-                run.runner,
-                run.external_id,
-                run.started_ts,
-                run.finished_ts,
-                run.to_json(),
-            ),
-        )
 
     def _explain(self, playbook: Playbook, outcome: RunOutcome, event: Event) -> Any:
         builder = ExplanationBuilder(
@@ -429,7 +445,9 @@ class WorkflowService(SioService):
         if outcome.compensated:
             builder.add_note(f"rolled back in reverse order: {', '.join(outcome.compensated)}")
         if outcome.needs_human:
-            builder.degraded("a compensation failed; the world is in a state nobody chose")
+            builder.degraded(
+                "A failed compensation or uncertain effect requires human reconciliation"
+            )
         builder.confidence(0.95 if outcome.ok else 0.5)
         return builder.build()
 
@@ -570,31 +588,40 @@ class WorkflowService(SioService):
             return {"playbooks": [playbook.describe() for playbook in PLAYBOOKS.values()]}
 
         @app.get("/workflow/runs", tags=["workflow"])
-        async def runs(limit: int = 20) -> dict[str, Any]:
-            """Recent runs with per-step status — what the UI renders as live progress."""
-            return self.ledger.describe(limit=limit, tenant_id=current_tenant())
+        async def runs(request: Request, limit: int = Query(20, ge=1, le=200)) -> dict[str, Any]:
+            """Persisted runs remain visible after restart."""
+            return await self.durable.summary(
+                current_tenant(), limit, allowed_zones=zones_for(principal_of(request))
+            )
 
         @app.get("/workflow/runs/{run_id}", tags=["workflow"])
-        async def run_detail(run_id: str) -> dict[str, Any]:
-            run = self.ledger.get(run_id, tenant_id=current_tenant())
-            if run is None:
-                row = await self.pool.fetchrow(
-                    "SELECT payload FROM workflow_runs WHERE tenant_id = %s AND run_id = %s",
-                    (current_tenant(), run_id),
-                )
-                if row is None:
-                    raise HTTPException(status_code=404, detail=f"unknown run {run_id!r}")
-                return dict(row["payload"])
-            return run.to_wire()
+        async def run_detail(run_id: str, request: Request) -> dict[str, Any]:
+            row = await self.pool.fetchrow(
+                "SELECT r.payload,e.state,e.context FROM workflow_runs r LEFT JOIN workflow_executions e USING (tenant_id,run_id) WHERE r.tenant_id=%s AND r.run_id=%s",
+                (current_tenant(), run_id),
+            )
+            if row is None or not zone_visible(
+                zones_for(principal_of(request)), (row.get("context") or {}).get("zone_id")
+            ):
+                raise HTTPException(404, "Workflow run not found")
+            return {
+                **row["payload"],
+                "recovery_state": row["state"],
+                "needs_human": row["state"] == "needs_human",
+            }
 
         @app.post("/workflow/run/{playbook_name}", tags=["workflow"])
-        async def run_now(playbook_name: str, zone_id: str = "dock_3") -> dict[str, Any]:
+        async def run_now(
+            playbook_name: str, request: Request, zone_id: str = "dock_3"
+        ) -> dict[str, Any]:
             """Start a playbook by hand.
 
             The demo path, and the way to see a five-step response without waiting for a real fire. It
             builds a synthetic trigger event and says so in the run's record, so a run started by a human
             is never mistaken for one started by a detection.
             """
+            if not zone_visible(zones_for(principal_of(request)), zone_id):
+                raise HTTPException(403, "Your zone access does not permit this workflow")
             playbook = PLAYBOOKS.get(playbook_name)
             if playbook is None:
                 raise HTTPException(
@@ -628,6 +655,7 @@ class WorkflowService(SioService):
                 ],
                 "compensated": outcome.compensated,
                 "compensation_failures": outcome.compensation_failures,
+                "uncertain_effects": outcome.uncertain_effects,
                 "needs_human": outcome.needs_human,
             }
 

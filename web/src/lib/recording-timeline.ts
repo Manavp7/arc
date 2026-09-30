@@ -7,9 +7,21 @@ export interface TimelineRecording {
   video_id: string; title: string; duration_s: number; analysis_id: string | null;
   clock: RecordingClock | null; interval: { start: string; end: string } | null;
 }
-export interface RecordingTimeline { recordings: TimelineRecording[]; possibly_truncated: boolean; note: string }
+export interface RecordingTimeline { recordings: TimelineRecording[]; possibly_truncated?: boolean; note: string; next_cursor?: string | null; camera_ids?: string[] }
+export interface TimelineFilters { camera_id?: string; from?: string; to?: string; cursor?: string; limit?: number }
+export function timelineQuery(filters: TimelineFilters = {}): string {
+  const query = new URLSearchParams({limit: String(filters.limit ?? 20)});
+  for (const key of ["camera_id", "from", "to", "cursor"] as const) if (filters[key]) query.set(key, filters[key]!);
+  return `?${query}`;
+}
+export function timelineFilterValues(camera: string, from: string, to: string): TimelineFilters {
+  const start = from ? new Date(`${from}Z`) : null, end = to ? new Date(`${to}Z`) : null;
+  if ((start && !Number.isFinite(start.getTime())) || (end && !Number.isFinite(end.getTime()))) throw new Error("Enter valid UTC dates.");
+  if (start && end && start >= end) throw new Error("The end must be later than the start.");
+  return {camera_id: camera.trim() || undefined, from: start?.toISOString(), to: end?.toISOString()};
+}
 export const recordingTimelineApi = {
-  list: (signal?: AbortSignal) => api.request<RecordingTimeline>("/review/recording-timeline", { signal }),
+  list: (signal?: AbortSignal, filters: TimelineFilters = {}) => api.request<RecordingTimeline>(`/review/recording-timeline${timelineQuery(filters)}`, { signal }),
   save: (id: string, clock: RecordingClock) => api.request<RecordingClock>(`/review/videos/${encodeURIComponent(id)}/clock`, { method: "PUT", body: JSON.stringify(clock) }),
 };
 export function clipOffset(recording: TimelineRecording, utcMs: number): number | null {

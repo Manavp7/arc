@@ -2,6 +2,7 @@
  * Query shapes come from OpenAPI; serialized response contracts live in contracts.ts.
  * Credentials are supplied by an identity provider, or minted for development callers. */
 
+import { InvestigationClient } from "./investigations.ts";
 import { readSse } from "./sse.ts";
 import type { paths } from "./generated/api.d.ts";
 
@@ -57,6 +58,7 @@ export class SioApiError extends Error {
 const RENEW_MARGIN_MS = 120_000;
 
 export class SioClient {
+  readonly investigations = new InvestigationClient(this);
   private readonly url: string;
   private readonly fetchImpl: typeof fetch;
   private token: string;
@@ -64,6 +66,9 @@ export class SioClient {
   private minting: Promise<string> | null = null;
 
   constructor(private readonly options: SioClientOptions = {}) {
+    if (options.token !== undefined && !options.token.trim() && !options.tokenProvider) {
+      throw new Error("An explicitly supplied token must not be empty");
+    }
     this.url = (options.url ?? "http://127.0.0.1:8000").replace(/\/$/, "");
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.token = options.token ?? "";
@@ -200,7 +205,7 @@ export class SioClient {
    */
   async approve(decisionId: string, optionId?: string): Promise<unknown> {
     return this.request("POST", `/api/decisions/${encodeURIComponent(decisionId)}/approve`, {
-      body: { option_id: optionId, approved_by: this.options.subject ?? "sdk" },
+      body: { option_id: optionId },
     });
   }
 

@@ -19,8 +19,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from sio_core.guard import principal_of
+from sio_core.source_scope import require_zone, zones_for
 from sio_core.tenancy import current_tenant
 
+from .review_access import review_scope, review_source
 from .review_models import AnalysisRequest, model_catalog, pin_profile, validate_artifact
 from .video_jobs import (
     ACTIVE_JOB_STATES,
@@ -124,6 +126,16 @@ class VideoReviewManager(VideoJobQueue):
         except OSError:
             return video
 
+    async def records(self, tenant, *, active_only=False):
+        if hasattr(self.store, "all_records"):
+            return await self.store.all_records(tenant, "video", active_only=active_only)
+        rows = await self.store.list(tenant, "video", limit=5000)
+        return [
+            row
+            for row in rows
+            if not active_only or (not row.get("archived_at") and not row.get("purged_at"))
+        ]
+
     async def start(self):
         self.closing = False
         tenants = {self.settings.tenant_id}
@@ -132,12 +144,16 @@ class VideoReviewManager(VideoJobQueue):
         for tenant in sorted(tenants):
             await self.ensure_recovered(tenant)
         # Upgrade pre-queue runs without inventing a resumable checkpoint.
-        for video in await self.store.list(self.settings.tenant_id, "video", limit=500):
+        for video in await self.records(self.settings.tenant_id):
             if not video.get("purged_at"):
                 await self.recover(self.settings.tenant_id, video)
+        self.start_polling()
 
     async def close(self):
         self.closing = True
+        if self.poller:
+            self.poller.cancel()
+            await asyncio.gather(self.poller, return_exceptions=True)
         if self.task:
             await self.task
 
@@ -175,6 +191,14 @@ class VideoReviewManager(VideoJobQueue):
             return video
 
     async def upload(self, request: Request):
+        principal = principal_of(request)
+        access_zone_id = request.query_params.get("access_zone_id")
+        if zones_for(principal) is not None and not access_zone_id:
+            raise HTTPException(
+                422, "Select an authorized access zone before uploading this recording"
+            )
+        if access_zone_id:
+            require_zone(principal, access_zone_id)
         if not (await blocking_media(self.capabilities))["upload"]:
             raise HTTPException(503, "Recorded video needs local ffmpeg, ffprobe and OpenCV")
         if request.headers.get("content-type", "").split(";")[0] != "video/mp4":
@@ -187,11 +211,8 @@ class VideoReviewManager(VideoJobQueue):
             raise HTTPException(413, "Video exceeds 100 MiB")
         tenant = current_tenant()
         async with self.upload_slots, video_mutation_lock(self.store, tenant, "uploads"):
-            stored = await self.store.list(tenant, "video", limit=5000)
-            if (
-                len(stored) >= 5000
-                or len([item for item in stored if not item.get("purged_at")]) >= MAX_VIDEOS
-            ):
+            stored = await self.records(tenant)
+            if len([item for item in stored if not item.get("purged_at")]) >= MAX_VIDEOS:
                 raise HTTPException(409, "This prototype is limited to 20 stored videos per tenant")
             video_id = "vid_" + uuid.uuid4().hex
             directory = self.directory(tenant, video_id)
@@ -269,6 +290,7 @@ class VideoReviewManager(VideoJobQueue):
                         "poster_url": base + "/poster",
                         "privacy": "full_frame_pixelation",
                         "source": "recorded_file",
+                        "evidence_zone_ids": [access_zone_id] if access_zone_id else [],
                         "zones": [],
                         "rules": [],
                         "analysis_id": None,
@@ -283,9 +305,17 @@ class VideoReviewManager(VideoJobQueue):
                     await asyncio.to_thread(shutil.rmtree, directory, True)
 
     async def analyze(
-        self, tenant: str, video_id: str, actor: str, profile_request: AnalysisRequest | None = None
+        self,
+        tenant: str,
+        video_id: str,
+        actor: str,
+        profile_request: AnalysisRequest | None = None,
+        *,
+        principal=None,
     ):
-        return await self.enqueue(tenant, video_id, actor, profile_request=profile_request)
+        return await self.enqueue(
+            tenant, video_id, actor, profile_request=profile_request, principal=principal
+        )
 
     async def run(self, tenant: str, video: dict, analysis: dict):
         processor = None
@@ -427,19 +457,27 @@ def install_video_routes(app: FastAPI, settings: Any, store: Any) -> VideoReview
     prefix = "/api/review/videos"
 
     @app.get(prefix, tags=["video-review"])
-    async def list_videos():
+    async def list_videos(request: Request):
         tenant = current_tenant()
         await manager.ensure_recovered(tenant)
         videos = [
             item
-            for item in await store.list(tenant, "video", limit=5000)
+            for item in await manager.records(tenant, active_only=True)
             if not item.get("archived_at") and not item.get("purged_at")
         ][:MAX_VIDEOS]
-        return {
-            "videos": [
+        visible = []
+        for item in videos:
+            try:
+                review_scope(principal_of(request), item)
+            except HTTPException as error:
+                if error.status_code != 403:
+                    raise
+                continue
+            visible.append(
                 await manager.playback_metadata(tenant, await manager.recover(tenant, item))
-                for item in videos
-            ],
+            )
+        return {
+            "videos": visible,
             "capabilities": await blocking_media(manager.capabilities),
         }
 
@@ -448,17 +486,23 @@ def install_video_routes(app: FastAPI, settings: Any, store: Any) -> VideoReview
         return await manager.upload(request)
 
     @app.get(prefix + "/{video_id}", tags=["video-review"])
-    async def video(video_id: str):
+    async def video(video_id: str, request: Request):
         tenant = current_tenant()
+        await review_source(store, tenant, video_id, principal_of(request))
         return await manager.playback_metadata(
             tenant, await manager.recover(tenant, await manager.video(tenant, video_id))
         )
 
     @app.put(prefix + "/{video_id}/configuration", tags=["video-review"])
-    async def configure(video_id: str, body: ConfigurationUpdate):
+    async def configure(video_id: str, body: ConfigurationUpdate, request: Request):
         tenant = current_tenant()
         async with video_mutation_lock(store, tenant, video_id):
             record = await manager.video(tenant, video_id)
+            proposed = {
+                **body.model_dump(),
+                "evidence_zone_ids": record.get("evidence_zone_ids", []),
+            }
+            review_scope(principal_of(request), record, proposed, write=True)
             if record["revision"] != body.revision:
                 raise HTTPException(409, "Video configuration changed; reload before saving")
             if record.get("archived_at"):
@@ -478,11 +522,15 @@ def install_video_routes(app: FastAPI, settings: Any, store: Any) -> VideoReview
     @app.post(prefix + "/{video_id}/analyze", status_code=202, tags=["video-review"])
     async def analyze(video_id: str, request: Request, body: AnalysisRequest | None = None):
         return await manager.analyze(
-            current_tenant(), video_id, principal_of(request).subject, body
+            current_tenant(),
+            video_id,
+            principal_of(request).subject,
+            body,
+            principal=principal_of(request),
         )
 
     @app.get(prefix + "/{video_id}/analysis", tags=["video-review"])
-    async def analysis(video_id: str, analysis_id: str | None = None):
+    async def analysis(video_id: str, request: Request, analysis_id: str | None = None):
         tenant = current_tenant()
         if analysis_id is not None and not re.fullmatch(r"ana_[a-f0-9]{32}", analysis_id):
             raise HTTPException(404, "Analysis not found")
@@ -491,11 +539,15 @@ def install_video_routes(app: FastAPI, settings: Any, store: Any) -> VideoReview
         result = await store.get(tenant, "analysis", selected_id or "")
         if result is None or result.get("video_id") != video_id:
             raise HTTPException(404, "Analysis not found for this video")
+        await review_source(store, tenant, video_id, principal_of(request), analysis_id=selected_id)
         return result
 
     @app.post(prefix + "/{video_id}/preview", tags=["video-review"])
-    async def preview(video_id: str, body: ReviewConfiguration):
-        result = await analysis(video_id)
+    async def preview(video_id: str, body: ReviewConfiguration, request: Request):
+        result = await analysis(video_id, request)
+        record = await manager.video(current_tenant(), video_id)
+        proposed = {**body.model_dump(), "evidence_zone_ids": record.get("evidence_zone_ids", [])}
+        review_scope(principal_of(request), record, result, proposed, write=True)
         if result["status"] != "completed":
             raise HTTPException(409, "Finish an analysis before previewing rule changes")
         if result["model"]["mode"] == "motion" and any(
@@ -509,39 +561,39 @@ def install_video_routes(app: FastAPI, settings: Any, store: Any) -> VideoReview
             "events": evaluate_rules(result, body),
         }
 
-    async def media_path(video_id: str, filename: str):
+    async def media_path(video_id: str, filename: str, request: Request, analysis_id=None):
         tenant = current_tenant()
-        await manager.video(tenant, video_id)
+        await review_source(store, tenant, video_id, principal_of(request), analysis_id=analysis_id)
         path = (manager.directory(tenant, video_id) / filename).resolve()
         if not path.is_relative_to(manager.directory(tenant, video_id)) or not path.is_file():
             raise HTTPException(404, "Processed media is unavailable")
         return path
 
     @app.get(prefix + "/{video_id}/media", tags=["video-review"])
-    async def media(video_id: str):
+    async def media(video_id: str, request: Request):
         return FileResponse(
-            await media_path(video_id, "playback.mp4"),
+            await media_path(video_id, "playback.mp4", request),
             media_type="video/mp4",
             headers=PRIVATE_HEADERS,
         )
 
     @app.get(prefix + "/{video_id}/poster", tags=["video-review"])
-    async def poster(video_id: str):
+    async def poster(video_id: str, request: Request):
         return FileResponse(
-            await media_path(video_id, "poster.jpg"),
+            await media_path(video_id, "poster.jpg", request),
             media_type="image/jpeg",
             headers=PRIVATE_HEADERS,
         )
 
     @app.get(prefix + "/{video_id}/frames/{analysis_id}/{frame_index}", tags=["video-review"])
-    async def frame(video_id: str, analysis_id: str, frame_index: int):
+    async def frame(video_id: str, analysis_id: str, frame_index: int, request: Request):
         if not re.fullmatch(r"ana_[a-f0-9]{32}", analysis_id) or not 0 <= frame_index < MAX_FRAMES:
             raise HTTPException(404, "Evidence frame not found")
         record = await store.get(current_tenant(), "analysis", analysis_id)
         if record is None or record.get("video_id") != video_id:
             raise HTTPException(404, "Evidence frame not found")
         return FileResponse(
-            await media_path(video_id, f"{analysis_id}/{frame_index}.jpg"),
+            await media_path(video_id, f"{analysis_id}/{frame_index}.jpg", request, analysis_id),
             media_type="image/jpeg",
             headers=PRIVATE_HEADERS,
         )

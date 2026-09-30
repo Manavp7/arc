@@ -483,3 +483,25 @@ async def test_http_auth_query_contract_preview_and_saved_csv(work, settings):
         assert response.status_code == 200 and "text/csv" in response.headers["content-type"]
         assert response.headers["cache-control"] == "private, no-store"
         assert saved["report_id"] in response.text
+
+
+async def test_movement_report_snapshot_scope_survives_source_narrowing(work):
+    manager, _ = work
+    narrow = Principal(
+        subject="alice", tenant_id=TENANT, roles=frozenset({"operator"}), zones=frozenset({"gate"})
+    )
+    with tenant_scope(TENANT):
+        video = await manager.store.get(TENANT, "video", VIDEO)
+        await manager.store.put(TENANT, "video", VIDEO, {**video, "evidence_zone_ids": ["other"]})
+        report = await manager.create_report(VIDEO, body(), ALICE)
+        assert report["evidence_zone_ids"] == ["gate", "other"]
+        await manager.store.put(TENANT, "video", VIDEO, {**video, "evidence_zone_ids": ["gate"]})
+        assert (await manager.reports(VIDEO, ANALYSIS, narrow))["reports"] == []
+        for operation in (
+            manager.report(report["report_id"], narrow),
+            manager.create_report(VIDEO, body(), narrow),
+        ):
+            with pytest.raises(HTTPException) as denied:
+                await operation
+            assert denied.value.status_code == 403
+        assert await manager.report(report["report_id"], ALICE) == report

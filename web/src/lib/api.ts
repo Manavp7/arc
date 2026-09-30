@@ -234,13 +234,13 @@ export const api = {
   acknowledgeAlert: (alertId: string, note?: string) =>
     request<Alert>(`/alerts/${encodeURIComponent(alertId)}/ack`, {
       method: "POST",
-      body: JSON.stringify({ ack_by: "operator", note }),
+      body: JSON.stringify({ note }),
     }),
 
   resolveAlert: (alertId: string, note?: string) =>
     request<Alert>(`/alerts/${encodeURIComponent(alertId)}/resolve`, {
       method: "POST",
-      body: JSON.stringify({ resolved_by: "operator", note }),
+      body: JSON.stringify({ note }),
     }),
 
   escalateAlert: (alertId: string, reason = "escalated by hand") =>
@@ -261,7 +261,6 @@ export const api = {
         method: "POST",
         body: JSON.stringify({
           option_id: optionId,
-          approved_by: "operator",
           note,
         }),
       },
@@ -272,7 +271,7 @@ export const api = {
       `/decisions/${encodeURIComponent(decisionId)}/reject`,
       {
         method: "POST",
-        body: JSON.stringify({ rejected_by: "operator", reason }),
+        body: JSON.stringify({ reason }),
       },
     ),
 
@@ -399,7 +398,7 @@ export const api = {
    */
   missionState: (missionId: string, to: string, force = false) =>
     request<unknown>(
-      `/missions/${encodeURIComponent(missionId)}/state${query({ to, by: "console", force })}`,
+      `/missions/${encodeURIComponent(missionId)}/state${query({ to, force })}`,
       { method: "POST" },
     ),
 
@@ -407,7 +406,6 @@ export const api = {
     request<unknown>(
       `/missions/${encodeURIComponent(missionId)}/resources${query({
         resource_id: resourceId,
-        by: "console",
         role,
       })}`,
       { method: "POST" },
@@ -415,11 +413,7 @@ export const api = {
 
   releaseResource: (missionId: string, resourceId: string) =>
     request<unknown>(
-      `/missions/${encodeURIComponent(missionId)}/resources/${encodeURIComponent(resourceId)}${query(
-        {
-          by: "console",
-        },
-      )}`,
+      `/missions/${encodeURIComponent(missionId)}/resources/${encodeURIComponent(resourceId)}`,
       { method: "DELETE" },
     ),
 
@@ -428,7 +422,6 @@ export const api = {
       `/missions/${encodeURIComponent(missionId)}/objectives/${encodeURIComponent(objectiveId)}${query(
         {
           done,
-          by: "console",
         },
       )}`,
       { method: "POST" },
@@ -437,7 +430,7 @@ export const api = {
   addComm: (missionId: string, body: string, kind = "message") =>
     request<unknown>(`/missions/${encodeURIComponent(missionId)}/comms`, {
       method: "POST",
-      body: JSON.stringify({ body, kind, author: "console" }),
+      body: JSON.stringify({ body, kind }),
     }),
 
   /** The mission's replay window, with a ready-made URL. */

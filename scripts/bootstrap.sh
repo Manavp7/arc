@@ -208,9 +208,16 @@ install_web_deps() {
     return 0
   fi
   have npm || { warn "npm missing; skipping web dependencies"; return 0; }
-  log "installing web dependencies (npm install)"
-  (cd "${SIO_ROOT}/web" && npm install --no-fund --no-audit)
+  log "installing locked web dependencies (npm ci)"
+  (cd "${SIO_ROOT}/web" && npm ci --no-fund --no-audit)
   ok "web dependencies installed"
+}
+
+install_sdk_deps() {
+  have npm || { warn "npm missing; skipping SDK dependencies"; return 0; }
+  log "installing locked SDK generator dependencies"
+  (cd "${SIO_ROOT}/sdk/ts" && npm ci --ignore-scripts --no-fund --no-audit)
+  ok "SDK dependencies installed"
 }
 
 # ------------------------------------------------------------------------------- main
@@ -231,6 +238,7 @@ fi
 
 install_python_deps
 install_web_deps
+install_sdk_deps
 
 log "bootstrap complete"
 info "next:  just services    # start postgres and redis"

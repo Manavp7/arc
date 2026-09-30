@@ -8,7 +8,9 @@ has been committed is terminal and cannot be manually retried.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -87,6 +89,39 @@ def enqueue_with_alert(
         destination,
         json.dumps(payload),
     )
+
+
+def encode_cursor(context: list[Any], position: list[Any]) -> str:
+    return (
+        base64.urlsafe_b64encode(json.dumps([context, position], separators=(",", ":")).encode())
+        .decode()
+        .rstrip("=")
+    )
+
+
+def decode_cursor(value: str | None, context: list[Any]) -> list[Any] | None:
+    if value is None:
+        return None
+    try:
+        if len(value) > 4096:
+            raise ValueError
+        decoded = json.loads(
+            base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
+        )
+        if (
+            not isinstance(decoded, list)
+            or len(decoded) != 2
+            or decoded[0] != context
+            or not isinstance(decoded[1], list)
+        ):
+            raise ValueError
+        return decoded[1]
+    except (ValueError, TypeError, UnicodeError):
+        raise HTTPException(422, "Invalid cursor or changed pagination filters.") from None
+
+
+def history_context(tenant: str, identifier: str, zones: tuple[str, ...]) -> list[Any]:
+    return ["delivery-history-v1", tenant, identifier, sorted(zones)]
 
 
 class AlertOutbox:
@@ -239,21 +274,35 @@ class AlertOutbox:
         alert_id: str | None = None,
         limit: int = 100,
         allowed_zones: tuple[str, ...] = (),
+        cursor: str | None = None,
     ) -> dict[str, Any]:
+        context = ["deliveries-v1", tenant, status, alert_id, sorted(allowed_zones)]
+        position = decode_cursor(cursor, context)
+        before_time, before_id = None, ""
+        if position is not None:
+            try:
+                if len(position) != 2 or not isinstance(position[1], str) or len(position[1]) > 100:
+                    raise ValueError
+                before_time = datetime.fromisoformat(position[0])
+                if before_time.tzinfo is None:
+                    raise ValueError
+                before_id = position[1]
+            except (ValueError, TypeError):
+                raise HTTPException(422, "Invalid delivery cursor.") from None
         rows = await self.pool.fetch(
             """
             SELECT d.*, COALESCE(h.history, '[]'::jsonb) AS history FROM alert_deliveries d
             LEFT JOIN LATERAL (
-                SELECT jsonb_agg(to_jsonb(recent) ORDER BY at DESC, history_id DESC) AS history
+                SELECT jsonb_agg(to_jsonb(recent) ORDER BY history_id DESC) AS history
                 FROM (SELECT history_id, kind, at, attempt, status_code, error, actor, reason
                     FROM alert_delivery_history h
                     WHERE h.tenant_id = d.tenant_id AND h.delivery_id = d.delivery_id
-                    ORDER BY history_id DESC LIMIT 20) recent
+                    ORDER BY history_id DESC LIMIT 21) recent
             ) h ON true
             WHERE d.tenant_id = %s AND (%s::text IS NULL OR d.status = %s)
                 AND (%s::text IS NULL OR d.alert_id = %s)
-                AND (cardinality(%s::text[]) = 0 OR d.payload->>'zone_id' IS NULL
-                    OR d.payload->>'zone_id' = ANY(%s::text[]))
+                AND (cardinality(%s::text[]) = 0 OR d.payload->>'zone_id' = ANY(%s::text[]))
+                AND (%s::timestamptz IS NULL OR (d.created_at, d.delivery_id) < (%s, %s))
             ORDER BY d.created_at DESC, d.delivery_id DESC LIMIT %s
             """,
             (
@@ -264,14 +313,74 @@ class AlertOutbox:
                 alert_id,
                 list(allowed_zones),
                 list(allowed_zones),
-                limit,
+                before_time,
+                before_time,
+                before_id,
+                limit + 1,
             ),
         )
+        more = len(rows) > limit
+        rows = rows[:limit]
+        deliveries = []
+        for row in rows:
+            history = row.get("history", [])
+            public = self.public(row, destination)
+            public["history"] = history[:20]
+            public["history_next_cursor"] = (
+                encode_cursor(
+                    history_context(tenant, row["delivery_id"], allowed_zones),
+                    [history[19]["history_id"]],
+                )
+                if len(history) > 20
+                else None
+            )
+            deliveries.append(public)
         return {
             "configured": bool(destination),
             "destination": destination_label(destination),
             "max_attempts": MAX_ATTEMPTS,
-            "deliveries": [self.public(row, destination) for row in rows],
+            "deliveries": deliveries,
+            "next_cursor": encode_cursor(
+                context, [rows[-1]["created_at"].isoformat(), rows[-1]["delivery_id"]]
+            )
+            if more
+            else None,
+        }
+
+    async def history(
+        self,
+        tenant: str,
+        identifier: str,
+        *,
+        allowed_zones: tuple[str, ...] = (),
+        cursor: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        context = history_context(tenant, identifier, allowed_zones)
+        position = decode_cursor(cursor, context)
+        before = None
+        if position is not None:
+            if len(position) != 1 or type(position[0]) is not int or not 0 < position[0] < 2**63:
+                raise HTTPException(422, "Invalid history cursor.")
+            before = position[0]
+        visible = await self.pool.fetchrow(
+            "SELECT delivery_id FROM alert_deliveries WHERE tenant_id = %s AND delivery_id = %s "
+            "AND (cardinality(%s::text[]) = 0 OR payload->>'zone_id' = ANY(%s::text[]))",
+            (tenant, identifier, list(allowed_zones), list(allowed_zones)),
+        )
+        if visible is None:
+            raise HTTPException(404, "Delivery not found.")
+        rows = await self.pool.fetch(
+            "SELECT history_id, kind, at, attempt, status_code, error, actor, reason FROM alert_delivery_history "
+            "WHERE tenant_id = %s AND delivery_id = %s AND (%s::bigint IS NULL OR history_id < %s) "
+            "ORDER BY history_id DESC LIMIT %s",
+            (tenant, identifier, before, before, limit + 1),
+        )
+        more = len(rows) > limit
+        rows = rows[:limit]
+        return {
+            "history": rows,
+            "next_cursor": encode_cursor(context, [rows[-1]["history_id"]]) if more else None,
         }
 
     @staticmethod
@@ -318,8 +427,7 @@ class AlertOutbox:
                     next_attempt_at = now(), updated_at = now(), error = NULL, status_code = NULL
                 WHERE tenant_id = %s AND delivery_id = %s AND status IN ('failed', 'blocked')
                     AND destination_url = %s AND %s <> ''
-                    AND (cardinality(%s::text[]) = 0 OR payload->>'zone_id' IS NULL
-                        OR payload->>'zone_id' = ANY(%s::text[]))
+                    AND (cardinality(%s::text[]) = 0 OR payload->>'zone_id' = ANY(%s::text[]))
                 RETURNING *
             ), history AS (
                 INSERT INTO alert_delivery_history (tenant_id, delivery_id, kind, attempt, actor, reason)
@@ -340,8 +448,7 @@ class AlertOutbox:
         if row is None:
             exists = await self.pool.fetchrow(
                 "SELECT delivery_id FROM alert_deliveries WHERE tenant_id = %s AND delivery_id = %s "
-                "AND (cardinality(%s::text[]) = 0 OR payload->>'zone_id' IS NULL "
-                "OR payload->>'zone_id' = ANY(%s::text[]))",
+                "AND (cardinality(%s::text[]) = 0 OR payload->>'zone_id' = ANY(%s::text[]))",
                 (tenant, identifier, list(allowed_zones), list(allowed_zones)),
             )
             if not exists:

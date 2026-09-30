@@ -56,6 +56,20 @@ class PgPool:
         await self.open()
         return self._pool.connection()
 
+    @staticmethod
+    def dict_cursor(connection: Any) -> Any:
+        """A row-mapping cursor for callers composing an explicit transaction."""
+        from psycopg.rows import dict_row
+
+        return connection.cursor(row_factory=dict_row)
+
+    @staticmethod
+    async def dedicated_connection(dsn: str) -> Any:
+        """A caller-owned session for long-running advisory claims; close after use."""
+        from psycopg import AsyncConnection
+
+        return await AsyncConnection.connect(dsn, autocommit=True)
+
     async def execute(self, sql: str, params: Sequence[Any] | None = None) -> int:
         """Run a statement, returning the affected row count."""
         try:

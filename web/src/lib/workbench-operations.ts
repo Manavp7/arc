@@ -25,7 +25,12 @@ export interface InboxSnapshot {cases: InboxCase[]; counts: Record<string, numbe
 export interface Handover {handover_id: string; title: string; text: string; author: string; captured_at: string; case_ids: string[]; cases: {case_id: string; title: string; status: string; owner: string | null; revision: number}[]}
 const json = (body: unknown, method = "POST"): RequestInit => ({method, body: JSON.stringify(body)});
 export const workbenchOps = {
-  jobs: (signal?: AbortSignal) => api.request<{jobs: VideoJob[]; capabilities: {max_attempts: number; max_pending: number; worker_concurrency: number}}>("/review/jobs", {signal}),
+  jobs: (signal?: AbortSignal, options: {cursor?: string; view?: string} = {}) => {
+    const query = new URLSearchParams();
+    if (options.cursor) query.set("cursor", options.cursor);
+    if (options.view) query.set("view", options.view);
+    return api.request<{jobs: VideoJob[]; next_cursor: string | null; capabilities: {max_attempts: number; max_pending: number; worker_concurrency: number}}>(`/review/jobs${query.size ? `?${query}` : ""}`, {signal});
+  },
   cancel: (job: VideoJob) => api.request<VideoJob>(`/review/jobs/${encodeURIComponent(job.job_id)}/cancel`, json({revision: job.revision})),
   retry: (job: VideoJob) => api.request<VideoJob>(`/review/jobs/${encodeURIComponent(job.job_id)}/retry`, json({revision: job.revision})),
   storage: (signal?: AbortSignal) => api.request<StorageOverview>("/review/storage", {signal}),

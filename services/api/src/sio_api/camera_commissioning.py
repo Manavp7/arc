@@ -178,6 +178,10 @@ async def rtsp_sources(settings: Any, request: Request) -> list[dict[str, Any]]:
 
 
 def install_camera_commissioning_routes(app: FastAPI, settings: Any, store: Any, pool: Any) -> None:
+    from .calibration_publication import install_calibration_routes
+
+    install_calibration_routes(app, store, pool)
+
     async def linked(body: CameraSetup, request: Request):
         source = next(
             (

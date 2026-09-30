@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from sio_core.tenancy import current_tenant
 
 from .cases import actor, need
+from .review_access import review_scope
 from .video_jobs import ACTIVE_JOB_STATES, video_mutation_lock
 from .video_rules import ReviewConfiguration
 from .workbench_store import WorkbenchConflict
@@ -130,9 +131,7 @@ class RulePresets:
         video = await self.store.get(current_tenant(), "video", video_id)
         if not video:
             raise HTTPException(404, "Recording not found")
-        need(principal, "review.write")
-        for zone in video.get("zones", []):
-            need(principal, "review.write", zone["zone_id"])
+        review_scope(principal, video, write=True)
         if video["revision"] != revision:
             raise HTTPException(
                 409, "Recording configuration changed. Refresh targets and preview again."

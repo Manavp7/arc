@@ -47,13 +47,16 @@ class RunOutcome:
     rolled back, and no automated path left to open it. It escalates rather than being logged.
     """
 
+    uncertain_effects: list[str] = field(default_factory=list)
+    """In-flight effects whose result is unknown; these must not be automatically replayed."""
+
     @property
     def ok(self) -> bool:
         return self.run.status == RunStatus.COMPLETED
 
     @property
     def needs_human(self) -> bool:
-        return bool(self.compensation_failures)
+        return bool(self.compensation_failures or self.uncertain_effects)
 
 
 class Runner(Protocol):

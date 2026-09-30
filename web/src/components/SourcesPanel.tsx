@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, explainError } from "../lib/api";
 import * as session from "../lib/session";
+import { useUnsavedWork } from "../lib/use-unsaved-work";
 import { SourceActivationControls } from "./SourceActivationControls";
 
 interface Source {
@@ -12,11 +13,16 @@ interface Source {
 interface SourceList { sources: Source[]; registered_kinds: string[]; restart_required: boolean; note?: string }
 interface Probe { ok: boolean; tested_at: string; sample: Record<string, unknown> | null; message: string }
 
-export function SourcesPanel() {
+export function SourcesPanel({onDirtyChange}: {onDirtyChange?: (dirty: boolean) => void}) {
   const [data, setData] = useState<SourceList | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [activating, setActivating] = useState<Set<string>>(() => new Set());
+  const reportActivationBusy = useCallback((value: boolean, id: string) => {
+    setActivating(previous => {if (previous.has(id) === value) return previous; const next = new Set(previous); if (value) next.add(id); else next.delete(id); return next;});
+  }, []);
+  const working = busy !== null || activating.size > 0;
   const [sourceId, setSourceId] = useState("");
   const [label, setLabel] = useState("");
   const [kind, setKind] = useState("camera_rtsp");
@@ -27,6 +33,7 @@ export function SourcesPanel() {
   const [enabled, setEnabled] = useState(true);
   const [editing, setEditing] = useState(false);
   const [sample, setSample] = useState<{ id: string; value: unknown } | null>(null);
+  useUnsavedWork(editing || working, onDirtyChange);
   const canEdit = session.can("integration.write");
   const load = useCallback(async () => {
     try { setData(await api.request<SourceList>("/sources")); setError(null); }
@@ -73,26 +80,26 @@ export function SourcesPanel() {
       {source.error && <p className="service-problem">{source.error}</p>}
       <div className="source-actions">
         <button onClick={() => setSample({ id: source.source_id, value: source.last_observation })}>Latest sample</button>
-        {canEdit && <><button disabled={busy !== null} onClick={() => void test(source)}>{busy === source.source_id ? "Working…" : "Test connection"}</button>
-        <button onClick={() => { setSourceId(source.source_id); setLabel(source.label ?? ""); setKind(source.kind); setModality(source.modality); setOptions(JSON.stringify(source.kind === "camera_rtsp" ? Object.fromEntries(Object.entries(source.options).filter(([key]) => key !== "url")) : source.options, null, 2)); setCameraUrl(String(source.options.url ?? "rtsp://")); setRate(source.rate_hz); setEnabled(source.enabled); setEditing(true); }}>Configure</button>
-        <button disabled={busy !== null} onClick={() => void toggle(source)}>{source.enabled ? "Disable" : "Enable"}</button></>}
+        {canEdit && <><button disabled={working} onClick={() => void test(source)}>{busy === source.source_id ? "Working…" : "Test connection"}</button>
+        <button disabled={editing || working} onClick={() => { setSourceId(source.source_id); setLabel(source.label ?? ""); setKind(source.kind); setModality(source.modality); setOptions(JSON.stringify(source.kind === "camera_rtsp" ? Object.fromEntries(Object.entries(source.options).filter(([key]) => key !== "url")) : source.options, null, 2)); setCameraUrl(String(source.options.url ?? "rtsp://")); setRate(source.rate_hz); setEnabled(source.enabled); setEditing(true); }}>Configure</button>
+        <button disabled={working} onClick={() => void toggle(source)}>{source.enabled ? "Disable" : "Enable"}</button></>}
       </div>
-      {canEdit && source.kind !== "simulator" && <SourceActivationControls sourceId={source.source_id} disabled={busy !== null} onApplied={load} />}
+      {canEdit && source.kind !== "simulator" && <SourceActivationControls sourceId={source.source_id} disabled={editing || working} onApplied={load} onBusyChange={reportActivationBusy} />}
     </article>)}</div>
     {sample && <section className="sample-view"><header><strong>Observation · {sample.id}</strong><button aria-label="Close sample" onClick={() => setSample(null)}>×</button></header><pre>{sample.value ? JSON.stringify(sample.value, null, 2) : "No observation is available yet."}</pre><p className="feed-note">Connection tests read one sample without publishing it to the live world.</p></section>}
-    {canEdit && !editing && <button className="primary wide-button" onClick={() => { setSourceId(""); setLabel(""); setKind("camera_rtsp"); setModality("video"); setOptions("{}"); setCameraUrl("rtsp://"); setRate(1); setEnabled(true); setEditing(true); }}>Add a source</button>}
+    {canEdit && !editing && <button className="primary wide-button" disabled={working} onClick={() => { setSourceId(""); setLabel(""); setKind("camera_rtsp"); setModality("video"); setOptions("{}"); setCameraUrl("rtsp://"); setRate(1); setEnabled(true); setEditing(true); }}>Add a source</button>}
     {!canEdit && <p className="feed-note">Source configuration requires an integrator or administrator role.</p>}
     {editing && <form className="source-form form-panel" onSubmit={event => void save(event)}>
       <h3>Source configuration</h3>
-      <label>Source ID<input required pattern="[A-Za-z0-9_.-]+" value={sourceId} onChange={event => setSourceId(event.target.value)} placeholder="north-gate-camera" /></label>
-      <label>Display name<input value={label} onChange={event => setLabel(event.target.value)} placeholder="North gate" /></label>
-      <div className="form-columns"><label>Connector<select value={kind} onChange={event => setKind(event.target.value)}>{[...new Set([kind, ...(data?.registered_kinds ?? [])])].map(value => <option key={value}>{value}</option>)}</select></label><label>Modality<select value={modality} onChange={event => setModality(event.target.value)}>{["video", "gps", "iot", "weather", "satellite", "enterprise", "audio"].map(value => <option key={value}>{value}</option>)}</select></label></div>
-      {kind === "camera_rtsp" && <label>Camera address<input required value={cameraUrl} onChange={event => setCameraUrl(event.target.value)} placeholder="rtsp://camera-address/stream" autoComplete="off" /></label>}
-      <label>Sampling rate (observations / second)<input required type="number" min="0.01" max="120" step="any" value={rate} onChange={event => setRate(Number(event.target.value))} /></label>
-      <label>Additional connection options<textarea rows={5} spellCheck={false} value={options} onChange={event => setOptions(event.target.value)} /></label>
+      <label>Source ID<input disabled={working} required pattern="[A-Za-z0-9_.-]+" value={sourceId} onChange={event => setSourceId(event.target.value)} placeholder="north-gate-camera" /></label>
+      <label>Display name<input disabled={working} value={label} onChange={event => setLabel(event.target.value)} placeholder="North gate" /></label>
+      <div className="form-columns"><label>Connector<select disabled={working} value={kind} onChange={event => setKind(event.target.value)}>{[...new Set([kind, ...(data?.registered_kinds ?? [])])].map(value => <option key={value}>{value}</option>)}</select></label><label>Modality<select disabled={working} value={modality} onChange={event => setModality(event.target.value)}>{["video", "gps", "iot", "weather", "satellite", "enterprise", "audio"].map(value => <option key={value}>{value}</option>)}</select></label></div>
+      {kind === "camera_rtsp" && <label>Camera address<input disabled={working} required value={cameraUrl} onChange={event => setCameraUrl(event.target.value)} placeholder="rtsp://camera-address/stream" autoComplete="off" /></label>}
+      <label>Sampling rate (observations / second)<input disabled={working} required type="number" min="0.01" max="120" step="any" value={rate} onChange={event => setRate(Number(event.target.value))} /></label>
+      <label>Additional connection options<textarea disabled={working} rows={5} spellCheck={false} value={options} onChange={event => setOptions(event.target.value)} /></label>
       <p className="feed-note">{kind === "camera_rtsp" ? "Enter the RTSP stream in Camera address. " : "Use the connector's documented options. "}Existing masked credentials are preserved when unchanged. Saved credentials stay on the server.</p>
-      <label className="checkbox-label"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} /> Enabled when activated</label>
-      <div className="source-actions"><button className="primary" disabled={busy !== null} type="submit">{busy === "save" ? "Saving…" : "Save configuration"}</button><button type="button" onClick={() => setEditing(false)}>Cancel</button></div>
+      <label className="checkbox-label"><input disabled={working} type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} /> Enabled when activated</label>
+      <div className="source-actions"><button className="primary" disabled={working} type="submit">{busy === "save" ? "Saving…" : "Save configuration"}</button><button type="button" disabled={working} onClick={() => setEditing(false)}>Cancel</button></div>
     </form>}
   </div>;
 }

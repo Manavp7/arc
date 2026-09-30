@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from sio_core import PgPool, get_pg_pool
+from sio_core.source_scope import ZoneScope, state_zone_sql, zone_sql
 from sio_schemas import Entity, Event, utc_now
 
 
@@ -27,6 +28,7 @@ class ReadModel:
         self,
         *,
         tenant_id: str,
+        allowed_zones: ZoneScope = None,
         entity_type: str | None = None,
         zone_id: str | None = None,
         since: datetime | None = None,
@@ -37,6 +39,10 @@ class ReadModel:
     ) -> list[Entity]:
         clauses = ["tenant_id = %s"]
         params: list[Any] = [tenant_id]
+        scope_clause, scope_params = zone_sql(allowed_zones)
+        if scope_clause:
+            clauses.append(scope_clause.removeprefix(" AND "))
+            params.extend(scope_params)
         if entity_type:
             clauses.append("type = %s")
             params.append(entity_type)
@@ -64,33 +70,42 @@ class ReadModel:
         )
         return [Entity.model_validate(row["payload"]) for row in rows]
 
-    async def entity(self, entity_id: str, *, tenant_id: str) -> Entity | None:
+    async def entity(
+        self, entity_id: str, *, tenant_id: str, allowed_zones: ZoneScope = None
+    ) -> Entity | None:
+        scoped, params = zone_sql(allowed_zones)
         row = await self.pool.fetchrow(
-            "SELECT payload FROM entities WHERE tenant_id = %s AND entity_id = %s",
-            (tenant_id, entity_id),
+            "SELECT payload FROM entities WHERE tenant_id = %s AND entity_id = %s" + scoped,
+            (tenant_id, entity_id, *params),
         )
         return Entity.model_validate(row["payload"]) if row else None
 
     async def entity_history(
-        self, entity_id: str, *, tenant_id: str, limit: int = 500
+        self, entity_id: str, *, tenant_id: str, allowed_zones: ZoneScope = None, limit: int = 500
     ) -> list[dict[str, Any]]:
         """Movement history, newest first — what the timeline scrubber and analytics read."""
+        scoped, params = zone_sql(allowed_zones, state_zone_sql())
         rows = await self.pool.fetch(
-            """
+            f"""
             SELECT ts, ST_Y(geom::geometry) AS lat, ST_X(geom::geometry) AS lon,
                    speed_mps, heading_deg, zone_id, confidence
               FROM entity_states
-             WHERE tenant_id = %s AND entity_id = %s
+             WHERE tenant_id = %s AND entity_id = %s {scoped}
              ORDER BY ts DESC LIMIT %s
             """,
-            (tenant_id, entity_id, limit),
+            (tenant_id, entity_id, *params, limit),
         )
         return [dict(row) for row in rows]
 
-    async def entity_counts(self, *, tenant_id: str) -> dict[str, int]:
+    async def entity_counts(
+        self, *, tenant_id: str, allowed_zones: ZoneScope = None
+    ) -> dict[str, int]:
+        scoped, params = zone_sql(allowed_zones)
         rows = await self.pool.fetch(
-            "SELECT type, count(*) AS n FROM entities WHERE tenant_id = %s GROUP BY type",
-            (tenant_id,),
+            "SELECT type, count(*) AS n FROM entities WHERE tenant_id = %s"
+            + scoped
+            + " GROUP BY type",
+            (tenant_id, *params),
         )
         return {row["type"]: int(row["n"]) for row in rows}
 
@@ -99,6 +114,7 @@ class ReadModel:
         self,
         *,
         tenant_id: str,
+        allowed_zones: ZoneScope = None,
         event_type: str | None = None,
         severity: str | None = None,
         entity_id: str | None = None,
@@ -110,6 +126,10 @@ class ReadModel:
     ) -> list[Event]:
         clauses = ["tenant_id = %s"]
         params: list[Any] = [tenant_id]
+        scope_clause, scope_params = zone_sql(allowed_zones)
+        if scope_clause:
+            clauses.append(scope_clause.removeprefix(" AND "))
+            params.extend(scope_params)
         if event_type:
             clauses.append("type = %s")
             params.append(event_type)
@@ -143,6 +163,7 @@ class ReadModel:
         self,
         *,
         tenant_id: str,
+        allowed_zones: ZoneScope = None,
         start: datetime | None = None,
         end: datetime | None = None,
         limit: int = 500,
@@ -150,73 +171,32 @@ class ReadModel:
         """Events in a window, oldest first — the order a replay wants to consume them."""
         start = start or (utc_now() - timedelta(hours=1))
         end = end or utc_now()
+        scoped, params = zone_sql(allowed_zones)
         rows = await self.pool.fetch(
             "SELECT payload FROM events WHERE tenant_id = %s AND ts BETWEEN %s AND %s "
-            "ORDER BY ts ASC LIMIT %s",
-            (tenant_id, start, end, limit),
+            + scoped
+            + " ORDER BY ts ASC LIMIT %s",
+            (tenant_id, start, end, *params, limit),
         )
         return [Event.model_validate(row["payload"]) for row in rows]
 
-    async def world_at(self, ts: datetime, *, tenant_id: str, limit: int = 1000) -> list[Entity]:
-        """The world as it stood at ``ts`` (PRD M8 / UC5).
+    async def world_at(
+        self, ts: datetime, *, tenant_id: str, allowed_zones: ZoneScope = None, limit: int = 1000
+    ) -> list[Entity]:
+        """Use the same historical membership reconstruction as REST and GraphQL."""
+        from .timeline import TimelineReader
 
-        Each entity's *state at that instant* comes from `entity_states`, not from the current
-        `entities` row — otherwise scrubbing back in time would show old entities at their present
-        positions, which is exactly the bug that makes a replay useless.
-
-        `DISTINCT ON` picks each entity's latest state at or before `ts` in one pass.
-        """
-        rows = await self.pool.fetch(
-            """
-            WITH state_at AS (
-                SELECT DISTINCT ON (entity_id)
-                       entity_id, ts,
-                       ST_Y(geom::geometry) AS lat, ST_X(geom::geometry) AS lon,
-                       speed_mps, heading_deg, zone_id, confidence
-                  FROM entity_states
-                 WHERE tenant_id = %s AND ts <= %s
-                 ORDER BY entity_id, ts DESC
-            )
-            SELECT e.payload, s.ts AS state_ts, s.lat, s.lon, s.speed_mps,
-                   s.heading_deg, s.zone_id, s.confidence
-              FROM entities e
-              LEFT JOIN state_at s ON s.entity_id = e.entity_id
-             WHERE e.tenant_id = %s
-               AND e.first_seen <= %s
-               AND (e.is_static OR s.entity_id IS NOT NULL)
-             ORDER BY e.is_static ASC, e.last_seen DESC
-             LIMIT %s
-            """,
-            (tenant_id, ts, tenant_id, ts, limit),
+        snapshot = await TimelineReader(self.pool).world_at(
+            ts, tenant_id=tenant_id, allowed_zones=allowed_zones, limit=limit
         )
-
-        entities: list[Entity] = []
-        for row in rows:
-            entity = Entity.model_validate(row["payload"])
-            if row["lat"] is not None and row["lon"] is not None:
-                # Rewind the entity to its historical state.
-                from sio_schemas import EntityState, Geo
-
-                entity = entity.model_copy(
-                    update={
-                        "state": EntityState(
-                            ts=row["state_ts"],
-                            geo=Geo(lat=float(row["lat"]), lon=float(row["lon"])),
-                            heading_deg=row["heading_deg"],
-                            zone_id=row["zone_id"],
-                            confidence=float(row["confidence"] or 1.0),
-                        ),
-                        "last_seen": row["state_ts"],
-                    }
-                )
-            entities.append(entity)
-        return entities
+        return snapshot["entities"]
 
     # ------------------------------------------------------------------- spatial
     async def nearby(
         self,
         *,
         tenant_id: str,
+        allowed_zones: ZoneScope = None,
         lat: float,
         lon: float,
         radius_m: float,
@@ -233,32 +213,37 @@ class ReadModel:
         # into a JOIN predicate and silently returning wrong rows; not repeating that here.
         point = f"SRID=4326;POINT({lon} {lat})"
         type_clause = "AND type = %s" if entity_type else ""
+        scoped, scope_params = zone_sql(allowed_zones)
         sql = f"""
             SELECT payload, ST_Distance(geom, %s::geography) AS distance_m
               FROM entities
              WHERE tenant_id = %s
                AND geom IS NOT NULL
                AND ST_DWithin(geom, %s::geography, %s)
-               {type_clause}
+               {type_clause} {scoped}
              ORDER BY distance_m ASC
              LIMIT %s
         """
         params: list[Any] = [point, tenant_id, point, radius_m]
         if entity_type:
             params.append(entity_type)
+        params.extend(scope_params)
         params.append(limit)
 
         rows = await self.pool.fetch(sql, params)
         return [(Entity.model_validate(row["payload"]), float(row["distance_m"])) for row in rows]
 
-    async def zones(self, *, tenant_id: str) -> list[dict[str, Any]]:
+    async def zones(
+        self, *, tenant_id: str, allowed_zones: ZoneScope = None
+    ) -> list[dict[str, Any]]:
+        scoped, params = zone_sql(allowed_zones)
         rows = await self.pool.fetch(
-            """
+            f"""
             SELECT zone_id, name, kind, restricted, capacity,
                    ST_AsGeoJSON(geom::geometry) AS geometry
-              FROM zones WHERE tenant_id = %s ORDER BY zone_id
+              FROM zones WHERE tenant_id = %s {scoped} ORDER BY zone_id
             """,
-            (tenant_id,),
+            (tenant_id, *params),
         )
         import json
 
@@ -274,7 +259,9 @@ class ReadModel:
             for row in rows
         ]
 
-    async def cameras(self, *, tenant_id: str) -> list[dict[str, Any]]:
+    async def cameras(
+        self, *, tenant_id: str, allowed_zones: ZoneScope = None
+    ) -> list[dict[str, Any]]:
         """Every camera with its field of view, as GeoJSON.
 
         Added for the 3D twin, which draws each camera's coverage as a frustum — the one thing a 3D view shows
@@ -284,18 +271,18 @@ class ReadModel:
         takes a zone and answers "which cameras see it" without ever handing back the geometry. So the data for
         blind-spot analysis was present and unreachable from outside the database.
         """
+        scoped, params = zone_sql(allowed_zones)
         rows = await self.pool.fetch(
-            """
+            f"""
             SELECT source_id, label, kind, zone_id,
                    ST_Y(geom::geometry) AS lat,
                    ST_X(geom::geometry) AS lon,
-                   ST_AsGeoJSON(fov::geometry) AS fov,
-                   config
+                   ST_AsGeoJSON(fov::geometry) AS fov
               FROM sources
-             WHERE tenant_id = %s AND kind = 'camera' AND geom IS NOT NULL
+             WHERE tenant_id = %s AND kind = 'camera' AND geom IS NOT NULL {scoped}
              ORDER BY source_id
             """,
-            (tenant_id,),
+            (tenant_id, *params),
         )
         cameras: list[dict[str, Any]] = []
         for row in rows:
@@ -306,19 +293,22 @@ class ReadModel:
             cameras.append(camera)
         return cameras
 
-    async def cameras_covering(self, *, tenant_id: str, zone_id: str) -> list[dict[str, Any]]:
+    async def cameras_covering(
+        self, *, tenant_id: str, allowed_zones: ZoneScope = None, zone_id: str
+    ) -> list[dict[str, Any]]:
         """Which cameras cover a zone (PRD M6 acceptance criterion)."""
+        scoped, params = zone_sql(allowed_zones, "s.zone_id")
         rows = await self.pool.fetch(
-            """
+            f"""
             SELECT s.source_id, s.label,
                    ST_Y(s.geom::geometry) AS lat, ST_X(s.geom::geometry) AS lon
               FROM sources s
               JOIN zones z ON z.tenant_id = s.tenant_id AND z.zone_id = %s
              WHERE s.tenant_id = %s AND s.kind = 'camera'
-               AND s.fov IS NOT NULL AND ST_Intersects(s.fov, z.geom)
+               AND s.fov IS NOT NULL AND ST_Intersects(s.fov, z.geom) {scoped}
              ORDER BY s.source_id
             """,
-            (zone_id, tenant_id),
+            (zone_id, tenant_id, *params),
         )
         return [dict(row) for row in rows]
 
@@ -327,6 +317,7 @@ class ReadModel:
         self,
         *,
         tenant_id: str,
+        allowed_zones: ZoneScope = None,
         metric: str,
         source_id: str | None = None,
         since: datetime | None = None,
@@ -334,6 +325,10 @@ class ReadModel:
     ) -> list[dict[str, Any]]:
         clauses = ["tenant_id = %s", "metric = %s"]
         params: list[Any] = [tenant_id, metric]
+        scope_clause, scope_params = zone_sql(allowed_zones)
+        if scope_clause:
+            clauses.append(scope_clause.removeprefix(" AND "))
+            params.extend(scope_params)
         if source_id:
             clauses.append("source_id = %s")
             params.append(source_id)
@@ -348,18 +343,29 @@ class ReadModel:
         )
         return [dict(row) for row in rows]
 
-    async def stats(self, *, tenant_id: str) -> dict[str, Any]:
-        row = await self.pool.fetchrow(
-            """
-            SELECT (SELECT count(*) FROM entities WHERE tenant_id = %s) AS entities,
-                   (SELECT count(*) FROM entities WHERE tenant_id = %s AND is_static = false)
-                       AS moving_entities,
-                   (SELECT count(*) FROM events WHERE tenant_id = %s) AS events,
-                   (SELECT count(*) FROM entity_states WHERE tenant_id = %s) AS states,
-                   (SELECT count(*) FROM observations WHERE tenant_id = %s) AS observations,
-                   (SELECT count(*) FROM zones WHERE tenant_id = %s) AS zones,
-                   (SELECT max(last_seen) FROM entities WHERE tenant_id = %s) AS latest_entity
-            """,
-            (tenant_id,) * 7,
-        )
+    async def stats(self, *, tenant_id: str, allowed_zones: ZoneScope = None) -> dict[str, Any]:
+        selections = []
+        params: list[Any] = []
+        tables = [
+            ("entities", "entities", "count(*)", "zone_id", ""),
+            ("moving_entities", "entities", "count(*)", "zone_id", " AND is_static = false"),
+            ("events", "events", "count(*)", "zone_id", ""),
+            ("states", "entity_states", "count(*)", state_zone_sql(), ""),
+            (
+                "observations",
+                "observations",
+                "count(*)",
+                "(SELECT s.zone_id FROM sources s WHERE s.tenant_id = observations.tenant_id AND s.source_id = observations.source_id)",
+                "",
+            ),
+            ("zones", "zones", "count(*)", "zone_id", ""),
+            ("latest_entity", "entities", "max(last_seen)", "zone_id", ""),
+        ]
+        for name, table, aggregate, column, extra in tables:
+            scoped, scope_params = zone_sql(allowed_zones, column)
+            selections.append(
+                f"(SELECT {aggregate} FROM {table} WHERE tenant_id = %s{extra}{scoped}) AS {name}"
+            )
+            params.extend([tenant_id, *scope_params])
+        row = await self.pool.fetchrow("SELECT " + ", ".join(selections), params)
         return dict(row or {})

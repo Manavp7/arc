@@ -40,6 +40,8 @@ interface Run {
   steps: Step[];
   trigger_event?: string | null;
   dry_run?: boolean;
+  recovery_state?: "queued" | "running" | "compensating" | "completed" | "failed" | "needs_human" | null;
+  needs_human?: boolean;
 }
 
 const REFRESH_MS = 4000;
@@ -125,8 +127,9 @@ export function PlaybookRunsPanel() {
 
       {runs.map((run) => (
         <article key={run.run_id} className={`mission-card mission-${run.status}`}>
+          {(run.needs_human || run.recovery_state === "needs_human") && <p className="panel-error" role="status">An external action may have completed before interruption. Reconcile the recorded result with the destination before any new response; this run will not be replayed automatically.</p>}
           <header>
-            <span className={`mission-status mission-status-${run.status}`}>{run.status}</span>
+            <span className={`mission-status mission-status-${run.status}`}>{run.needs_human || run.recovery_state === "needs_human" ? "Needs reconciliation" : run.status}</span>
             <span className="mission-name">{run.playbook.replace(/_/g, " ")}</span>
             <span className="mission-time">
               {new Date(run.started).toLocaleTimeString([], { hour12: false })}

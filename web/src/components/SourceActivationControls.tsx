@@ -4,12 +4,13 @@ import { activationAction, activationEndpoint, activationProblem, type SourceAct
 import "./source-activation.css";
 
 /** Preview is a short-lived server ticket, never a editable client configuration. */
-export function SourceActivationControls({sourceId, disabled = false, onApplied}: {sourceId: string; disabled?: boolean; onApplied?: () => void | Promise<void>}) {
+export function SourceActivationControls({sourceId, disabled = false, onApplied, onBusyChange}: {sourceId: string; disabled?: boolean; onApplied?: () => void | Promise<void>; onBusyChange?: (busy: boolean, sourceId: string) => void}) {
   const [preview, setPreview] = useState<SourceActivationPreview | null>(null);
   const [result, setResult] = useState<SourceActivationResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const controller = useRef<AbortController | null>(null);
+  useEffect(() => {onBusyChange?.(busy,sourceId); return () => onBusyChange?.(false,sourceId);}, [busy,sourceId,onBusyChange]);
   useEffect(() => {
     const request = new AbortController(); controller.current = request;
     setPreview(null); setResult(null); setError(null); setBusy(false);

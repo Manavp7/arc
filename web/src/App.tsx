@@ -294,6 +294,7 @@ function Console() {
   const [videoNavigationKey, setVideoNavigationKey] = useState(0);
   const [caseDirty, setCaseDirty] = useState(false);
   const [timelineDirty, setTimelineDirty] = useState(false);
+  const [editorDirty, setEditorDirty] = useState(false);
   const [linkMessage, setLinkMessage] = useState<string | null>(null);
   const [alertId, setAlertId] = useState(initialLocation.alertId);
   const [incident, setIncident] = useState<Alert | null>(null);
@@ -307,18 +308,19 @@ function Console() {
   const [videoAt, setVideoAt] = useState<number | undefined>(initialLocation.atS);
   const [analysisId, setAnalysisId] = useState<string | undefined>(initialLocation.analysisId);
   const [siteId, setSiteId] = useState<string | undefined>(initialLocation.siteId);
+  const [setupId, setSetupId] = useState<string | undefined>(initialLocation.setupId);
   const [explaining, setExplaining] = useState<Explainable | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [snapshotAt, setSnapshotAt] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
-  const anyDirty = comparisonDirty || footageDirty || caseDirty || timelineDirty;
-  const location: InvestigationLocation = { tab, videoId, analysisId, atS: videoAt, caseId, missionId, packageId, siteId, alertId };
+  const anyDirty = comparisonDirty || footageDirty || caseDirty || timelineDirty || editorDirty;
+  const location: InvestigationLocation = { tab, videoId, analysisId, atS: videoAt, caseId, missionId, packageId, siteId, setupId, alertId };
   function restoreLocation(next: InvestigationLocation): boolean {
     if (!canOpenTab(next.tab)) return false;
     setTab(next.tab); setWorkspace(TAB_WORKSPACE[next.tab]);
     setVideoId(next.videoId); setAnalysisId(next.analysisId); setVideoAt(next.atS);
     setCaseId(next.caseId); setMissionId(next.missionId); setPackageId(next.packageId);
-    setSiteId(next.siteId); setAlertId(next.alertId); setIncident(null);
+    setSiteId(next.siteId); setSetupId(next.setupId); setAlertId(next.alertId); setIncident(null);
     setVideoNavigationKey(value => value + 1);
     return true;
   }
@@ -336,6 +338,8 @@ function Console() {
     try { await navigator.clipboard.writeText(window.location.href); setLinkMessage("Link copied. Recipients need access to this evidence."); }
     catch { setLinkMessage("Copy the address from your browser to share this view."); }
   }
+  const reportPackageLocation = useCallback((id: string, selectedPackage?: string) => { setCaseId(id || undefined); setPackageId(selectedPackage); }, []);
+  const reportSetupLocation = useCallback((id: string | undefined, selectedSite?: string) => { setSetupId(id); setSiteId(selectedSite); }, []);
   const generation = useRef(0);
   const onExplain = useCallback((subject: Explainable) => setExplaining(subject), []);
   const closeDrawer = useCallback(() => setExplaining(null), []);
@@ -395,7 +399,7 @@ function Console() {
   useEffect(() => { if (!anyDirty) setNavigationNotice(null); }, [anyDirty]);
   function navigate(section: Workspace, target?: RailTab): boolean {
     const next = target && canOpenTab(target) ? target : SECTIONS[section].tabs.find(canOpenTab) ?? "alerts";
-    if ((caseDirty || timelineDirty) && next !== tab) {
+    if ((caseDirty || timelineDirty || editorDirty) && next !== tab) {
       setNavigationNotice("Save or discard your current edits before leaving this workspace.");
       return false;
     }
@@ -413,10 +417,10 @@ function Console() {
     return true;
   }
   function investigate(alert: Alert) { if (!navigate("investigate", "incident")) return; setIncident(alert); setAlertId(alert.alert_id); if (alert.entity_ids[0]) useSioStore.getState().selectEntity(alert.entity_ids[0]); }
-  function openMission(id?: string) { if (navigate("respond", "missions")) setMissionId(id); }
+  function openMission(id?: string) { if (editorDirty) { setNavigationNotice("Save or discard current edits before opening another mission."); return; } if (navigate("respond", "missions")) setMissionId(id); }
   function openCase(id: string) { if (caseDirty) { setNavigationNotice("Save or discard current case edits before opening another case."); return; } if (navigate("review", "cases")) setCaseId(id); }
   function openComparison(id: string) { if (navigate("review", "compare")) setCaseId(id); }
-  function openPackage(id: string, selectedPackageId?: string) { if (navigate("review", "evidence")) { setCaseId(id); setPackageId(selectedPackageId); } }
+  function openPackage(id: string, selectedPackageId?: string) { if (editorDirty) { setNavigationNotice("Save or discard current edits before opening another package."); return; } if (navigate("review", "evidence")) { setCaseId(id); setPackageId(selectedPackageId); } }
   function openVideo(id: string, atS?: number, version?: string) { if (tab === "footage" && footageDirty) { setNavigationNotice("Save a movement snapshot or discard its draft, save or discard footage edits and bookmarks, and queue or reset changed analysis settings before opening another recording or analysis."); return; } if (navigate("review", "footage")) { setVideoId(id); setVideoAt(atS); setAnalysisId(version); setVideoNavigationKey(value => value + 1); } }
   function openNotification(target: NotificationTarget) {
     if (target.kind === "case") openCase(target.case_id ?? target.id);
@@ -428,7 +432,7 @@ function Console() {
     else if (kind === "video" || kind === "video_event") openVideo(id, atS, version);
     else if (kind === "alert") { const found = alerts.find(row => row.alert_id === id); if (found) investigate(found); else void api.request<Alert>(`/alerts/${encodeURIComponent(id)}`).then(investigate).catch(() => setSnapshotError("This alert could not be opened.")); }
     else if (kind === "mission") openMission(id);
-    else if (kind === "site") { setSiteId(id); navigate("admin", "site"); }
+    else if (kind === "site") { if (navigate("admin", "site")) setSiteId(id); }
     else if (kind === "entity") { useSioStore.getState().selectEntity(id); navigate("monitor", "events"); }
     else if (kind === "event") { void api.request<SioEvent>(`/events/${encodeURIComponent(id)}`).then(event => onExplain(fromEvent(event))).catch(() => setSnapshotError("This event could not be opened.")); }
   }
@@ -445,27 +449,27 @@ function Console() {
             {tab === "incident" && <IncidentPanel alert={activeIncident} onExplain={onExplain} onMission={openMission} onCase={openCase} onClose={() => navigate("monitor", "alerts")} />}
             {tab === "decisions" && <DecisionsPanel onExplain={onExplain} />}
             {tab === "copilot" && <CopilotPanel onExplain={onExplain} />}
-            {tab === "missions" && <MissionControlPanel initialMissionId={missionId} />}
+            {tab === "missions" && <MissionControlPanel initialMissionId={missionId} onSelectMission={setMissionId} onDirtyChange={setEditorDirty} />}
             {tab === "playbooks" && <PlaybookRunsPanel />}
             {tab === "twin" && <TwinPanel />}
             {tab === "forecast" && <ForecastPanel />}
             {tab === "analytics" && <AnalyticsPanel />}
             {tab === "builder" && session.can("workflow.write") && <WorkflowBuilderPanel />}
-            {tab === "sources" && <SourcesPanel />}
+            {tab === "sources" && <SourcesPanel onDirtyChange={setEditorDirty} />}
             {tab === "deliveries" && <AlertDeliveryPanel />}
             {tab === "visual-search" && <RecordedSearchPanel onOpenVideo={openVideo} onOpenCase={openCase} />}
             {tab === "recording-timeline" && <RecordingTimelinePanel onOpenVideo={openVideo} onDirtyChange={setTimelineDirty} />}
             {tab === "system" && <SystemPanel />}
-            {tab === "site" && <SitePanel initialSiteId={siteId} />}
+            {tab === "site" && <SitePanel initialSiteId={siteId} onSelectSite={setSiteId} onDirtyChange={setEditorDirty} />}
             {tab === "footage" && <VideoReviewPanel initialVideoId={videoId} initialAtS={videoAt} initialAnalysisId={analysisId} navigationKey={videoNavigationKey} onLocationChange={reportVideoLocation} onOpenCase={openCase} onDirtyChange={setFootageDirty} />}
             {tab === "cases" && <CasePanel initialCaseId={caseId} onSelectCase={setCaseId} onDirtyChange={setCaseDirty} onOpenVideo={openVideo} onOpenMission={openMission} onPrepareEvidence={openPackage} onCompareEvidence={openComparison} />}
             {tab === "evaluation" && <EvaluationPanel onOpenVideo={openVideo} onOpenCase={openCase} />}
             {tab === "queue" && <ProcessingQueuePanel onOpenVideo={openVideo} />}
             {tab === "inbox" && <OperatorInboxPanel onOpenCase={openCase} />}
             {tab === "storage" && <StoragePanel />}
-            {tab === "camera" && <CameraSetupPanel initialSiteId={siteId} onOpenSite={id => { setSiteId(id); navigate("admin", "site"); }} />}
-            {tab === "compare" && <EvidenceComparePanel initialCaseId={caseId} onOpenCase={openCase} onOpenVideo={openVideo} onDirtyChange={setComparisonDirty} />}
-            {tab === "evidence" && <EvidencePackagePanel initialCaseId={caseId} initialPackageId={packageId} onOpenCase={openCase} />}
+            {tab === "camera" && <CameraSetupPanel initialSiteId={siteId} initialSetupId={setupId} onSelectSetup={reportSetupLocation} onDirtyChange={setEditorDirty} onOpenSite={id => { if (navigate("admin", "site")) setSiteId(id); }} />}
+            {tab === "compare" && <EvidenceComparePanel initialCaseId={caseId} onSelectCase={setCaseId} onOpenCase={openCase} onOpenVideo={openVideo} onDirtyChange={setComparisonDirty} />}
+            {tab === "evidence" && <EvidencePackagePanel initialCaseId={caseId} initialPackageId={packageId} onSelect={reportPackageLocation} onDirtyChange={setEditorDirty} onOpenCase={openCase} />}
             {tab === "search" && <SearchPanel onSelectResult={searchResult} />}
             {tab === "objects" && <ObjectExplorerPanel onOpenFootage={(id, atS, version) => searchResult("video", id, atS, version)} />}
             {tab === "quality" && <ReviewMetricsPanel />}

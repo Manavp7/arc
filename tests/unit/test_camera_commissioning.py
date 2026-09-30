@@ -311,7 +311,9 @@ async def test_preview_only_returns_recent_indexed_sanitized_same_tenant_keys(ca
     pool.rows = [row]
     good = (await client.get(path, headers=headers())).json()
     assert good["available"] and good["media_url"] == "/media/tenants/tenant-a/frames/frame.jpg"
-    assert not (await client.get(path, headers=headers(zones=("one-zone",)))).json()["available"]
+    restricted = await client.get(path, headers=headers(zones=("one-zone",)))
+    assert restricted.status_code == 403
+    assert restricted.json()["rule"] == "source_scope.required"
     assert (await client.get(path, headers=headers(tenant="tenant-b"))).status_code == 404
 
 

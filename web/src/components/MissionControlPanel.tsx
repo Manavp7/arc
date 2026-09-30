@@ -1,3 +1,4 @@
+import { useUnsavedWork } from "../lib/use-unsaved-work";
 /**
  * Mission Control (PRD M17, Phase 6).
  *
@@ -93,10 +94,11 @@ const STATE_GLYPH: Record<string, string> = {
   aborted: "✕",
 };
 
-export function MissionControlPanel({ initialMissionId }: { initialMissionId?: string }) {
+export function MissionControlPanel({ initialMissionId, onSelectMission, onDirtyChange }: { initialMissionId?: string; onSelectMission?: (id: string) => void; onDirtyChange?: (dirty: boolean) => void }) {
   const [missions, setMissions] = useState<Mission[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(initialMissionId ?? null);
-  useEffect(() => { if (initialMissionId) setSelectedId(initialMissionId); }, [initialMissionId]);
+  useEffect(() => { setSelectedId(initialMissionId ?? null); setDetail(null); }, [initialMissionId]);
+  const selectedRef = useRef(selectedId); selectedRef.current = selectedId;
   const [detail, setDetail] = useState<Mission | null>(null);
   const [status, setStatus] = useState("");
   const [statusKind, setStatusKind] = useState<"ok" | "bad" | "busy">("ok");
@@ -114,6 +116,9 @@ export function MissionControlPanel({ initialMissionId }: { initialMissionId?: s
     { id: string; label: string; zone: string | null }[]
   >([]);
   const [comm, setComm] = useState("");
+  const hasDraft = Boolean(name.trim() || zone || objectiveText.trim() || comm.trim());
+  useUnsavedWork(hasDraft || statusKind === "busy", onDirtyChange);
+  function selectMission(id: string) { if (hasDraft || statusKind === "busy") { say("Save or discard the current draft before opening another mission.", "bad"); return; } setSelectedId(id); onSelectMission?.(id); }
   const commsRef = useRef<HTMLUListElement | null>(null);
   const requestReplay = useSioStore((state) => state.requestReplay);
 
@@ -154,7 +159,8 @@ export function MissionControlPanel({ initialMissionId }: { initialMissionId?: s
   const loadDetail = useCallback(
     async (missionId: string) => {
       try {
-        setDetail((await api.mission(missionId)) as Mission);
+        const value = (await api.mission(missionId)) as Mission;
+        if (selectedRef.current === missionId) setDetail(value);
       } catch (error) {
         say(`Could not load that mission: ${describe(error)}`, "bad");
       }
@@ -266,17 +272,16 @@ export function MissionControlPanel({ initialMissionId }: { initialMissionId?: s
       const mission = (await api.createMission({
         name: name.trim(),
         zone_id: zone || null,
-        commander: "console",
         objectives,
       })) as Mission;
       say(
         `Created ${mission.name}. It is a draft — start it when you are ready.`,
       );
-      setName("");
+      setName(""); setZone("");
       setObjectiveText("");
       setCreating(false);
       await refresh();
-      setSelectedId(mission.mission_id);
+      setSelectedId(mission.mission_id); onSelectMission?.(mission.mission_id);
     } catch (error) {
       say(`Could not create it: ${describe(error)}`, "bad");
     }
@@ -457,7 +462,7 @@ export function MissionControlPanel({ initialMissionId }: { initialMissionId?: s
             >
               Create as draft
             </button>
-            <button className="ghost" onClick={() => setCreating(false)}>
+            <button className="ghost" onClick={() => { setCreating(false); setName(""); setZone(""); setObjectiveText(""); }}>
               cancel
             </button>
           </div>
@@ -477,7 +482,7 @@ export function MissionControlPanel({ initialMissionId }: { initialMissionId?: s
                   ? "mission-row selected"
                   : "mission-row"
               }
-              onClick={() => setSelectedId(mission.mission_id)}
+              onClick={() => selectMission(mission.mission_id)}
             >
               <div className="mission-row-head">
                 <span className={`mission-state state-${mission.state}`}>
@@ -709,6 +714,7 @@ export function MissionControlPanel({ initialMissionId }: { initialMissionId?: s
             >
               append
             </button>
+            {comm.trim() && <button className="ghost" disabled={statusKind === "busy"} onClick={() => setComm("")}>Discard entry</button>}
           </div>
 
           {detail.alert_ids.length > 0 && (

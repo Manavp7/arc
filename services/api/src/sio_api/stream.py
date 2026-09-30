@@ -20,6 +20,7 @@ from typing import Any
 
 from sio_core import describe_error, get_logger
 from sio_core.ports import Bus
+from sio_core.source_scope import ZoneScope, zone_visible
 from sio_schemas import BusMessage, Topic
 
 log = get_logger("sio.api.stream")
@@ -37,18 +38,61 @@ DEFAULT_TOPICS: tuple[str, ...] = (
 class Subscriber:
     """One connected client."""
 
-    __slots__ = ("dropped", "queue", "tenant_id", "topics")
+    __slots__ = ("allowed_zones", "dropped", "queue", "tenant_id", "topics")
 
-    def __init__(self, topics: Sequence[str] | None, *, tenant_id: str, maxsize: int = 500) -> None:
+    def __init__(
+        self,
+        topics: Sequence[str] | None,
+        *,
+        tenant_id: str,
+        maxsize: int = 500,
+        allowed_zones: ZoneScope = None,
+    ) -> None:
         self.queue: asyncio.Queue[BusMessage] = asyncio.Queue(maxsize=maxsize)
         self.topics = {str(t) for t in topics} if topics else None
         self.dropped = 0
         self.tenant_id = tenant_id
+        self.allowed_zones = allowed_zones
 
     def wants(self, message: BusMessage) -> bool:
-        return message.tenant_id == self.tenant_id and (
-            self.topics is None or str(message.topic) in self.topics
-        )
+        if message.tenant_id != self.tenant_id or (
+            self.topics is not None and str(message.topic) not in self.topics
+        ):
+            return False
+        if self.allowed_zones is None:
+            return True
+        # Nested explanation/argument tags cannot establish a message's own source.
+        # Decisions, tracks and aggregate forecasts need a source projection before
+        # they can be forwarded to a restricted subscriber.
+        if message.kind == "Entity":
+            source_zone = (message.payload.get("state") or {}).get("zone_id")
+        elif message.kind in {"Event", "Alert"}:
+            source_zone = message.payload.get("zone_id")
+        else:
+            return False
+        if not zone_visible(self.allowed_zones, source_zone):
+            return False
+        zones = set()
+
+        def collect(value):
+            if isinstance(value, dict):
+                if isinstance(value.get("zone_id"), str):
+                    zones.add(value["zone_id"])
+                for zone in (
+                    value.get("zone_ids", []) if isinstance(value.get("zone_ids"), list) else []
+                ):
+                    if isinstance(zone, str):
+                        zones.add(zone)
+                for item in value.values():
+                    collect(item)
+            elif isinstance(value, list):
+                for item in value:
+                    collect(item)
+
+        collect(message.payload)
+        # Missing source membership cannot establish access. Never let a query-zone claim
+        # substitute for the zone on the actual emitted record.
+        return bool(zones) and all(zone_visible(self.allowed_zones, zone) for zone in zones)
 
     def offer(self, message: BusMessage) -> None:
         if not self.wants(message):
@@ -106,8 +150,14 @@ class StreamHub:
                 await asyncio.sleep(1.0)
 
     @contextlib.contextmanager
-    def subscribe(self, topics: Sequence[str] | None = None, *, tenant_id: str) -> Any:
-        subscriber = Subscriber(topics, tenant_id=tenant_id)
+    def subscribe(
+        self,
+        topics: Sequence[str] | None = None,
+        *,
+        tenant_id: str,
+        allowed_zones: ZoneScope = None,
+    ) -> Any:
+        subscriber = Subscriber(topics, tenant_id=tenant_id, allowed_zones=allowed_zones)
         self.subscribers.add(subscriber)
         log.debug("stream.subscribed", clients=len(self.subscribers))
         try:
@@ -140,7 +190,20 @@ class StreamHub:
             payload = message.model_dump_json(by_alias=True)
             yield f"id: {message.stream_id or message.id}\nevent: {message.kind}\ndata: {payload}\n\n"
 
-    def stats(self) -> dict[str, Any]:
+    def stats(
+        self, *, tenant_id: str | None = None, allowed_zones: ZoneScope = None
+    ) -> dict[str, Any]:
+        if tenant_id is not None:
+            visible = [
+                s
+                for s in self.subscribers
+                if s.tenant_id == tenant_id and s.allowed_zones == allowed_zones
+            ]
+            return {
+                "clients": len(visible),
+                "topics": self.topics,
+                "dropped_total": sum(s.dropped for s in visible),
+            }
         return {
             "clients": len(self.subscribers),
             "forwarded": self.forwarded,
