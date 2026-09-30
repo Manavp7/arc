@@ -10,17 +10,44 @@ Both are backed by the same :class:`ReadModel`, so they cannot disagree.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from collections.abc import AsyncGenerator
 from datetime import datetime
 from typing import Any
 
 import strawberry
+from fastapi import HTTPException
+from strawberry.types import Info
 
+from sio_core.guard import principal_of
+from sio_core.source_scope import require_zone, zones_for
 from sio_core.tenancy import current_tenant
 from sio_schemas import Entity as EntityModel
 from sio_schemas import Event as EventModel
 
 from .queries import ReadModel
+
+
+def request_principal(info: Info):
+    request = (
+        info.context.get("request")
+        if isinstance(info.context, dict)
+        else getattr(info.context, "request", None)
+    )
+    if request is None:
+        raise HTTPException(401, "An authenticated request context is required")
+    return principal_of(request)
+
+
+def scoped(info: Info):
+    return zones_for(request_principal(info))
+
+
+def bounded(limit: int, maximum: int = 1000) -> int:
+    if not 1 <= limit <= maximum:
+        raise ValueError(f"limit must be between 1 and {maximum}")
+    return limit
 
 
 @strawberry.type
@@ -66,15 +93,25 @@ class Entity:
         return (self.last_seen - self.first_seen).total_seconds()
 
     @strawberry.field(description="Events referencing this entity, newest first")
-    async def events(self, limit: int = 20) -> list[Event]:
+    async def events(self, info: Info, limit: int = 20) -> list[Event]:
         read = ReadModel()
-        found = await read.events(tenant_id=current_tenant(), entity_id=self.entity_id, limit=limit)
+        found = await read.events(
+            tenant_id=current_tenant(),
+            allowed_zones=scoped(info),
+            entity_id=self.entity_id,
+            limit=bounded(limit),
+        )
         return [to_graphql_event(event) for event in found]
 
     @strawberry.field(description="Recent positions, newest first")
-    async def history(self, limit: int = 100) -> list[EntityState]:
+    async def history(self, info: Info, limit: int = 100) -> list[EntityState]:
         read = ReadModel()
-        rows = await read.entity_history(self.entity_id, tenant_id=current_tenant(), limit=limit)
+        rows = await read.entity_history(
+            self.entity_id,
+            tenant_id=current_tenant(),
+            allowed_zones=scoped(info),
+            limit=bounded(limit),
+        )
         return [
             EntityState(
                 ts=row["ts"],
@@ -229,6 +266,7 @@ class Query:
     @strawberry.field(description="Entities in the world model")
     async def entities(
         self,
+        info: Info,
         type: str | None = None,
         zone_id: str | None = None,
         limit: int = 100,
@@ -236,25 +274,31 @@ class Query:
         include_static: bool = True,
     ) -> list[Entity]:
         read = ReadModel()
+        if zone_id is not None:
+            require_zone(request_principal(info), zone_id)
+        if offset < 0:
+            raise ValueError("offset must not be negative")
         found = await read.entities(
             tenant_id=current_tenant(),
+            allowed_zones=scoped(info),
             entity_type=type,
             zone_id=zone_id,
-            limit=limit,
+            limit=bounded(limit),
             offset=offset,
             include_static=include_static,
         )
         return [to_graphql_entity(entity) for entity in found]
 
     @strawberry.field
-    async def entity(self, entity_id: str) -> Entity | None:
+    async def entity(self, info: Info, entity_id: str) -> Entity | None:
         read = ReadModel()
-        found = await read.entity(entity_id, tenant_id=current_tenant())
+        found = await read.entity(entity_id, tenant_id=current_tenant(), allowed_zones=scoped(info))
         return to_graphql_entity(found) if found else None
 
     @strawberry.field(description="Events, newest first")
     async def events(
         self,
+        info: Info,
         type: str | None = None,
         severity: str | None = None,
         entity_id: str | None = None,
@@ -263,39 +307,59 @@ class Query:
         read = ReadModel()
         found = await read.events(
             tenant_id=current_tenant(),
+            allowed_zones=scoped(info),
             event_type=type,
             severity=severity,
             entity_id=entity_id,
-            limit=limit,
+            limit=bounded(limit),
         )
         return [to_graphql_event(event) for event in found]
 
     @strawberry.field(description="Events within a time window, oldest first")
     async def timeline(
-        self, start: datetime | None = None, end: datetime | None = None, limit: int = 200
+        self,
+        info: Info,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int = 200,
     ) -> list[Event]:
         read = ReadModel()
-        found = await read.timeline(tenant_id=current_tenant(), start=start, end=end, limit=limit)
+        found = await read.timeline(
+            tenant_id=current_tenant(),
+            allowed_zones=scoped(info),
+            start=start,
+            end=end,
+            limit=bounded(limit),
+        )
         return [to_graphql_event(event) for event in found]
 
     @strawberry.field(description="The world as it stood at an instant (UC5)")
-    async def world_at(self, ts: datetime, limit: int = 500) -> list[Entity]:
+    async def world_at(self, info: Info, ts: datetime, limit: int = 500) -> list[Entity]:
         read = ReadModel()
-        found = await read.world_at(ts, tenant_id=current_tenant(), limit=limit)
-        return [to_graphql_entity(entity) for entity in found]
+        from .timeline import TimelineReader
+
+        found = await TimelineReader(read.pool).world_at(
+            ts, tenant_id=current_tenant(), allowed_zones=scoped(info), limit=bounded(limit)
+        )
+        return [to_graphql_entity(entity) for entity in found["entities"]]
 
     @strawberry.field(description="Entities within a radius, nearest first")
     async def nearby(
-        self, lat: float, lon: float, radius_m: float = 500, type: str | None = None
+        self, info: Info, lat: float, lon: float, radius_m: float = 500, type: str | None = None
     ) -> list[Entity]:
         read = ReadModel()
         found = await read.nearby(
-            tenant_id=current_tenant(), lat=lat, lon=lon, radius_m=radius_m, entity_type=type
+            tenant_id=current_tenant(),
+            allowed_zones=scoped(info),
+            lat=lat,
+            lon=lon,
+            radius_m=radius_m,
+            entity_type=type,
         )
         return [to_graphql_entity(entity) for entity, _distance in found]
 
     @strawberry.field
-    async def zones(self) -> list[Zone]:
+    async def zones(self, info: Info) -> list[Zone]:
         read = ReadModel()
         return [
             Zone(
@@ -306,13 +370,13 @@ class Query:
                 capacity=zone["capacity"],
                 geometry=zone["geometry"],
             )
-            for zone in await read.zones(tenant_id=current_tenant())
+            for zone in await read.zones(tenant_id=current_tenant(), allowed_zones=scoped(info))
         ]
 
     @strawberry.field
-    async def stats(self) -> Stats:
+    async def stats(self, info: Info) -> Stats:
         read = ReadModel()
-        values = await read.stats(tenant_id=current_tenant())
+        values = await read.stats(tenant_id=current_tenant(), allowed_zones=scoped(info))
         return Stats(
             entities=int(values.get("entities") or 0),
             moving_entities=int(values.get("moving_entities") or 0),
@@ -326,7 +390,7 @@ class Query:
 @strawberry.type
 class Subscription:
     @strawberry.subscription(description="Live events as they are detected")
-    async def events(self) -> AsyncGenerator[Event, None]:
+    async def events(self, info: Info) -> AsyncGenerator[Event, None]:
         """Subscribe to the live event feed.
 
         Uses the same :class:`StreamHub` as the SSE endpoint, so a GraphQL subscriber and an SSE
@@ -337,23 +401,41 @@ class Subscription:
         from .app import get_hub
 
         hub = get_hub()
-        with hub.subscribe(topics=["events"], tenant_id=current_tenant()) as subscriber:
+        with hub.subscribe(
+            topics=["events"], tenant_id=current_tenant(), allowed_zones=scoped(info)
+        ) as subscriber:
             while True:
-                message = await subscriber.queue.get()
+                expiry = request_principal(info).expires_at
+                timeout = expiry - time.time() if expiry else None
+                if timeout is not None and timeout <= 0:
+                    return
+                try:
+                    message = await asyncio.wait_for(subscriber.queue.get(), timeout=timeout)
+                except TimeoutError:
+                    return
                 if message.kind != "Event":
                     continue
                 yield to_graphql_event(message.decode(EventPayload))
 
     @strawberry.subscription(description="Live entity updates")
-    async def entities(self) -> AsyncGenerator[Entity, None]:
+    async def entities(self, info: Info) -> AsyncGenerator[Entity, None]:
         from sio_schemas import Entity as EntityPayload
 
         from .app import get_hub
 
         hub = get_hub()
-        with hub.subscribe(topics=["entities"], tenant_id=current_tenant()) as subscriber:
+        with hub.subscribe(
+            topics=["entities"], tenant_id=current_tenant(), allowed_zones=scoped(info)
+        ) as subscriber:
             while True:
-                message = await subscriber.queue.get()
+                expiry = request_principal(info).expires_at
+                timeout = expiry - time.time() if expiry else None
+                if timeout is not None and timeout <= 0:
+                    return
+                try:
+                    message = await asyncio.wait_for(subscriber.queue.get(), timeout=timeout)
+                except TimeoutError:
+                    return
                 if message.kind != "Entity":
                     continue
                 yield to_graphql_entity(message.decode(EntityPayload))

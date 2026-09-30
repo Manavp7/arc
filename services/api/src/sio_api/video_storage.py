@@ -8,15 +8,17 @@ import shutil
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from sio_core.guard import principal_of
 from sio_core.tenancy import current_tenant
 
+from .review_access import review_scope
 from .video_jobs import ACTIVE_JOB_STATES, MAX_ATTEMPTS, MAX_PENDING, timestamp, video_mutation_lock
+from .workbench_store import decode_cursor, record_cursor
 
 
 class RevisionBody(BaseModel):
@@ -107,15 +109,27 @@ class VideoStorage:
         references = {}
         complete = True
         for kind in self.REFERENCE_KINDS:
-            rows = await self.store.list(tenant, kind, limit=5000)
-            complete = complete and len(rows) < 5000
+            rows = (
+                await self.store.all_records(tenant, kind)
+                if hasattr(self.store, "all_records")
+                else await self.store.list(tenant, kind, limit=5000)
+            )
+            complete = complete and (hasattr(self.store, "all_records") or len(rows) < 5000)
             references[kind] = rows
         jobs = await self.manager.jobs(tenant)
-        return references, jobs, complete and len(jobs) < 5000
+        return (
+            references,
+            jobs,
+            complete and (hasattr(self.store, "all_records") or len(jobs) < 5000),
+        )
 
     async def candidates(self, tenant, video_ids=None, *, purge=False, manual=False):
-        records = await self.store.list(tenant, "video", limit=5000)
-        inventory_complete = len(records) < 5000
+        records = (
+            await self.store.all_records(tenant, "video")
+            if hasattr(self.store, "all_records")
+            else await self.store.list(tenant, "video", limit=5000)
+        )
+        inventory_complete = hasattr(self.store, "all_records") or len(records) < 5000
         if video_ids is not None:
             wanted = set(video_ids)
             if len(wanted) != len(video_ids):
@@ -125,9 +139,16 @@ class VideoStorage:
             records = [row for row in records if row["video_id"] in wanted]
             if {row["video_id"] for row in records} != wanted:
                 raise HTTPException(404, "A selected video is unavailable")
-        references, jobs, complete = await self.reference_index(tenant)
-        analyses = await self.store.list(tenant, "analysis", limit=5000)
-        complete = complete and len(analyses) < 5000
+        counts = None
+        if hasattr(self.store, "reference_counts"):
+            counts = await self.store.reference_counts(tenant, [row["video_id"] for row in records])
+            references = {kind: [] for kind in self.REFERENCE_KINDS}
+            jobs = await self.manager.jobs(tenant, active_only=True)
+            analyses, complete = [], True
+        else:
+            references, jobs, complete = await self.reference_index(tenant)
+            analyses = await self.store.list(tenant, "analysis", limit=5000)
+            complete = complete and len(analyses) < 5000
         analyses_by_video: dict[str, list[str]] = {}
         for analysis in analyses:
             if analysis.get("video_id") and analysis.get("analysis_id"):
@@ -147,13 +168,17 @@ class VideoStorage:
             if not inventory_complete:
                 reasons.append("storage_inventory_incomplete")
             linked = {
-                kind: sum(bool(protected_ids & row) for row in rows)
+                kind: counts.get(video_id, {}).get(kind, 0)
+                if counts is not None
+                else sum(bool(protected_ids & row) for row in rows)
                 for kind, rows in indexed_references.items()
             }
             if not complete:
                 reasons.append("reference_scan_incomplete")
             if linked["case"]:
                 reasons.append("case_linked")
+            if linked["case_comparison"]:
+                reasons.append("comparison_linked")
             if any(
                 linked[kind]
                 for kind in ("evaluation_draft", "evaluation_annotations", "evaluation_report")
@@ -389,16 +414,55 @@ def install_storage_routes(app: FastAPI, manager):
     store = manager.store
 
     @app.get("/api/review/jobs", tags=["video-review"])
-    async def jobs():
+    async def jobs(
+        request: Request,
+        cursor: str = "",
+        limit: int = Query(default=100, ge=1, le=500),
+        view: Literal["all", "active", "finished"] = "all",
+    ):
         tenant = current_tenant()
         await manager.ensure_recovered(tenant)
-        records = sorted(
-            await manager.jobs(tenant),
-            key=lambda job: (job["queued_at"], job["job_id"]),
-            reverse=True,
+        statuses = (
+            tuple(ACTIVE_JOB_STATES)
+            if view == "active"
+            else ("completed", "failed", "interrupted", "cancelled")
+            if view == "finished"
+            else ()
         )
+        if hasattr(store, "iter_records"):
+            records = store.iter_records(tenant, "video_job", cursor=cursor, statuses=statuses)
+        else:
+
+            async def memory_jobs():
+                after = decode_cursor(cursor) if cursor else None
+                for job in sorted(
+                    await manager.jobs(tenant),
+                    key=lambda row: (row["created_at"], row["record_id"]),
+                    reverse=True,
+                ):
+                    if statuses and job.get("status") not in statuses:
+                        continue
+                    if not after or (job["created_at"], job["record_id"]) < after:
+                        yield job
+
+            records = memory_jobs()
+        visible = []
+        next_cursor = None
+        async for job in records:
+            video = await store.get(tenant, "video", job["video_id"])
+            try:
+                review_scope(principal_of(request), video or {}, job.get("configuration", {}))
+            except HTTPException as error:
+                if error.status_code != 403:
+                    raise
+                continue
+            if len(visible) == limit:
+                next_cursor = record_cursor(visible[-1])
+                break
+            visible.append(job)
         return {
-            "jobs": records,
+            "jobs": visible,
+            "next_cursor": next_cursor,
             "capabilities": {
                 "max_attempts": MAX_ATTEMPTS,
                 "max_pending": MAX_PENDING,
@@ -407,19 +471,35 @@ def install_storage_routes(app: FastAPI, manager):
         }
 
     @app.post("/api/review/jobs/{job_id}/cancel", tags=["video-review"])
-    async def cancel(job_id: str, body: RevisionBody):
-        return await manager.cancel(current_tenant(), job_id, body.revision)
+    async def cancel(job_id: str, body: RevisionBody, request: Request):
+        return await manager.cancel(
+            current_tenant(), job_id, body.revision, principal=principal_of(request)
+        )
 
     @app.post("/api/review/jobs/{job_id}/retry", status_code=202, tags=["video-review"])
     async def retry(job_id: str, body: RevisionBody, request: Request):
         return await manager.retry_job(
-            current_tenant(), job_id, body.revision, principal_of(request).subject
+            current_tenant(),
+            job_id,
+            body.revision,
+            principal_of(request).subject,
+            principal=principal_of(request),
         )
 
     @app.get("/api/review/storage", tags=["video-storage"])
-    async def overview():
+    async def overview(request: Request):
         tenant = current_tenant()
-        videos = await storage.candidates(tenant)
+        candidates = await storage.candidates(tenant)
+        videos = []
+        for item in candidates:
+            record = await store.get(tenant, "video", item["video_id"])
+            try:
+                review_scope(principal_of(request), record or {})
+            except HTTPException as error:
+                if error.status_code != 403:
+                    raise
+                continue
+            videos.append(item)
         return {
             "videos": videos,
             "settings": await storage.settings(tenant),

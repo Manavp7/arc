@@ -41,7 +41,9 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: |
+            web/package-lock.json
+            sdk/ts/package-lock.json
 
       - name: Install just
         run: |
@@ -61,6 +63,9 @@ jobs:
 
       - name: Install web dependencies
         run: npm ci --prefix web
+
+      - name: Install SDK generator dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefix sdk/ts
 
       - name: Configure environment
         run: cp .env.example .env
@@ -87,7 +92,9 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: |
+            web/package-lock.json
+            sdk/ts/package-lock.json
 
       - name: Install just and recorded-video tools
         run: |
@@ -100,6 +107,9 @@ jobs:
 
       - name: Install web dependencies
         run: npm ci --prefix web
+
+      - name: Install SDK generator dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefix sdk/ts
 
       - name: Configure environment
         run: cp .env.example .env

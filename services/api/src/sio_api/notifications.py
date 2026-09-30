@@ -14,9 +14,9 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import Field, field_validator
 
-from .case_evidence import source_evidence_zones
 from .case_helpers import StrictBody, parse_time
 from .cases import Casework, actor, need, review_video_available
+from .review_access import review_scope
 from .workbench_store import WorkbenchConflict
 
 SCAN_LIMIT = 5000
@@ -409,8 +409,7 @@ class NotificationManager:
                     or analysis.get("video_id") != source["video_id"]
                 ):
                     return False
-                for zone in source_evidence_zones({"evidence": analysis}):
-                    need(principal, "review.read", zone)
+                review_scope(principal, video, analysis)
             elif notice["source_kind"] == "evidence_package":
                 if (
                     source.get("created_by") != principal.subject

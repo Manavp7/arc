@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from sio_core.authn import Principal
 from sio_core.authz import authorise
 from sio_core.guard import principal_of
+from sio_core.source_scope import require_zone, zone_visible, zones_for
 from sio_core.tenancy import current_tenant
 from sio_schemas import new_id
 
@@ -95,6 +96,8 @@ def case_visible(principal: Principal, record: dict[str, Any]) -> bool:
         elif evidence.get("resolved_frames"):
             actions.append("media.read")
         scope_zones: list[str | None] = list(zones) or [None]
+        if any(not zone_visible(zones_for(principal), zone) for zone in scope_zones):
+            return False
         if any(not allowed(principal, action, zone) for action in actions for zone in scope_zones):
             return False
     return True
@@ -140,11 +143,31 @@ class Casework:
         self.store = store
         self.pool = pool
 
+    async def visible(self, principal: Principal, record: dict[str, Any]) -> bool:
+        if not case_visible(principal, record):
+            return False
+        from .review_access import review_scope
+
+        for item in [record, *(record.get("evidence_attachments") or [])]:
+            if not recorded_evidence(item):
+                continue
+            evidence = item.get("evidence") or {}
+            video_id = item.get("video_id") or (evidence.get("video") or {}).get("video_id")
+            video = await self.store.get(current_tenant(), "video", video_id) if video_id else None
+            # Frozen evidence remains readable after media retention, but a still-retained
+            # source may impose stricter access than its older snapshot.
+            if video:
+                try:
+                    review_scope(principal, video, evidence)
+                except HTTPException:
+                    return False
+        return True
+
     async def load(self, case_id: str, principal: Principal) -> dict[str, Any]:
         record = await self.store.get(current_tenant(), "case", case_id)
         if record is None:
             raise HTTPException(404, "Case not found")
-        if not case_visible(principal, record):
+        if not await self.visible(principal, record):
             raise HTTPException(
                 403, "Your role or zone access does not permit all evidence in this case"
             )
@@ -162,6 +185,7 @@ class Casework:
             if not row:
                 raise HTTPException(404, "Alert not found")
             alert = deepcopy(dict(row["payload"]))
+            require_zone(principal, alert.get("zone_id"))
             need(principal, "alerts.read", alert.get("zone_id"))
             events: list[dict[str, Any]] = []
             event_ids = list(alert.get("event_ids") or [])[:500]
@@ -172,6 +196,7 @@ class Casework:
                 )
                 events = [deepcopy(dict(item["payload"])) for item in rows]
                 for event in events:
+                    require_zone(principal, event.get("zone_id"))
                     need(principal, "events.read", event.get("zone_id"))
             frame_evidence = (
                 await resolve_frames(self.pool, tenant, alert, events)
@@ -210,6 +235,9 @@ class Casework:
         analysis = await self.store.get(tenant, "analysis", str(body.analysis_id))
         if not video or not analysis or analysis.get("video_id") != body.video_id:
             raise HTTPException(404, "Video analysis not found")
+        from .review_access import review_scope
+
+        review_scope(principal, video, analysis)
         if not review_video_available(video):
             raise HTTPException(409, "Recorded footage is unavailable for a new case")
         if analysis.get("status") != "completed":
@@ -242,7 +270,14 @@ class Casework:
                 "event": deepcopy(video_event),
                 "video": {
                     key: video.get(key)
-                    for key in ("video_id", "title", "duration_s", "privacy", "source")
+                    for key in (
+                        "video_id",
+                        "title",
+                        "duration_s",
+                        "privacy",
+                        "source",
+                        "evidence_zone_ids",
+                    )
                 },
                 "analysis": {
                     key: analysis.get(key)
@@ -325,7 +360,14 @@ class Casework:
             "annotation_set": deepcopy(frozen),
             "video": {
                 key: video.get(key)
-                for key in ("video_id", "title", "duration_s", "privacy", "source")
+                for key in (
+                    "video_id",
+                    "title",
+                    "duration_s",
+                    "privacy",
+                    "source",
+                    "evidence_zone_ids",
+                )
             },
             "analysis": {
                 key: analysis.get(key)
@@ -632,6 +674,7 @@ class Casework:
         )
         if not row:
             raise HTTPException(404, "Mission not found")
+        require_zone(principal, row.get("zone_id"))
         need(principal, "mission.read", row.get("zone_id"))
         if body.mission_id in record.get("mission_ids", []):
             return record
@@ -662,7 +705,11 @@ class Casework:
         record["resolution_note"] = latest_resolution_note(record)
         tenant = current_tenant()
         missions = []
-        if record.get("mission_ids") and allowed(principal, "mission.read"):
+        if (
+            record.get("mission_ids")
+            and allowed(principal, "mission.read")
+            and zones_for(principal) is None
+        ):
             rows = await self.pool.fetch(
                 "SELECT mission_id, name, description, state, commander, zone_id, assignees, resources, created_ts, updated_ts, started_ts, completed_ts, payload FROM missions WHERE tenant_id = %s AND mission_id = ANY(%s)",
                 (tenant, record["mission_ids"]),
@@ -680,9 +727,15 @@ class Casework:
         # Decisions produced after case opening also belong to the exact trigger-event set.
         event_ids = list({identity for alert in alerts for identity in alert.get("event_ids", [])})
         if (decision_ids or event_ids) and allowed(principal, "decisions.read"):
+            zone_clause = "" if zones_for(principal) is None else " AND e.zone_id = ANY(%s)"
+            params = [tenant, decision_ids, event_ids]
+            if zones_for(principal) is not None:
+                params.append(list(zones_for(principal)))
             rows = await self.pool.fetch(
-                "SELECT payload FROM decisions WHERE tenant_id = %s AND (decision_id = ANY(%s) OR trigger_event = ANY(%s)) ORDER BY ts",
-                (tenant, decision_ids, event_ids),
+                "SELECT d.payload FROM decisions d LEFT JOIN events e ON e.tenant_id = d.tenant_id AND e.event_id = d.trigger_event WHERE d.tenant_id = %s AND (d.decision_id = ANY(%s) OR d.trigger_event = ANY(%s))"
+                + zone_clause
+                + " ORDER BY d.ts",
+                params,
             )
             decisions = [dict(row["payload"]) for row in rows]
         record["missions"] = jsonable_encoder(missions)
@@ -692,11 +745,13 @@ class Casework:
 
     async def visible_cases(self, principal: Principal) -> list[dict[str, Any]]:
         rows = await self.store.list(current_tenant(), "case", limit=SCAN_LIMIT)
-        return [row for row in rows if case_visible(principal, row)]
+        return [row for row in rows if await self.visible(principal, row)]
 
     async def search(self, query: SearchQuery, principal: Principal) -> dict[str, Any]:
         tenant = current_tenant()
         results: list[dict[str, Any]] = []
+        from .review_access import review_scope
+
         video_availability: dict[str, bool] = {}
         database_kinds = {
             "entity": (
@@ -723,7 +778,7 @@ class Casework:
                 clauses.append("zone_id = %s")
                 params.append(query.zone_id)
             if principal.zones and not principal.is_admin:
-                clauses.append("(zone_id IS NULL OR zone_id = ANY(%s))")
+                clauses.append("zone_id = ANY(%s)")
                 params.append(sorted(principal.zones))
             if query.source_id:
                 clauses.append(
@@ -740,7 +795,9 @@ class Casework:
                 params,
             )
             for row in rows:
-                if not allowed(principal, permission, row.get("zone_id")):
+                if not zone_visible(zones_for(principal), row.get("zone_id")) or not allowed(
+                    principal, permission, row.get("zone_id")
+                ):
                     continue
                 payload = row.get("payload") or {}
                 results.append(
@@ -765,6 +822,20 @@ class Casework:
             else:
                 records = await self.store.list(tenant, kind, limit=500)
             for record in records:
+                if kind == "site" and zones_for(principal) is not None:
+                    continue
+                if kind in {"video", "analysis"}:
+                    video = (
+                        record
+                        if kind == "video"
+                        else await self.store.get(tenant, "video", record.get("video_id", ""))
+                    )
+                    if not video:
+                        continue
+                    try:
+                        review_scope(principal, video, record)
+                    except HTTPException:
+                        continue
                 if kind == "video":
                     video_id = record.get("video_id", record.get("record_id"))
                     if not isinstance(video_id, str) or not video_id:
@@ -818,7 +889,11 @@ class Casework:
                 results.extend(
                     item
                     for item in candidates
-                    if principal.may_see_zone(item.get("zone_id")) and matches_result(item, query)
+                    if (
+                        kind in {"video", "analysis", "case"}
+                        or zone_visible(zones_for(principal), item.get("zone_id"))
+                    )
+                    and matches_result(item, query)
                 )
         results.sort(key=lambda item: str(item.get("ts") or ""), reverse=True)
         return {

@@ -11,6 +11,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from .media_coordination import claim, shared_lock
 from .review_models import AnalysisRequest, default_threshold, pin_profile, validate_artifact
 from .video_rules import ReviewConfiguration
 
@@ -20,17 +21,13 @@ MAX_PENDING = 50
 
 
 def video_processor_lock(store: Any) -> asyncio.Lock:
-    """One heavy video decoder/converter per local API, shared with evidence exports."""
-    if not hasattr(store, "_video_processor_lock"):
-        store._video_processor_lock = asyncio.Lock()
-    return store._video_processor_lock
+    """One heavy decoder per shared media store, across API worker processes."""
+    return shared_lock(store, "media-processor")
 
 
 def video_mutation_lock(store: Any, tenant: str, video_id: str) -> asyncio.Lock:
-    """Shared by reference writers and archive in the supported single API process."""
-    if not hasattr(store, "_video_mutation_locks"):
-        store._video_mutation_locks = {}
-    return store._video_mutation_locks.setdefault((tenant, video_id), asyncio.Lock())
+    """Shared by reference writers and archive across cooperating API workers."""
+    return shared_lock(store, "video-mutation", tenant, video_id)
 
 
 def timestamp() -> str:
@@ -56,10 +53,11 @@ class VideoJobQueue(ABC):
         raise NotImplementedError
 
     def init_queue(self) -> None:
-        self.queue_lock = asyncio.Lock()
+        self.queue_lock = shared_lock(self.store, "video-queue-mutation")
         self.known_tenants: set[str] = set()
         self.recovered_tenants: set[str] = set()
         self.recovery_lock = asyncio.Lock()
+        self.poller = None
 
     async def new_analysis(self, tenant, video, configuration, actor, job_id):
         analysis_id = "ana_" + uuid.uuid4().hex
@@ -84,16 +82,31 @@ class VideoJobQueue(ABC):
             expected_revision=0,
         )
 
-    async def jobs(self, tenant: str):
+    async def jobs(self, tenant: str, *, active_only=False):
+        if hasattr(self.store, "all_records"):
+            return await self.store.all_records(
+                tenant, "video_job", statuses=tuple(ACTIVE_JOB_STATES) if active_only else ()
+            )
         return await self.store.list(tenant, "video_job", limit=5000)
 
     async def ensure_recovered(self, tenant: str):
+        self.known_tenants.add(tenant)
+        async with claim(self.store, "video-worker") as acquired:
+            if acquired:
+                await self._recover(tenant)
+
+    async def _recover(self, tenant: str):
         if tenant in self.recovered_tenants:
             return
         async with self.recovery_lock:
             if tenant in self.recovered_tenants:
                 return
-            for job in await self.jobs(tenant):
+            jobs = (
+                await self.store.recovery_jobs(tenant)
+                if hasattr(self.store, "recovery_jobs")
+                else await self.jobs(tenant)
+            )
+            for job in jobs:
                 if job["status"] not in {"running", "cancelling", "interrupted", "queued"}:
                     video = await self.store.get(tenant, "video", job["video_id"])
                     if (
@@ -248,19 +261,30 @@ class VideoJobQueue(ABC):
             )
 
     async def enqueue(
-        self, tenant, video_id, actor, *, retry=None, profile_request: AnalysisRequest | None = None
+        self,
+        tenant,
+        video_id,
+        actor,
+        *,
+        retry=None,
+        profile_request: AnalysisRequest | None = None,
+        principal=None,
     ):
         await self.ensure_recovered(tenant)
         async with video_mutation_lock(self.store, tenant, video_id), self.queue_lock:
             video = await self.video(tenant, video_id)
+            if principal is not None:
+                from .review_access import review_scope
+
+                review_scope(
+                    principal,
+                    video,
+                    *([retry.get("configuration", {})] if retry else []),
+                    write=True,
+                )
             if video.get("archived_at"):
                 raise HTTPException(409, "Restore this archived video before analysis")
-            jobs = await self.jobs(tenant)
-            if len(jobs) >= 5000:
-                raise HTTPException(
-                    409,
-                    "The local job history limit is reached; administrator-managed history migration is required before adding jobs",
-                )
+            jobs = await self.jobs(tenant, active_only=True)
             active = [job for job in jobs if job["status"] in ACTIVE_JOB_STATES]
             existing = next((job for job in active if job["video_id"] == video_id), None)
             if existing:
@@ -296,6 +320,9 @@ class VideoJobQueue(ABC):
                     422, "Save a zone and at least one enabled rule before analysis"
                 )
             config = configuration.model_dump(mode="json")
+            config["evidence_zone_ids"] = list(
+                (retry["configuration"] if retry else video).get("evidence_zone_ids", [])
+            )
             try:
                 config["profile"] = (
                     await asyncio.to_thread(
@@ -356,12 +383,34 @@ class VideoJobQueue(ABC):
         return job and job["status"] == "cancelling"
 
     async def drain(self):
+        async with claim(self.store, "video-worker") as acquired:
+            if acquired:
+                await self._drain()
+
+    def start_polling(self):
+        if not isinstance(getattr(getattr(self.store, "pool", None), "_dsn", None), str):
+            return
+
+        async def poll():
+            while not self.closing:
+                try:
+                    for tenant in await self.store.list_tenants("video_job"):
+                        self.recovered_tenants.discard(tenant)
+                        await self.ensure_recovered(tenant)
+                    self.kick()
+                except Exception:
+                    logging.getLogger(__name__).exception("Media worker discovery will retry")
+                await asyncio.sleep(2)
+
+        self.poller = asyncio.create_task(poll(), name="video-worker-discovery")
+
+    async def _drain(self):
         while not self.closing:
             async with self.queue_lock:
                 pending = [
                     (tenant, job)
                     for tenant in sorted(self.known_tenants)
-                    for job in await self.jobs(tenant)
+                    for job in await self.jobs(tenant, active_only=True)
                     if job["status"] == "queued"
                 ]
                 if not pending:
@@ -382,7 +431,7 @@ class VideoJobQueue(ABC):
                 self.active_analysis = analysis["analysis_id"]
                 await self.run(tenant, video, analysis)
 
-    async def cancel(self, tenant, job_id, revision):
+    async def cancel(self, tenant, job_id, revision, *, principal=None):
         await self.ensure_recovered(tenant)
         initial = await self.store.get(tenant, "video_job", job_id)
         if not initial:
@@ -391,6 +440,15 @@ class VideoJobQueue(ABC):
             job = await self.store.get(tenant, "video_job", job_id)
             if not job:
                 raise HTTPException(404, "Job not found")
+            if principal is not None:
+                from .review_access import review_scope
+
+                review_scope(
+                    principal,
+                    await self.video(tenant, job["video_id"]),
+                    job.get("configuration", {}),
+                    write=True,
+                )
             if job["revision"] != revision:
                 raise HTTPException(409, "Job changed; reload before cancelling")
             if job["status"] not in ACTIVE_JOB_STATES:
@@ -427,7 +485,7 @@ class VideoJobQueue(ABC):
                     )
             return job
 
-    async def retry_job(self, tenant, job_id, revision, actor):
+    async def retry_job(self, tenant, job_id, revision, actor, *, principal=None):
         job = await self.store.get(tenant, "video_job", job_id)
         if not job:
             raise HTTPException(404, "Job not found")
@@ -435,5 +493,7 @@ class VideoJobQueue(ABC):
             raise HTTPException(409, "Job changed; reload before retrying")
         if job["status"] not in {"failed", "cancelled", "interrupted"}:
             raise HTTPException(409, "Only failed, cancelled or interrupted jobs can be retried")
-        analysis = await self.enqueue(tenant, job["video_id"], actor, retry=job)
+        analysis = await self.enqueue(
+            tenant, job["video_id"], actor, retry=job, principal=principal
+        )
         return await self.store.get(tenant, "video_job", analysis["job_id"])

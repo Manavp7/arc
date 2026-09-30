@@ -11,10 +11,12 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from sio_core import MessageContext, PgPool, SioService, get_llm, get_pg_pool
+from sio_core.guard import principal_of
+from sio_core.source_scope import zone_visible, zones_for
 from sio_schemas import (
     ApprovalState,
     BusMessage,
@@ -362,37 +364,45 @@ class DecisionService(SioService):
     def routes(self, app: FastAPI) -> None:
         @app.get("/decisions", tags=["decision"])
         async def decisions(
-            approval: str | None = None, limit: int = Query(20, ge=1, le=200)
+            request: Request, approval: str | None = None, limit: int = Query(20, ge=1, le=200)
         ) -> dict[str, Any]:
             """Recent recommendations with their options and rationale."""
             rows = await self.pool.fetch(
                 """
-                SELECT payload FROM decisions
-                 WHERE tenant_id = %s AND (%s::text IS NULL OR approval = %s)
-                 ORDER BY ts DESC LIMIT %s
+                SELECT d.payload FROM decisions d LEFT JOIN events e
+                    ON e.tenant_id=d.tenant_id AND e.event_id=d.trigger_event
+                 WHERE d.tenant_id = %s AND (%s::text IS NULL OR d.approval = %s)
+                   AND (%s::boolean OR e.zone_id = ANY(%s::text[]))
+                 ORDER BY d.ts DESC LIMIT %s
                 """,
-                (self.settings.tenant_id, approval, approval, limit),
+                (
+                    self.settings.tenant_id,
+                    approval,
+                    approval,
+                    zones_for(principal_of(request)) is None,
+                    list(zones_for(principal_of(request)) or ()),
+                    limit,
+                ),
             )
             return {"decisions": [row["payload"] for row in rows]}
 
         @app.get("/decisions/{decision_id}", tags=["decision"])
-        async def decision_detail(decision_id: str) -> dict[str, Any]:
-            row = await self.pool.fetchrow(
-                "SELECT payload FROM decisions WHERE tenant_id = %s AND decision_id = %s",
-                (self.settings.tenant_id, decision_id),
-            )
-            if row is None:
-                raise HTTPException(status_code=404, detail=f"unknown decision {decision_id!r}")
-            return dict(row["payload"])
+        async def decision_detail(decision_id: str, http_request: Request) -> dict[str, Any]:
+            decision = await self._load(decision_id)
+            await self._check_zone(decision, http_request)
+            return decision.to_wire()
 
         @app.post("/decisions/{decision_id}/approve", tags=["decision"])
-        async def approve(decision_id: str, request: ApprovalRequest) -> dict[str, Any]:
+        async def approve(
+            decision_id: str, request: ApprovalRequest, http_request: Request
+        ) -> dict[str, Any]:
             """Approve a recommendation. **The only path from proposal to action.**
 
             Approval records *which option* was chosen, because an operator may prefer the runner-up — and a
             gate that only accepted "yes" to the top option would make the ranked list decorative.
             """
             decision = await self._load(decision_id)
+            await self._check_zone(decision, http_request)
             if decision.approval != ApprovalState.PENDING:
                 # Not an error to re-approve, but not a silent success either: saying what the state already
                 # is beats pretending an action happened twice.
@@ -410,11 +420,11 @@ class DecisionService(SioService):
 
             decision.chosen = chosen
             decision.approval = ApprovalState.APPROVED
-            decision.approved_by = request.approved_by
+            decision.approved_by = principal_of(http_request).subject
             decision.approved_ts = utc_now()
             if request.note:
                 decision.explanation.notes.append(
-                    f"approved by {request.approved_by}: {request.note}"
+                    f"approved by {principal_of(http_request).subject}: {request.note}"
                 )
             if request.option_id and request.option_id != decision.options[0].option_id:
                 # Worth recording loudly: a human overriding the optimiser is the most interesting signal
@@ -434,7 +444,10 @@ class DecisionService(SioService):
             self._approved += 1
             await self._emit(decision, None)
             self.log.info(
-                "decision.approved", decision=decision_id, by=request.approved_by, option=chosen
+                "decision.approved",
+                decision=decision_id,
+                by=principal_of(http_request).subject,
+                option=chosen,
             )
             return {
                 "decision_id": decision_id,
@@ -447,18 +460,21 @@ class DecisionService(SioService):
             }
 
         @app.post("/decisions/{decision_id}/reject", tags=["decision"])
-        async def reject(decision_id: str, request: RejectionRequest) -> dict[str, Any]:
+        async def reject(
+            decision_id: str, request: RejectionRequest, http_request: Request
+        ) -> dict[str, Any]:
             """Reject a recommendation, with the reason kept.
 
             The reason is the valuable part. A rejected recommendation with no reason teaches nobody
             anything; with one, it is evidence about where the objective is wrong.
             """
             decision = await self._load(decision_id)
+            await self._check_zone(decision, http_request)
             decision.approval = ApprovalState.REJECTED
-            decision.approved_by = request.rejected_by
+            decision.approved_by = principal_of(http_request).subject
             decision.approved_ts = utc_now()
             decision.explanation.notes.append(
-                f"rejected by {request.rejected_by}"
+                f"rejected by {principal_of(http_request).subject}"
                 + (f": {request.reason}" if request.reason else " (no reason given)")
             )
             await self._persist(decision)
@@ -467,7 +483,7 @@ class DecisionService(SioService):
             self.log.info(
                 "decision.rejected",
                 decision=decision_id,
-                by=request.rejected_by,
+                by=principal_of(http_request).subject,
                 reason=request.reason,
             )
             return {"decision_id": decision_id, "approval": str(decision.approval)}
@@ -533,6 +549,21 @@ class DecisionService(SioService):
                 solve_dock_schedule, requests, [str(row["zone_id"]) for row in docks]
             )
             return result.describe()
+
+    async def _check_zone(self, decision: Decision, request: Request) -> None:
+        scope = zones_for(principal_of(request))
+        if scope is None:
+            return
+        source = (
+            await self.pool.fetchrow(
+                "SELECT zone_id FROM events WHERE tenant_id=%s AND event_id=%s",
+                (self.settings.tenant_id, decision.trigger_event),
+            )
+            if decision.trigger_event
+            else None
+        )
+        if not zone_visible(scope, (source or {}).get("zone_id")):
+            raise HTTPException(404, "Decision not found")
 
     async def _load(self, decision_id: str) -> Decision:
         row = await self.pool.fetchrow(

@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from sio_core import MessageContext, SioService, describe_error, get_blob, get_pg_pool
 from sio_core.guard import bearer_token, principal_of
+from sio_core.source_scope import require_zone, zones_for
 from sio_core.telemetry import set_trace_id
 from sio_core.tenancy import current_tenant
 from sio_schemas import (
@@ -231,15 +232,22 @@ class ApiService(SioService):
             return await self.health()
 
         @api.get("/stats")
-        async def stats() -> dict[str, Any]:
+        async def stats(request: Request) -> dict[str, Any]:
             tenant = current_tenant()
-            values = await read.stats(tenant_id=tenant)
-            values["by_type"] = await read.entity_counts(tenant_id=tenant)
-            values["stream"] = self.hub.stats()
+            values = await read.stats(
+                tenant_id=tenant, allowed_zones=zones_for(principal_of(request))
+            )
+            values["by_type"] = await read.entity_counts(
+                tenant_id=tenant, allowed_zones=zones_for(principal_of(request))
+            )
+            values["stream"] = self.hub.stats(
+                tenant_id=tenant, allowed_zones=zones_for(principal_of(request))
+            )
             return values
 
         @api.get("/entities", response_model=list[Entity])
         async def list_entities(
+            request: Request,
             type: str | None = None,
             zone_id: str | None = None,
             since: datetime | None = None,
@@ -250,8 +258,11 @@ class ApiService(SioService):
             limit: int = Query(default=200, le=1000),
             offset: int = 0,
         ) -> list[Entity]:
+            if zone_id is not None:
+                require_zone(principal_of(request), zone_id)
             return await read.entities(
                 tenant_id=current_tenant(),
+                allowed_zones=zones_for(principal_of(request)),
                 entity_type=type,
                 zone_id=zone_id,
                 since=since,
@@ -262,20 +273,30 @@ class ApiService(SioService):
             )
 
         @api.get("/entities/{entity_id}", response_model=Entity)
-        async def get_entity(entity_id: str) -> Entity:
-            entity = await read.entity(entity_id, tenant_id=current_tenant())
+        async def get_entity(entity_id: str, request: Request) -> Entity:
+            entity = await read.entity(
+                entity_id,
+                tenant_id=current_tenant(),
+                allowed_zones=zones_for(principal_of(request)),
+            )
             if entity is None:
                 raise HTTPException(status_code=404, detail=f"entity {entity_id!r} not found")
             return entity
 
         @api.get("/entities/{entity_id}/history")
         async def entity_history(
-            entity_id: str, limit: int = Query(default=200, le=2000)
+            entity_id: str, request: Request, limit: int = Query(default=200, ge=1, le=2000)
         ) -> list[dict[str, Any]]:
-            return await read.entity_history(entity_id, tenant_id=current_tenant(), limit=limit)
+            return await read.entity_history(
+                entity_id,
+                tenant_id=current_tenant(),
+                allowed_zones=zones_for(principal_of(request)),
+                limit=limit,
+            )
 
         @api.get("/events", response_model=list[Event])
         async def list_events(
+            request: Request,
             type: str | None = None,
             severity: str | None = None,
             entity_id: str | None = None,
@@ -284,8 +305,11 @@ class ApiService(SioService):
             limit: int = Query(default=100, le=1000),
             offset: int = 0,
         ) -> list[Event]:
+            if zone_id is not None:
+                require_zone(principal_of(request), zone_id)
             return await read.events(
                 tenant_id=current_tenant(),
+                allowed_zones=zones_for(principal_of(request)),
                 event_type=type,
                 severity=severity,
                 entity_id=entity_id,
@@ -304,20 +328,27 @@ class ApiService(SioService):
             if not row:
                 raise HTTPException(404, "Event not found")
             event = Event.model_validate(row["payload"])
-            if not principal_of(request).may_see_zone(event.zone_id):
-                raise HTTPException(403, "Your zone access does not permit this event")
+            require_zone(principal_of(request), event.zone_id)
             return event
 
         @api.get("/timeline", response_model=list[Event])
         async def timeline(
+            request: Request,
             from_: datetime | None = Query(default=None, alias="from"),
             to: datetime | None = None,
             limit: int = Query(default=500, le=5000),
         ) -> list[Event]:
-            return await read.timeline(tenant_id=current_tenant(), start=from_, end=to, limit=limit)
+            return await read.timeline(
+                tenant_id=current_tenant(),
+                allowed_zones=zones_for(principal_of(request)),
+                start=from_,
+                end=to,
+                limit=limit,
+            )
 
         @api.get("/world/at")
         async def world_at(
+            request: Request,
             ts: datetime,
             limit: int = Query(default=500, le=2000),
             presence_window_s: float = Query(default=DEFAULT_PRESENCE_WINDOW_S, gt=0, le=3600),
@@ -331,6 +362,7 @@ class ApiService(SioService):
             world = await self.timeline.world_at(
                 ts,
                 tenant_id=current_tenant(),
+                allowed_zones=zones_for(principal_of(request)),
                 limit=limit,
                 presence_window_s=presence_window_s,
             )
@@ -343,12 +375,15 @@ class ApiService(SioService):
             }
 
         @api.get("/timeline/bounds")
-        async def timeline_bounds() -> dict[str, Any]:
+        async def timeline_bounds(request: Request) -> dict[str, Any]:
             """How far back the record goes, so a scrubber knows what it may scrub over."""
-            return await self.timeline.bounds(tenant_id=current_tenant())
+            return await self.timeline.bounds(
+                tenant_id=current_tenant(), allowed_zones=zones_for(principal_of(request))
+            )
 
         @api.get("/timeline/density")
         async def timeline_density(
+            request: Request,
             from_: datetime | None = Query(default=None, alias="from"),
             to: datetime | None = None,
             buckets: int = Query(default=120, ge=8, le=1000),
@@ -362,11 +397,16 @@ class ApiService(SioService):
             end = to or utc_now()
             start = from_ or (end - timedelta(hours=1))
             return await self.timeline.density(
-                tenant_id=current_tenant(), start=start, end=end, buckets=buckets
+                tenant_id=current_tenant(),
+                allowed_zones=zones_for(principal_of(request)),
+                start=start,
+                end=end,
+                buckets=buckets,
             )
 
         @api.post("/replay")
         async def create_replay(
+            request: Request,
             from_: datetime | None = Query(default=None, alias="from"),
             to: datetime | None = None,
             speed: float = Query(default=20.0, gt=0, le=600),
@@ -384,7 +424,13 @@ class ApiService(SioService):
             if start >= end:
                 raise HTTPException(status_code=400, detail="'from' must precede 'to'")
             session = plan_replay(
-                tenant_id=current_tenant(), start=start, end=end, speed=speed, step_s=step_s
+                tenant_id=current_tenant(),
+                allowed_zones=zones_for(principal_of(request)),
+                subject=principal_of(request).subject,
+                start=start,
+                end=end,
+                speed=speed,
+                step_s=step_s,
             )
             self.replays.add(session)
             return {
@@ -395,7 +441,9 @@ class ApiService(SioService):
         @api.get("/replay/{replay_id}/stream")
         async def stream_replay(request: Request, replay_id: str) -> StreamingResponse:
             """Stream reconstructed frames over SSE at the planned rate."""
-            session = self.replays.get(replay_id, tenant_id=current_tenant())
+            session = self.replays.get(
+                replay_id, tenant_id=current_tenant(), subject=principal_of(request).subject
+            )
             if session is None:
                 raise HTTPException(
                     status_code=404, detail=f"unknown or expired replay {replay_id!r}"
@@ -405,7 +453,9 @@ class ApiService(SioService):
 
             async def frames() -> AsyncIterator[bytes]:
                 try:
-                    async for frame in self.timeline.replay_frames(session):
+                    async for frame in self.timeline.replay_frames(
+                        session, allowed_zones=zones_for(principal_of(request))
+                    ):
                         if expires_at and time.time() >= expires_at:
                             session.cancelled = True
                             return
@@ -424,15 +474,22 @@ class ApiService(SioService):
             )
 
         @api.delete("/replay/{replay_id}")
-        async def cancel_replay(replay_id: str) -> dict[str, Any]:
-            return {"cancelled": self.replays.cancel(replay_id, tenant_id=current_tenant())}
+        async def cancel_replay(replay_id: str, request: Request) -> dict[str, Any]:
+            return {
+                "cancelled": self.replays.cancel(
+                    replay_id, tenant_id=current_tenant(), subject=principal_of(request).subject
+                )
+            }
 
         @api.get("/replay")
-        async def list_replays() -> dict[str, Any]:
-            return self.replays.describe(tenant_id=current_tenant())
+        async def list_replays(request: Request) -> dict[str, Any]:
+            return self.replays.describe(
+                tenant_id=current_tenant(), subject=principal_of(request).subject
+            )
 
         @api.get("/spatial/nearby")
         async def nearby(
+            request: Request,
             lat: float,
             lon: float,
             radius_m: float = Query(default=500, gt=0, le=100_000),
@@ -442,6 +499,7 @@ class ApiService(SioService):
             """PRD M6: 'trucks within 500 m'. Distance is returned, not just membership."""
             found = await read.nearby(
                 tenant_id=current_tenant(),
+                allowed_zones=zones_for(principal_of(request)),
                 lat=lat,
                 lon=lon,
                 radius_m=radius_m,
@@ -453,18 +511,27 @@ class ApiService(SioService):
             ]
 
         @api.get("/spatial/cameras", tags=["spatial"])
-        async def cameras() -> list[dict[str, Any]]:
+        async def cameras(request: Request) -> list[dict[str, Any]]:
             """Cameras with their fields of view, for coverage and blind-spot views."""
-            return await read.cameras(tenant_id=current_tenant())
+            return await read.cameras(
+                tenant_id=current_tenant(), allowed_zones=zones_for(principal_of(request))
+            )
 
         @api.get("/spatial/zones")
-        async def zones() -> list[dict[str, Any]]:
-            return await read.zones(tenant_id=current_tenant())
+        async def zones(request: Request) -> list[dict[str, Any]]:
+            return await read.zones(
+                tenant_id=current_tenant(), allowed_zones=zones_for(principal_of(request))
+            )
 
         @api.get("/spatial/coverage/{zone_id}")
-        async def coverage(zone_id: str) -> list[dict[str, Any]]:
+        async def coverage(zone_id: str, request: Request) -> list[dict[str, Any]]:
             """PRD M6: 'cameras covering Gate B'."""
-            return await read.cameras_covering(tenant_id=current_tenant(), zone_id=zone_id)
+            require_zone(principal_of(request), zone_id)
+            return await read.cameras_covering(
+                tenant_id=current_tenant(),
+                allowed_zones=zones_for(principal_of(request)),
+                zone_id=zone_id,
+            )
 
         # --- one front door ----------------------------------------------------------------
         #
@@ -609,13 +676,29 @@ class ApiService(SioService):
             request: Request,
             status: str | None = None,
             alert_id: str | None = None,
+            cursor: str | None = None,
             limit: int = Query(default=100, ge=1, le=100),
         ) -> Any:
             return await _forward(
                 "alerts",
                 self.settings.alerts_port,
                 "/alert-deliveries",
-                params={"status": status, "alert_id": alert_id, "limit": limit},
+                params={"status": status, "alert_id": alert_id, "limit": limit, "cursor": cursor},
+                request=request,
+            )
+
+        @api.get("/alert-deliveries/{delivery_id}/history", tags=["alert-delivery"])
+        async def alert_delivery_history(
+            request: Request,
+            delivery_id: str,
+            cursor: str | None = None,
+            limit: int = Query(default=20, ge=1, le=100),
+        ) -> Any:
+            return await _forward(
+                "alerts",
+                self.settings.alerts_port,
+                f"/alert-deliveries/{delivery_id}/history",
+                params={"cursor": cursor, "limit": limit},
                 request=request,
             )
 
@@ -672,7 +755,7 @@ class ApiService(SioService):
                 self.settings.alerts_port,
                 f"/alerts/{alert_id}/ack",
                 method="POST",
-                body=body or {"ack_by": "operator"},
+                body=body or {},
                 request=request,
             )
 
@@ -685,7 +768,7 @@ class ApiService(SioService):
                 self.settings.alerts_port,
                 f"/alerts/{alert_id}/resolve",
                 method="POST",
-                body=body or {"resolved_by": "operator"},
+                body=body or {},
                 request=request,
             )
 
@@ -747,7 +830,7 @@ class ApiService(SioService):
                 self.settings.decision_port,
                 f"/decisions/{decision_id}/approve",
                 method="POST",
-                body=body or {"approved_by": "operator"},
+                body=body or {},
                 http_timeout_s=30.0,
                 request=request,
             )
@@ -761,7 +844,7 @@ class ApiService(SioService):
                 self.settings.decision_port,
                 f"/decisions/{decision_id}/reject",
                 method="POST",
-                body=body or {"rejected_by": "operator"},
+                body=body or {},
                 request=request,
             )
 
@@ -1075,8 +1158,34 @@ class ApiService(SioService):
             return {"markdown": text if isinstance(text, str) else str(text)}
 
         @api.get("/audit", tags=["governance"])
-        async def audit(request: Request, limit: int = Query(50, le=500)) -> Any:
-            """The audit trail. Forwarded from the agents service, which owns the writes."""
+        async def audit(
+            request: Request,
+            actor: str | None = None,
+            action: str | None = None,
+            allowed: bool | None = None,
+            since_minutes: int = Query(default=60, ge=1, le=10080),
+            limit: int = Query(default=100, ge=1, le=1000),
+        ) -> Any:
+            """Complete governance decisions, with authenticated actor/action/outcome filters."""
+            return await _forward(
+                "governance",
+                self.settings.governance_port,
+                "/audit",
+                params={
+                    "actor": actor,
+                    "action": action,
+                    "allowed": allowed,
+                    "since_minutes": since_minutes,
+                    "limit": limit,
+                },
+                request=request,
+            )
+
+        @api.get("/agents/audit", tags=["agents"])
+        async def agent_audit(
+            request: Request, limit: int = Query(default=50, ge=1, le=500)
+        ) -> Any:
+            """Agent cycle activity; distinct from the platform governance audit trail."""
             return await _forward(
                 "agents",
                 self.settings.agents_port,
@@ -1122,6 +1231,7 @@ class ApiService(SioService):
 
         @api.get("/measurements")
         async def measurements(
+            request: Request,
             metric: str,
             source_id: str | None = None,
             since: datetime | None = None,
@@ -1129,6 +1239,7 @@ class ApiService(SioService):
         ) -> list[dict[str, Any]]:
             return await read.measurements(
                 tenant_id=current_tenant(),
+                allowed_zones=zones_for(principal_of(request)),
                 metric=metric,
                 source_id=source_id,
                 since=since or utc_now() - timedelta(hours=1),
@@ -1146,7 +1257,9 @@ class ApiService(SioService):
             expires_at = principal_of(request).expires_at
 
             async def generator() -> Any:
-                with self.hub.subscribe(wanted, tenant_id=tenant_id) as subscriber:
+                with self.hub.subscribe(
+                    wanted, tenant_id=tenant_id, allowed_zones=zones_for(principal_of(request))
+                ) as subscriber:
                     async for frame in self.hub.events(subscriber, expires_at=expires_at):
                         yield frame
 
@@ -1168,7 +1281,11 @@ class ApiService(SioService):
             await socket.accept()
             wanted = [t.strip() for t in topics.split(",")] if topics else None
             try:
-                with self.hub.subscribe(wanted, tenant_id=current_tenant()) as subscriber:
+                with self.hub.subscribe(
+                    wanted,
+                    tenant_id=current_tenant(),
+                    allowed_zones=zones_for(principal_of(socket)),
+                ) as subscriber:
                     receiver = asyncio.create_task(socket.receive())
                     pending_message = None
                     try:
@@ -1203,13 +1320,15 @@ class ApiService(SioService):
                     await socket.close()
 
         @app.get("/stream/stats", tags=["stream"])
-        async def stream_stats() -> dict[str, Any]:
-            return self.hub.stats()
+        async def stream_stats(request: Request) -> dict[str, Any]:
+            return self.hub.stats(
+                tenant_id=current_tenant(), allowed_zones=zones_for(principal_of(request))
+            )
 
     # ---------------------------------------------------------------------- media
     def _register_media(self, app: FastAPI) -> None:
         @app.get("/media/{key:path}", tags=["media"])
-        async def media(key: str) -> Response:
+        async def media(key: str, request: Request) -> Response:
             """Serve stored media through the API rather than a presigned URL.
 
             Presigned URLs bypass authorisation, and Phase 5 puts every read behind the same policy
@@ -1226,6 +1345,16 @@ class ApiService(SioService):
                     raise HTTPException(status_code=404, detail="media not available")
             elif current_tenant() != self.settings.tenant_id:
                 raise HTTPException(status_code=404, detail="media not available")
+            scope = zones_for(principal_of(request))
+            if scope is not None:
+                sources = await self.pool.fetch(
+                    "SELECT s.zone_id FROM frames f LEFT JOIN sources s ON s.tenant_id=f.tenant_id AND s.source_id=f.source_id WHERE f.tenant_id=%s AND f.object_key=%s",
+                    (current_tenant(), candidate),
+                )
+                if not sources:
+                    raise HTTPException(404, "Indexed media source is unavailable")
+                for source in sources:
+                    require_zone(principal_of(request), source["zone_id"])
             try:
                 data = await self.blob.get(key)
             except Exception as exc:

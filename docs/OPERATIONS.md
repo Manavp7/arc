@@ -35,7 +35,7 @@ Real camera bytes first enter a private `pending/` namespace. The media API reje
 
 ## Recorded search and clocks
 
-Recorded visual search requires the installed pinned CLIP image/text/tokenizer assets and explicit consent for each original recording. Embeddings are local private files, not API responses or append-only document history. Revisions or original-media changes invalidate the index; the operator must review and rebuild it. Removing an index preserves the recording, while purge removes the containing media directory. The single-process indexer shares native video-processing capacity. See [RECORDED_SEARCH.md](RECORDED_SEARCH.md) for limits and installation.
+Recorded visual search requires the installed pinned CLIP image/text/tokenizer assets and explicit consent for each original recording. Embeddings are local private files, not API responses or append-only document history. Revisions or original-media changes invalidate the index; the operator must review and rebuild it. Removing an index preserves the recording, while purge removes the containing media directory. The indexer shares native video-processing capacity through PostgreSQL session claims across cooperating API workers on one shared media filesystem. See [RECORDED_SEARCH.md](RECORDED_SEARCH.md) for limits and installation.
 
 Camera timeline uses operator-declared capture time plus signed correction. Enter a timezone and document the measurement source. Blank capture time remains unknown, and blank uncertainty remains unknown rather than zero. Uncertainty is displayed as a qualification; it is not automatic clock synchronization or proof of overlap. Existing case snapshots and comparison offsets are unchanged. See [INVESTIGATION_NAVIGATION.md](INVESTIGATION_NAVIGATION.md#camera-timeline).
 
@@ -69,3 +69,9 @@ Backend WebSockets validate identity and origin, and streaming sessions expire w
 Inline workflows implement retries, step timeouts, compensation and recorded progress. They do not recover in-flight execution after process death. `SIO_WORKFLOW_RUNNER=temporal` is rejected until that runner is implemented.
 
 GPU profile entries documented as stubs refuse real work. Keep the CPU/default stack for operational verification. Additional connectors, autonomous agents and workflow authoring features should be expanded only after the existing acceptance scenario and relevant real-source tests pass.
+
+## Reliability and history upgrade
+
+Apply migrations 010–014 with `just db-init` before restarting upgraded services. These add alert input receipts, durable workflow checkpoints, history indexes, reviewed calibration publication/acknowledgement and transactional evidence-reference indexing. They preserve existing media, workbench rows and immutable history. See [workflow recovery](WORKFLOW_RECOVERY.md), [zone access](ZONE_ACCESS.md), [camera commissioning](CAMERA_COMMISSIONING.md) and [video review](VIDEO_REVIEW.md).
+
+Use session-preserving PostgreSQL connections for media/workflow claims; transaction-pooling proxies are incompatible with session advisory locks. Multiple API processes require the same private media filesystem and database. Heavy decoding remains intentionally serialized for bounded local memory use. Live deployment sizing and multi-host storage are separate deployment work.

@@ -12,6 +12,7 @@ export async function resolve(specifier, context, nextResolve) {
   }
 }
 export async function load(url, context, nextLoad) {
+  if (url.endsWith(".css")) return {format:"module",shortCircuit:true,source:"export default {};"};
   if (!/\.tsx?$/.test(new URL(url).pathname) || url.includes('/node_modules/')) return nextLoad(url, context);
   const source = await readFile(new URL(url), 'utf8');
   return { format: 'module', shortCircuit: true, source: ts.transpileModule(source, {

@@ -148,7 +148,7 @@ demo-reset:
 
 # ---------------------------------------------------------------------------- checks
 # The gate every phase must pass: lint, format, types, unit tests, web build.
-check: lint typecheck test web-check schemas-check
+check: lint typecheck test web-check schemas-check sdk-check
     @echo "✓ check passed"
 
 # The end-to-end rings. Needs a running platform — `just services && just dev` first.
@@ -219,16 +219,22 @@ schemas:
 schemas-check:
     {{uv}} python -m sio_schemas.export --check --out docs/schemas
 
-# Typecheck and build the web console.
+# Test, typecheck and build the web console.
 web-check:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -d web/node_modules ]; then
-        cd web && npx tsc --noEmit && npx vite build
+        cd web && npm test && npx tsc --noEmit && npx vite build
     else
         echo "web/node_modules missing — run: npm ci --prefix web" >&2
         exit 1
     fi
+
+# Verify the saved OpenAPI contract, generated SDK types and TypeScript client.
+sdk-check:
+    {{uv}} python sdk/ts/scripts/export_openapi.py --check
+    npm run generate:check --prefix sdk/ts
+    npm run typecheck --prefix sdk/ts
 
 # --------------------------------------------------------------------------- utility
 # Remove all local state: databases, logs, models, sample media. Destructive but complete.
@@ -241,7 +247,7 @@ clean:
 
 # Remove build artefacts and caches, keeping datastores intact.
 clean-build:
-    rm -rf .venv web/dist web/node_modules .pytest_cache .mypy_cache .ruff_cache
+    rm -rf .venv web/dist web/node_modules sdk/ts/node_modules sdk/ts/dist .pytest_cache .mypy_cache .ruff_cache
     find . -name __pycache__ -type d -prune -exec rm -rf {} +
 
 # Show the effective configuration, including which adapter is active per port.
@@ -277,9 +283,12 @@ grafana:
 #
 # `--no-deps` because sio-core and sio-schemas are already in this environment. The example deliberately has no
 # `[tool.uv.sources]` workspace refs: a plugin that only builds inside the repository it extends proves nothing
-# Regenerate the TypeScript SDK types from the running API, then typecheck
+# Export the API schema offline, regenerate TypeScript SDK types, then typecheck
 sdk-ts:
-    cd sdk/ts && npm install --silent && npm run generate && npm run typecheck
+    {{uv}} python sdk/ts/scripts/export_openapi.py
+    npm ci --ignore-scripts --no-audit --no-fund --prefix sdk/ts
+    npm run generate --prefix sdk/ts
+    npm run typecheck --prefix sdk/ts
 
 # Run the TypeScript SDK quickstart against a running platform
 sdk-ts-demo:

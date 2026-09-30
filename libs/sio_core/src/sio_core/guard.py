@@ -44,6 +44,7 @@ from .authn import (
 from .authz import Decision, authorise
 from .config import Settings, get_settings
 from .errors import PolicyDenied
+from .source_scope import unsupported_zone_surface, zones_for
 from .telemetry import get_logger, set_tenant_id
 
 log = get_logger("sio.guard")
@@ -284,6 +285,10 @@ class GovernanceMiddleware(BaseHTTPMiddleware):
             set_tenant_id(principal.tenant_id)
 
             action = action_for(request.method, path)
+            # HTTP MCP executes a configured service-identity tool belt. Only a
+            # deployment administrator may use that delegated authority.
+            if self.service == "mcp" and (path == "/mcp" or path.startswith("/mcp/")):
+                action = "admin.read" if request.method in _READ_METHODS else "admin.write"
             decision = authorise(
                 principal,
                 action,
@@ -298,6 +303,20 @@ class GovernanceMiddleware(BaseHTTPMiddleware):
                     else principal.tenant_id,
                 },
             )
+            if (
+                decision.allowed
+                and zones_for(principal) is not None
+                and unsupported_zone_surface(self.service, path)
+            ):
+                decision = Decision(
+                    allowed=False,
+                    action=action,
+                    resource=path,
+                    reason="This endpoint does not yet support restricted zone access; use a source-scoped view or an authorized unrestricted account",
+                    rule="source_scope.required",
+                    principal=principal.subject,
+                    tenant=principal.tenant_id,
+                )
             if self.audit is not None:
                 await self.audit(decision, request)
             if not decision.allowed:

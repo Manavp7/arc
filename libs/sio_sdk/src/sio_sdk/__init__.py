@@ -19,12 +19,14 @@ from .client import (
     StreamMessage,
     SyncSioClient,
 )
+from .investigations import InvestigationClient
 
 __version__ = "0.1.0"
 
 __all__ = [
     "DEFAULT_URL",
     "CopilotAnswer",
+    "InvestigationClient",
     "Session",
     "SioApiError",
     "SioClient",

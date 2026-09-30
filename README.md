@@ -25,11 +25,13 @@ The following limits are deliberate and visible:
 - The default yard is **simulated**. A connected real source is labelled separately.
 - The default copilot is a **scripted router**, and default hash embeddings do **not** provide semantic similarity. Configure and install real models explicitly.
 - Workflow actions default to **dry run**. No physical gate/drone command adapter is included. Turning dry run off does not create one.
-- Workflow execution is **inline**. Temporal is not implemented; selecting it fails configuration instead of silently using a different runner.
+- Workflow execution uses the inline activity engine with [PostgreSQL checkpoints and restart recovery](docs/WORKFLOW_RECOVERY.md). Completed steps are skipped; uncertain effects require reconciliation. Temporal remains unsupported.
 - Kafka, Qdrant, DeepStream, TimesFM, and Cosmos adapters are stubs. The GPU profile is an extension map, not a working GPU deployment.
-- Domain services serve one deployment tenant and reject requests from other tenants. API streams, history, and media are tenant-scoped. A general shared multi-tenant production deployment requires further work.
+- Domain services serve one deployment tenant and reject requests from other tenants. API streams, history, and media enforce tenant and supported source-zone restrictions. [Whole-site surfaces without safe zone filtering](docs/ZONE_ACCESS.md) reject zone-restricted accounts. A general shared multi-tenant production deployment requires further work.
 - Source configuration changes, including enable/disable, are saved before activation. Reviewed activation applies a selected source without restarting unrelated connectors; ingestion restart also applies saved configuration. The built-in simulator remains restart-managed. Connection tests read a sample without publishing it; activation deliberately checks fresh published data.
 - Real camera hardware, live identity-provider deployments, production load, and physical effects require deployment-specific validation.
+
+[Reviewed calibration publishing](docs/CAMERA_COMMISSIONING.md) applies a validated saved pose with source/setup revision checks, fusion acknowledgement and rollback. Retained analyses, camera timelines, processing history and delivery attempts have paginated browsing. Cooperating API processes share database-backed processing/lifecycle claims and require the same private media filesystem. Apply migrations 010–014 before starting the upgraded services.
 
 ## Local setup
 

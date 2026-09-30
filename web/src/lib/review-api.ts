@@ -1,15 +1,17 @@
 import { api, ApiError } from "./api";
 import * as session from "./session";
 import type { AnalysisOptions, CaseNote, CaseRecord, ReviewMetrics, ReviewRule, ReviewSearchResult, ReviewVideo, ReviewZone, RulePreview, SavedSearch, SearchFilters, VideoAnalysis, VideoLibrary } from "./review-types";
+export interface RetainedAnalysis {analysis_id:string; status:string; created_at?:string; model?:{name?:string;mode?:string}; zones?:ReviewZone[]}
 const pathFor = (id: string) => `/review/videos/${encodeURIComponent(id)}`;
 function query(values: Record<string, unknown>): string { const params = new URLSearchParams(); for (const [key, value] of Object.entries(values)) if (value !== "" && value != null) params.set(key, String(value)); return params.toString() ? `?${params}` : ""; }
 export const reviewApi = {
   videos: (signal?: AbortSignal) => api.request<VideoLibrary>("/review/videos", { signal }),
   video: (id: string, signal?: AbortSignal) => api.request<ReviewVideo>(pathFor(id), { signal }),
-  upload: (file: File, signal?: AbortSignal) => api.request<ReviewVideo>("/review/videos", { method: "POST", body: file, signal, headers: { "Content-Type": "video/mp4", "X-Filename": encodeURIComponent(file.name) } }),
+  upload: (file: File, signal?: AbortSignal, accessZoneId?: string) => api.request<ReviewVideo>(`/review/videos${query({access_zone_id:accessZoneId})}`, { method: "POST", body: file, signal, headers: { "Content-Type": "video/mp4", "X-Filename": encodeURIComponent(file.name) } }),
   configure: (id: string, revision: number, zones: ReviewZone[], rules: ReviewRule[]) => api.request<ReviewVideo>(`${pathFor(id)}/configuration`, { method: "PUT", body: JSON.stringify({ revision, zones, rules }) }),
   analyze: (id: string, options?: AnalysisOptions) => api.request<VideoAnalysis>(`${pathFor(id)}/analyze`, { method: "POST", body: JSON.stringify(options ?? {}) }),
   analysis: (id: string, signal?: AbortSignal, analysisId?: string) => api.request<VideoAnalysis>(`${pathFor(id)}/analysis${query({ analysis_id: analysisId })}`, { signal }),
+  analyses: (id: string, cursor?: string, signal?: AbortSignal) => api.request<{analyses:RetainedAnalysis[];next_cursor:string|null}>(`${pathFor(id)}/analyses${query({limit:50,cursor})}`,{signal}),
   preview: (id: string, zones: ReviewZone[], rules: ReviewRule[]) => api.request<RulePreview>(`${pathFor(id)}/preview`, { method: "POST", body: JSON.stringify({ zones, rules }) }),
   cases: (signal?: AbortSignal) => api.request<{ cases: CaseRecord[]; count: number }>("/cases", { signal }),
   case: (id: string, signal?: AbortSignal) => api.request<CaseRecord>(`/cases/${encodeURIComponent(id)}`, { signal }),

@@ -5,12 +5,14 @@ alert and `SIO_ALERT_WEBHOOK_URL` is set. The alert mutation and outbox insertio
 commit in one PostgreSQL statement. Escalation uses an atomic prior-state predicate,
 so concurrent manual and timer escalation cannot both queue the same transition.
 Apply the additive
-`infra/postgres/009_alert_deliveries.sql` migration through the normal `just db-init`
+`infra/postgres/009_alert_deliveries.sql` and `010_alert_consistency.sql` migrations through the normal `just db-init`
 workflow before running this version of the alerts service.
 
 The console's **Alert deliveries** view shows recent delivery status, attempts,
-next retry, sanitized failures, and the latest 20 history entries. The list shows
-up to 100 recent deliveries and supports a status filter. Endpoint labels omit
+next retry, sanitized failures, and paginated attempt history. The first list page
+contains up to 100 deliveries and supports status and alert filters. Opaque
+`next_cursor` values load older deliveries without offset gaps. Each delivery
+includes its first 20 attempts and `history_next_cursor` to continue its history. Endpoint labels omit
 usernames, passwords, paths and query strings. Full destination URLs and immutable
 payload snapshots remain private database fields and require database protection.
 
@@ -48,6 +50,10 @@ API gateway endpoints:
 - `GET /api/alert-deliveries?status=failed&alert_id=...&limit=100` lists delivery
   history for the authenticated deployment tenant and permitted snapshot zones. Status and alert filters are
   optional; gateway maximum limit is 100. Permission: `integration.read`.
+- `GET /api/alert-deliveries/{delivery_id}/history?cursor=...&limit=20` returns
+  `{history,next_cursor}` for older attempts. Cursors are tied to tenant, permitted
+  zones and list filters; reset pagination when filters change. Restricted tokens
+  cannot see unknown-zone deliveries. Administrators retain unrestricted access.
 - `POST /api/alert-deliveries/{delivery_id}/retry` accepts
   `{"reason":"Receiver service repaired"}` (3–240 characters). Permission:
   `integration.write`. The API preserves the caller's identity when forwarding
@@ -64,3 +70,27 @@ concurrent claims, recovery, immutable snapshots, bounded retry and tenant
 isolation). Integration tests create disposable schemas and use `MockTransport`
 for every outbound HTTP request. They do not demonstrate receipt at a real
 external endpoint or production throughput.
+
+## Alert mutation consistency
+
+Every alert writer (event folding, decision linking, acknowledgement, resolution,
+manual escalation and timer rescoring) takes the same tenant-scoped PostgreSQL
+transaction lock. Reads and writes use one task-local connection; concurrent
+HTTP requests cannot overwrite a timer/event update from an earlier snapshot.
+Network publication happens after commit. This intentionally serializes alert
+mutations per tenant; load acceptance is separate from correctness verification.
+
+Migration 010 records consumed event IDs atomically with the alert mutation. A
+restart/replay republishes the authoritative alert state without increasing the
+occurrence count or queuing another notification. Existing retained event IDs
+are backfilled during migration; IDs no longer retained in historic alert rows
+cannot be reconstructed. A failed transaction rolls back both receipt and alert.
+
+Acknowledgement and resolution names come from the verified caller. Legacy
+`ack_by`/`resolved_by` body fields are accepted for client compatibility but do
+not determine actor identity. A separate assignee can still be selected. Direct
+alert read/action endpoints enforce the same zone boundary as the gateway.
+
+Focused regression evidence is in `test_alert_consistency.py` in the unit and
+integration suites, including concurrent consumers, restart replay, rollback,
+resolution races, actor forgery attempts and timestamp-tied pagination.

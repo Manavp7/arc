@@ -2,7 +2,7 @@ import { api } from "./api";
 
 export type DeliveryStatus = "pending" | "sending" | "delivered" | "failed" | "blocked";
 export interface DeliveryHistory {
-  kind: string; at: string; attempt: number; status_code: number | null;
+  history_id?: number; kind: string; at: string; attempt: number; status_code: number | null;
   error: string | null; actor: string | null; reason: string | null;
 }
 export interface AlertDelivery {
@@ -10,16 +10,19 @@ export interface AlertDelivery {
   status: DeliveryStatus; attempts: number; cycle_attempts: number; max_attempts: number;
   created_at: string; updated_at: string; next_attempt_at: string | null;
   delivered_at: string | null; status_code: number | null; error: string | null;
-  destination: string; can_retry: boolean; history: DeliveryHistory[];
+  destination: string; can_retry: boolean; history: DeliveryHistory[]; history_next_cursor?: string | null;
 }
 export interface AlertDeliveryList {
   configured: boolean; destination: string | null; max_attempts: number;
-  deliveries: AlertDelivery[];
+  deliveries: AlertDelivery[]; next_cursor?: string | null;
 }
 
 export const alertDeliveryApi = {
-  list: (status: DeliveryStatus | "", signal?: AbortSignal) => api.request<AlertDeliveryList>(
-    `/alert-deliveries?limit=100${status ? `&status=${encodeURIComponent(status)}` : ""}`, { signal },
+  list: (status: DeliveryStatus | "", signal?: AbortSignal, page: {cursor?: string; alert_id?: string} = {}) => api.request<AlertDeliveryList>(
+    `/alert-deliveries?${new URLSearchParams({limit: "100", ...(status ? {status} : {}), ...(page.cursor ? {cursor:page.cursor} : {}), ...(page.alert_id ? {alert_id:page.alert_id} : {})})}`, { signal },
+  ),
+  history: (id: string, cursor?: string, signal?: AbortSignal) => api.request<{history: DeliveryHistory[]; next_cursor: string | null}>(
+    `/alert-deliveries/${encodeURIComponent(id)}/history?${new URLSearchParams({limit:"20", ...(cursor ? {cursor} : {})})}`, {signal},
   ),
   retry: (id: string, reason: string, signal?: AbortSignal) => api.request<AlertDelivery>(
     `/alert-deliveries/${encodeURIComponent(id)}/retry`,
@@ -36,4 +39,9 @@ export function deliveryTime(value: string | null): string {
   if (!value) return "—";
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date.toLocaleString() : "Time unavailable";
+}
+
+export function mergeDeliveryHistory(current: DeliveryHistory[], older: DeliveryHistory[]): DeliveryHistory[] {
+  const seen = new Set<string>();
+  return [...current, ...older].filter(item => {const key = item.history_id != null ? String(item.history_id) : JSON.stringify([item.at,item.kind,item.attempt,item.actor,item.reason]); if (seen.has(key)) return false; seen.add(key); return true;});
 }

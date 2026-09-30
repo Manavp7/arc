@@ -41,7 +41,8 @@ replace runtime contract validation.
 
 ```bash
 npx tsx examples/quickstart.mts      # against a running platform
-npm run generate                    # refresh OpenAPI declarations
+npm run generate                    # from checked openapi.json; requires locked dev dependencies
+npm run generate:check               # fail on declaration drift without rewriting
 npm run typecheck
 cd ../../web && npm test            # shared transport, auth and replay regression tests
 ```
@@ -51,3 +52,10 @@ with bounded backoff and skips malformed JSON frames. The browser additionally r
 connection and renews long-running streams before token expiry.
 
 This package is consumed from the workspace and is not published to npm.
+
+
+`client.investigations` covers recorded review, retained analyses, job history, scoped uploads,
+cases, recorded search, shared-clock timelines, source activation, alert-delivery history and
+camera calibration. Pagination accepts opaque cursors; retain the original filters between
+pages. Apply/retry methods are explicit writes, with authenticated actors and server tickets.
+See `../../docs/SDK.md` for contracts and the offline OpenAPI export workflow.

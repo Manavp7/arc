@@ -30,6 +30,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from sio_core import PgPool, get_logger
+from sio_core.source_scope import ZoneScope, state_zone_sql, zone_sql
 from sio_schemas import Entity, EntityState, Event, Geo, Velocity, new_id, utc_now
 
 log = get_logger("sio.api.timeline")
@@ -62,6 +63,8 @@ class ReplaySession:
     speed: float
     step_s: float
     frames: int
+    subject: str = ""
+    allowed_zones: ZoneScope = None
     created_at: datetime = field(default_factory=utc_now)
     emitted: int = 0
     cancelled: bool = False
@@ -121,6 +124,8 @@ class ReplaySession:
 def plan_replay(
     *,
     tenant_id: str,
+    allowed_zones: ZoneScope = None,
+    subject: str = "",
     start: datetime,
     end: datetime,
     speed: float = 10.0,
@@ -143,6 +148,8 @@ def plan_replay(
     return ReplaySession(
         replay_id=new_id("rpl"),
         tenant_id=tenant_id,
+        allowed_zones=allowed_zones,
+        subject=subject,
         start=start,
         end=end,
         speed=max(0.1, min(600.0, speed)),
@@ -162,6 +169,7 @@ class TimelineReader:
         self,
         *,
         tenant_id: str,
+        allowed_zones: ZoneScope = None,
         start: datetime,
         end: datetime,
         buckets: int = 120,
@@ -175,18 +183,19 @@ class TimelineReader:
         """
         window_s = max(1.0, (end - start).total_seconds())
         bucket_s = window_s / max(1, buckets)
+        scoped, params = zone_sql(allowed_zones)
         rows = await self.pool.fetch(
-            """
+            f"""
             SELECT floor(extract(epoch from (ts - %s)) / %s)::int AS bucket,
                    count(*) AS total,
                    count(*) FILTER (WHERE severity IN ('high', 'critical')) AS severe,
                    min(ts) AS first_ts
               FROM events
-             WHERE tenant_id = %s AND ts >= %s AND ts <= %s
+             WHERE tenant_id = %s AND ts >= %s AND ts <= %s {scoped}
              GROUP BY bucket
              ORDER BY bucket
             """,
-            (start, bucket_s, tenant_id, start, end),
+            (start, bucket_s, tenant_id, start, end, *params),
         )
         counts = [0] * (buckets + 1)
         severe = [0] * (buckets + 1)
@@ -204,22 +213,23 @@ class TimelineReader:
             "total": sum(counts),
         }
 
-    async def bounds(self, *, tenant_id: str) -> dict[str, Any]:
+    async def bounds(self, *, tenant_id: str, allowed_zones: ZoneScope = None) -> dict[str, Any]:
         """The extent of recorded history, so a scrubber knows what it may scrub over.
 
         Includes both the event record and the state record, because they can start at different times —
         a fresh deployment has states long before its first interesting event.
         """
-        row = await self.pool.fetchrow(
-            """
-            SELECT
-              (SELECT min(ts) FROM events WHERE tenant_id = %s) AS first_event,
-              (SELECT max(ts) FROM events WHERE tenant_id = %s) AS last_event,
-              (SELECT min(ts) FROM entity_states WHERE tenant_id = %s) AS first_state,
-              (SELECT max(ts) FROM entity_states WHERE tenant_id = %s) AS last_state
-            """,
-            (tenant_id, tenant_id, tenant_id, tenant_id),
-        )
+        selections, params = [], []
+        for table, suffix in (("events", "event"), ("entity_states", "state")):
+            scoped, values = zone_sql(
+                allowed_zones, state_zone_sql() if table == "entity_states" else "zone_id"
+            )
+            for aggregate, prefix in (("min", "first"), ("max", "last")):
+                selections.append(
+                    f"(SELECT {aggregate}(ts) FROM {table} WHERE tenant_id = %s{scoped}) AS {prefix}_{suffix}"
+                )
+                params.extend([tenant_id, *values])
+        row = await self.pool.fetchrow("SELECT " + ", ".join(selections), params)
         record = dict(row or {})
         candidates_start = [
             value for key, value in record.items() if key.startswith("first") and value
@@ -244,6 +254,7 @@ class TimelineReader:
         ts: datetime,
         *,
         tenant_id: str,
+        allowed_zones: ZoneScope = None,
         limit: int = 800,
         presence_window_s: float = DEFAULT_PRESENCE_WINDOW_S,
     ) -> dict[str, Any]:
@@ -257,18 +268,24 @@ class TimelineReader:
         rows carry no zone: the spatial service owns membership and records it as an interval, and the
         interval covering ``ts`` is the answer.
         """
+        scope_expression = """COALESCE((SELECT r.to_id FROM relationships r
+            WHERE r.tenant_id=e.tenant_id AND r.from_id=e.entity_id AND r.type='entered'
+              AND r.ts_valid_from <= %s AND (r.ts_valid_to IS NULL OR r.ts_valid_to >= %s)
+            ORDER BY r.ts_valid_from DESC, r.to_id LIMIT 1), CASE WHEN e.is_static THEN e.zone_id ELSE s.zone_id END)"""
+        scoped, scope_values = zone_sql(allowed_zones, scope_expression)
+        scope_params = [ts, ts, *scope_values] if allowed_zones is not None else []
         rows = await self.pool.fetch(
-            """
+            f"""
             WITH state_at AS (
                 SELECT DISTINCT ON (entity_id)
                        entity_id, ts,
                        ST_Y(geom::geometry) AS lat, ST_X(geom::geometry) AS lon,
-                       speed_mps, heading_deg, confidence, payload
+                       speed_mps, heading_deg, confidence, payload, zone_id
                   FROM entity_states
                  WHERE tenant_id = %s AND ts <= %s AND ts >= %s
                  ORDER BY entity_id, ts DESC
             )
-            SELECT e.payload, e.is_static,
+            SELECT e.payload, e.is_static, e.zone_id AS current_zone_id, s.zone_id AS history_zone_id,
                    s.ts AS state_ts, s.lat, s.lon, s.speed_mps, s.heading_deg, s.confidence
               FROM entities e
               LEFT JOIN state_at s ON s.entity_id = e.entity_id
@@ -276,7 +293,7 @@ class TimelineReader:
                AND e.first_seen <= %s
                -- A static fixture has no state history and is always present; a mover must have been
                -- reported inside the presence window, or it is a ghost at its final position.
-               AND (e.is_static OR s.entity_id IS NOT NULL)
+               AND (e.is_static OR s.entity_id IS NOT NULL) {scoped}
              ORDER BY e.is_static ASC, e.last_seen DESC
              LIMIT %s
             """,
@@ -286,6 +303,7 @@ class TimelineReader:
                 ts - timedelta(seconds=presence_window_s),
                 tenant_id,
                 ts,
+                *scope_params,
                 limit,
             ),
         )
@@ -296,7 +314,9 @@ class TimelineReader:
         movers = 0
         for row in rows:
             entity = Entity.model_validate(row["payload"])
-            zone_id = zones_by_entity.get(entity.entity_id)
+            zone_id = zones_by_entity.get(entity.entity_id) or (
+                row.get("current_zone_id") if entity.is_static else row.get("history_zone_id")
+            )
             if row["lat"] is not None and row["lon"] is not None:
                 movers += 1
                 speed = float(row["speed_mps"] or 0.0)
@@ -338,12 +358,14 @@ class TimelineReader:
                 "total": len(entities),
                 "movers": movers,
                 "static": len(entities) - movers,
-                "in_zones": len(zones_by_entity),
+                "in_zones": sum(bool(entity.state and entity.state.zone_id) for entity in entities),
             },
             "presence_window_s": presence_window_s,
         }
 
-    async def memberships_at(self, ts: datetime, *, tenant_id: str) -> dict[str, str]:
+    async def memberships_at(
+        self, ts: datetime, *, tenant_id: str, allowed_zones: ZoneScope = None
+    ) -> dict[str, str]:
         """Which zone each entity was in at ``ts``, from the bitemporal visit intervals.
 
         The innermost zone wins where visits nest — a truck inside a dock is also inside the yard and the
@@ -358,17 +380,23 @@ class TimelineReader:
              WHERE tenant_id = %s AND type = 'entered'
                AND ts_valid_from <= %s
                AND (ts_valid_to IS NULL OR ts_valid_to >= %s)
-             ORDER BY ts_valid_from ASC
+             ORDER BY ts_valid_from ASC, to_id DESC
             """,
             (tenant_id, ts, ts),
         )
         # Later rows overwrite earlier ones, so the last (latest-starting, hence innermost) visit wins.
-        return {str(row["from_id"]): str(row["to_id"]) for row in rows}
+        memberships = {str(row["from_id"]): str(row["to_id"]) for row in rows}
+        return {
+            entity: zone
+            for entity, zone in memberships.items()
+            if allowed_zones is None or zone in allowed_zones
+        }
 
     async def events_between(
         self,
         *,
         tenant_id: str,
+        allowed_zones: ZoneScope = None,
         start: datetime,
         end: datetime,
         limit: int = 500,
@@ -377,6 +405,10 @@ class TimelineReader:
         """Events in a window, oldest first — the order a replay consumes them."""
         clauses = ["tenant_id = %s", "ts >= %s", "ts <= %s"]
         params: list[Any] = [tenant_id, start, end]
+        scoped, scope_params = zone_sql(allowed_zones)
+        if scoped:
+            clauses.append(scoped.removeprefix(" AND "))
+            params.extend(scope_params)
         if min_severity:
             ranking = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
             wanted = [
@@ -393,7 +425,11 @@ class TimelineReader:
 
     # ------------------------------------------------------------------- replay
     async def replay_frames(
-        self, session: ReplaySession, *, presence_window_s: float = DEFAULT_PRESENCE_WINDOW_S
+        self,
+        session: ReplaySession,
+        *,
+        allowed_zones: ZoneScope = None,
+        presence_window_s: float = DEFAULT_PRESENCE_WINDOW_S,
     ) -> AsyncIterator[dict[str, Any]]:
         """Yield reconstructed frames on a wall-clock schedule.
 
@@ -406,6 +442,12 @@ class TimelineReader:
         work took, and a replay that claims 10x while delivering 6x is lying about the one thing it is
         for.
         """
+        if session.allowed_zones is not None:
+            allowed_zones = (
+                session.allowed_zones
+                if allowed_zones is None
+                else tuple(sorted(set(allowed_zones) & set(session.allowed_zones)))
+            )
         loop = asyncio.get_running_loop()
         started = loop.time()
         for index in range(session.frames):
@@ -415,10 +457,12 @@ class TimelineReader:
             world = await self.world_at(
                 frame_ts,
                 tenant_id=session.tenant_id,
+                allowed_zones=allowed_zones,
                 presence_window_s=presence_window_s,
             )
             events = await self.events_between(
                 tenant_id=session.tenant_id,
+                allowed_zones=allowed_zones,
                 start=frame_ts,
                 end=frame_ts + timedelta(seconds=session.step_s),
                 limit=40,
@@ -470,17 +514,23 @@ class ReplayRegistry:
         self._sessions[session.replay_id] = session
         return session
 
-    def get(self, replay_id: str, *, tenant_id: str | None = None) -> ReplaySession | None:
+    def get(
+        self, replay_id: str, *, tenant_id: str | None = None, subject: str | None = None
+    ) -> ReplaySession | None:
         self._evict()
         session = self._sessions.get(replay_id)
         return (
             session
-            if session is not None and (tenant_id is None or session.tenant_id == tenant_id)
+            if session is not None
+            and (tenant_id is None or session.tenant_id == tenant_id)
+            and (subject is None or session.subject == subject)
             else None
         )
 
-    def cancel(self, replay_id: str, *, tenant_id: str | None = None) -> bool:
-        session = self.get(replay_id, tenant_id=tenant_id)
+    def cancel(
+        self, replay_id: str, *, tenant_id: str | None = None, subject: str | None = None
+    ) -> bool:
+        session = self.get(replay_id, tenant_id=tenant_id, subject=subject)
         if session is None:
             return False
         self._sessions.pop(replay_id)
@@ -494,10 +544,15 @@ class ReplayRegistry:
                 session.cancelled = True
                 del self._sessions[replay_id]
 
-    def describe(self, *, tenant_id: str | None = None) -> dict[str, Any]:
+    def describe(
+        self, *, tenant_id: str | None = None, subject: str | None = None
+    ) -> dict[str, Any]:
         self._evict()
         sessions = [
-            s for s in self._sessions.values() if tenant_id is None or s.tenant_id == tenant_id
+            s
+            for s in self._sessions.values()
+            if (tenant_id is None or s.tenant_id == tenant_id)
+            and (subject is None or s.subject == subject)
         ]
         return {
             "sessions": len(sessions),

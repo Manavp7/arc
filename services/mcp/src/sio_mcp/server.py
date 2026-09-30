@@ -166,10 +166,14 @@ def http_app(belt: ToolBelt, *, stateless: bool = True) -> Any:
     """
     import contextlib
 
+    from fastapi import FastAPI
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-    from starlette.applications import Starlette
     from starlette.routing import Mount, Route
     from starlette.types import Receive, Scope, Send
+
+    from sio_core import get_bus
+    from sio_core.guard import install_governance
+    from sio_schemas import AuditRecord, BusMessage, Topic
 
     server = build_server(belt)
     manager = StreamableHTTPSessionManager(app=server, event_store=None, stateless=stateless)
@@ -178,7 +182,7 @@ def http_app(belt: ToolBelt, *, stateless: bool = True) -> Any:
         await manager.handle_request(scope, receive, send)
 
     @contextlib.asynccontextmanager
-    async def lifespan(app: Starlette):  # type: ignore[no-untyped-def]
+    async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         # The session manager must be running before a request arrives. Mounting the app without this is
         # the documented trap: the route exists, and every call fails.
         async with manager.run():
@@ -214,10 +218,40 @@ def http_app(belt: ToolBelt, *, stateless: bool = True) -> Any:
             }
         )
 
-    return Starlette(
-        routes=[Route("/health", health), Mount("/mcp", app=handle)],
-        lifespan=lifespan,
+    # The stdio transport is explicitly a local subprocess. The HTTP transport is
+    # shared and must authenticate even when a developer disabled HTTP auth elsewhere.
+    settings = get_settings().model_copy(
+        update={"tenant_id": belt.tenant_id, "auth_required": True}
     )
+
+    async def audit(decision: Any, request: Any) -> None:
+        if not settings.audit_enabled:
+            return
+        entry = AuditRecord(
+            tenant_id=decision.tenant or settings.tenant_id,
+            actor=decision.principal or "anonymous",
+            action=decision.action,
+            resource=decision.resource,
+            allowed=decision.allowed,
+            reason=decision.reason,
+            policy_engine=settings.policy_engine,
+            details={
+                "service": "mcp",
+                "method": request.method,
+                "path": request.url.path,
+                "rule": decision.rule,
+            },
+        )
+        try:
+            await get_bus(settings).publish_message(
+                BusMessage.of(Topic.AUDIT, entry, producer="mcp")
+            )
+        except Exception as error:
+            log.warning("mcp.audit_failed", error=type(error).__name__)
+
+    app = FastAPI(routes=[Route("/health", health), Mount("/mcp", app=handle)], lifespan=lifespan)
+    install_governance(app, service="mcp", settings=settings, audit=audit)
+    return app
 
 
 __all__ = ["INSTRUCTIONS", "SERVER_NAME", "build_belt", "build_server", "http_app", "run_stdio"]

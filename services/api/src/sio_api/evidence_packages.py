@@ -23,6 +23,7 @@ from sio_core.tenancy import current_tenant
 from .case_evidence import case_evidence_items, case_evidence_zones, recorded_evidence
 from .case_helpers import StrictBody, iso_now, printable_report
 from .cases import Casework, actor, allowed, need, review_video_available
+from .media_coordination import WorkerPresence, claim, shared_lock
 from .video_jobs import video_mutation_lock, video_processor_lock
 from .video_processing import probe
 from .workbench_store import WorkbenchConflict
@@ -212,7 +213,8 @@ class EvidencePackageManager:
         self.casework = Casework(store, pool)
         self.root = (Path(settings.data_dir) / "evidence_packages").resolve()
         self.lock = resource_lock or video_processor_lock(store)
-        self.admission_lock = asyncio.Lock()
+        self.admission_lock = shared_lock(store, "evidence-admission")
+        self.presence = WorkerPresence(store)
         self.active: set[str] = set()
         self.tasks: set[asyncio.Task] = set()
         self.closing = False
@@ -220,6 +222,7 @@ class EvidencePackageManager:
 
     async def start(self):
         """Reconcile interrupted exports before notification baseline capture, without a UI visit."""
+        await self.presence.start()
         async with self.admission_lock:
             tenants = (
                 await self.store.list_tenants("evidence_package")
@@ -261,7 +264,20 @@ class EvidencePackageManager:
         record = await self.store.get(tenant, "evidence_package", package_id)
         if record is None:
             raise HTTPException(404, "Evidence package not found")
-        if record["status"] in ("queued", "building") and package_id not in self.active:
+        if (
+            record["status"] in ("queued", "building")
+            and package_id not in self.active
+            and not await self.presence.alive(record.get("worker_id"))
+        ):
+            async with claim(self.store, "evidence-job", tenant, package_id) as acquired:
+                if not acquired:
+                    return record
+                return await self._interrupted(tenant, package_id)
+        return record
+
+    async def _interrupted(self, tenant, package_id):
+        record = await self.store.get(tenant, "evidence_package", package_id)
+        if record and record["status"] in ("queued", "building"):
             try:
                 record = await self.store.put(
                     tenant,
@@ -283,6 +299,7 @@ class EvidencePackageManager:
         return record
 
     async def create(self, body: PackageRequest, request: Request):
+        await self.presence.start()
         async with self.admission_lock:
             return await self._create(body, request)
 
@@ -293,7 +310,18 @@ class EvidencePackageManager:
         need(principal, "media.read")
         if self.closing:
             raise HTTPException(503, "Evidence builder is shutting down")
-        if len(self.active) >= 3:
+        if hasattr(self.store, "all_records"):
+            pending = await self.store.all_records(
+                current_tenant(), "evidence_package", statuses=("queued", "building")
+            )
+            for row in pending:
+                await self.load(current_tenant(), row["package_id"])
+            pending = await self.store.all_records(
+                current_tenant(), "evidence_package", statuses=("queued", "building")
+            )
+        else:
+            pending = self.active
+        if len(pending) >= 3:
             raise HTTPException(409, "Three evidence packages are already waiting or building")
         tenant = current_tenant()
         case = await self.casework.detail(body.case_id, principal)
@@ -386,6 +414,7 @@ class EvidencePackageManager:
                         ],
                         "case_evidence_zone_ids": sorted(case_evidence_zones(case)),
                         "status": "queued",
+                        "worker_id": self.presence.identifier,
                         "created_by": principal.subject,
                         "created_at": iso_now(),
                         "privacy": "full_frame_pixelation",
@@ -425,6 +454,11 @@ class EvidencePackageManager:
         return record
 
     async def run(self, tenant: str, record: dict, source: Path, report: dict):
+        async with claim(self.store, "evidence-job", tenant, record["package_id"]) as acquired:
+            if acquired:
+                await self._run(tenant, record, source, report)
+
+    async def _run(self, tenant: str, record: dict, source: Path, report: dict):
         package_id = record["package_id"]
         directory = self.directory(tenant, package_id)
         try:
@@ -436,7 +470,9 @@ class EvidencePackageManager:
                     {**record, "status": "building", "started_at": iso_now()},
                     expected_revision=record["revision"],
                 )
-                result = await asyncio.to_thread(build_package, source, directory, record, report)
+                from .video_review import blocking_media
+
+                result = await blocking_media(build_package, source, directory, record, report)
                 await self.store.put(
                     tenant,
                     "evidence_package",
@@ -469,6 +505,7 @@ class EvidencePackageManager:
             pending = list(self.tasks)
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
+        await self.presence.close()
 
 
 def install_evidence_package_routes(

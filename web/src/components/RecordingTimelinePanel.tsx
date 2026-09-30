@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { explainError } from "../lib/api";
-import { clipOffset, recordingTimelineApi, timelineBounds, type RecordingClock, type RecordingTimeline, type TimelineRecording } from "../lib/recording-timeline";
+import { clipOffset, recordingTimelineApi, timelineBounds, timelineFilterValues, type TimelineFilters, type RecordingClock, type RecordingTimeline, type TimelineRecording } from "../lib/recording-timeline";
 import * as session from "../lib/session";
 import "./review.css";
 import "./recording-timeline.css";
@@ -47,25 +47,31 @@ export function RecordingTimelinePanel({ onOpenVideo, onDirtyChange }: Props) {
   session.useSession();
   const [data, setData] = useState<RecordingTimeline | null>(null), [error, setError] = useState("");
   const [revision, setRevision] = useState(0), [camera, setCamera] = useState("");
+  const [from, setFrom] = useState(""), [to, setTo] = useState("");
+  const [filters, setFilters] = useState<TimelineFilters>({});
+  const [pageCursor, setPageCursor] = useState<string | undefined>();
+  const [previous, setPrevious] = useState<(string | undefined)[]>([]);
+  const [loading, setLoading] = useState(false);
   const [cursor, setCursor] = useState<number | null>(null), [editing, setEditing] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   useEffect(() => { onDirtyChange?.(dirty); return () => onDirtyChange?.(false); }, [dirty, onDirtyChange]);
   useEffect(() => {
-    const controller = new AbortController();
-    void recordingTimelineApi.list(controller.signal).then(value => { if (!controller.signal.aborted) { setData(value); setError(""); } }).catch(cause => { if (!controller.signal.aborted) setError(explainError(cause)); });
+    const controller = new AbortController(); setLoading(true); setData(null);
+    void recordingTimelineApi.list(controller.signal, {...filters, cursor: pageCursor}).then(value => { if (!controller.signal.aborted) { setData(value); setError(""); } }).catch(cause => { if (!controller.signal.aborted) setError(explainError(cause)); }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [revision]);
-  const rows = useMemo(() => data?.recordings.filter(row => !camera || row.clock?.camera_id === camera) ?? [], [data, camera]);
+  }, [revision, filters, pageCursor]);
+  const rows = data?.recordings ?? [];
   const bounds = timelineBounds(rows), instant = bounds ? Math.max(bounds[0], Math.min(bounds[1], cursor ?? bounds[0])) : null;
   const known = rows.filter(row => row.interval), unknown = rows.filter(row => !row.interval);
   const editor = data?.recordings.find(row => row.video_id === editing);
-  const cameras = [...new Set(data?.recordings.map(row => row.clock?.camera_id).filter((value): value is string => Boolean(value)) ?? [])];
+  const cameras = [...new Set([...(data?.camera_ids ?? []), ...rows.map(row => row.clock?.camera_id).filter((value): value is string => Boolean(value))])];
+  function applyFilters(event: FormEvent) { event.preventDefault(); if (dirty) return; try { setFilters(timelineFilterValues(camera, from, to)); setPageCursor(undefined); setPrevious([]); setCursor(null); setError(""); } catch (cause) { setError(explainError(cause)); } }
   function edit(row: TimelineRecording) { if (!dirty) setEditing(row.video_id); }
   function open(row: TimelineRecording, atS = 0) { if (!dirty) onOpenVideo(row.video_id, atS, row.analysis_id ?? undefined); }
   return <section className="review-main rt-panel">
-    <header className="rv-page-head"><div><span className="rv-kicker">RECORDED FOOTAGE / SHARED CLOCK</span><h1>One moment. Every camera.</h1><p className="rv-muted">Line up recordings by declared capture time, then open the matching moment.</p></div><button className="rv-button" disabled={dirty} onClick={() => setRevision(value => value + 1)}>Refresh</button></header>
+    <header className="rv-page-head"><div><span className="rv-kicker">RECORDED FOOTAGE / SHARED CLOCK</span><h1>One moment. Every camera.</h1><p className="rv-muted">Line up recordings by declared capture time, then open the matching moment.</p></div><button className="rv-button" disabled={dirty || loading} onClick={() => setRevision(value => value + 1)}>Refresh</button></header>
     {error && <p className="rv-error" role="alert">{error}</p>}
-    <div className="rt-toolbar"><label>Camera<select disabled={dirty} value={camera} onChange={event => { setCamera(event.target.value); setCursor(null); }}><option value="">All cameras</option>{cameras.map(id => <option key={id}>{id}</option>)}</select></label><span>{known.length} aligned · {unknown.length} with unknown clocks</span></div>
+    <form className="rt-toolbar" onSubmit={applyFilters}><label>Camera ID<input list="timeline-cameras" disabled={dirty || loading} value={camera} onChange={event => setCamera(event.target.value)} placeholder="All cameras" /><datalist id="timeline-cameras">{cameras.map(id => <option key={id} value={id} />)}</datalist></label><label>From (UTC)<input type="datetime-local" disabled={dirty || loading} value={from} onChange={event => setFrom(event.target.value)} /></label><label>Until (UTC)<input type="datetime-local" disabled={dirty || loading} value={to} onChange={event => setTo(event.target.value)} /></label><button className="rv-button" disabled={dirty || loading}>Apply filters</button><span>{known.length} aligned · {unknown.length} with unknown clocks on this page</span></form>
     {bounds && instant !== null && <section className="rt-board" aria-label="Shared recording timeline">
       <div className="rt-time-controls"><label>Review moment (UTC)<input type="datetime-local" step="0.001" value={new Date(instant).toISOString().slice(0,23)} onChange={event => { const value = Date.parse(`${event.target.value}Z`); if (Number.isFinite(value)) setCursor(value); }} /></label><strong>{utc(instant)}</strong></div>
       <input className="rt-slider" type="range" aria-label="Shared timeline cursor" min={bounds[0]} max={bounds[1]} step="100" value={instant} onChange={event => setCursor(Number(event.target.value))} />
@@ -80,6 +86,7 @@ export function RecordingTimelinePanel({ onOpenVideo, onDirtyChange }: Props) {
     {unknown.length > 0 && <section className="rt-unknown"><h2>Capture clock unknown</h2><p className="rv-muted">These clips are available to review, but cannot be placed on a shared timeline yet.</p>{unknown.map(row => <article className="rt-recording-head" key={row.video_id}><div><h3>{row.title}</h3><span className="rv-small">{row.duration_s}s · {row.clock?.camera_id || "Camera not declared"}</span></div><div className="rv-row"><button className="rv-button" disabled={dirty} onClick={() => open(row)}>Open footage</button>{session.can("review.write") && <button className="rv-button" disabled={dirty} onClick={() => edit(row)}>Set capture clock</button>}</div></article>)}</section>}
     {data && rows.length === 0 && <p className="rv-notice">No accessible recordings in this camera selection. Upload footage to begin.</p>}
     {!data && !error && <p className="rv-muted" role="status">Loading recordings…</p>}
-    <p className="rv-small rt-note">{data?.note}{data?.possibly_truncated && " This inventory is bounded; older records may be omitted."}</p>
+    <nav className="rv-row" aria-label="Recording timeline pages"><button className="rv-button" disabled={dirty || loading || !previous.length} onClick={() => {setPageCursor(previous.at(-1)); setPrevious(rows => rows.slice(0,-1)); setCursor(null);}}>Previous page</button><span>Page {previous.length + 1}</span><button className="rv-button" disabled={dirty || loading || !data?.next_cursor} onClick={() => {setPrevious(rows => [...rows,pageCursor]); setPageCursor(data?.next_cursor ?? undefined); setCursor(null);}}>Next page</button>{loading && <span role="status">Loading recordings…</span>}</nav>
+    <p className="rv-small rt-note">{data?.note}{data?.possibly_truncated && " More recordings may be available on subsequent pages."}</p>
   </section>;
 }

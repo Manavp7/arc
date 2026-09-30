@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from datetime import timedelta
 from unittest.mock import AsyncMock
 
@@ -274,8 +275,15 @@ async def test_no_row_returns_404_without_disclosing_another_tenant():
     assert caught.value.status_code == 404
 
 
+@asynccontextmanager
+async def _unit_transaction():
+    # These tests isolate route state handling; actual locking is covered in integration.
+    yield
+
+
 async def test_repeated_manual_escalation_does_not_dispatch_again(settings):
     service = AlertsService(settings)
+    service._mutation = _unit_transaction
     existing = Alert(
         group_key="authored-test",
         tenant_id=settings.tenant_id,
@@ -326,6 +334,7 @@ async def test_delivery_routes_pass_authenticated_zone_restrictions(settings):
 
 async def test_lost_escalation_race_reloads_winner_without_publishing(settings):
     service = AlertsService(settings)
+    service._mutation = _unit_transaction
     alert = Alert(tenant_id=settings.tenant_id, title="Incident", group_key="test")
     winner = alert.model_copy(update={"state": AlertState.ACKNOWLEDGED})
     service._load = AsyncMock(side_effect=[alert, winner])

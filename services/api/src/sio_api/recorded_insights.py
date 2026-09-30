@@ -15,11 +15,14 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import Field, field_validator, model_validator
 
+from .case_evidence import source_evidence_zones
 from .case_helpers import StrictBody
 from .cases import actor, review_video_available
+from .media_coordination import shared_lock
 from .observation_math import movement_summary, object_tracks
 from .review_bookmarks import ReviewBookmarks
 from .video_jobs import video_mutation_lock
+from .workbench_store import record_cursor
 
 KIND = "movement_report"
 ANALYSIS_SCAN = 500
@@ -100,9 +103,7 @@ class ObjectQuery(StrictBody):
 
 
 def report_lock(store):
-    if not hasattr(store, "_movement_report_write_lock"):
-        store._movement_report_write_lock = asyncio.Lock()
-    return store._movement_report_write_lock
+    return shared_lock(store, "movement-report-admission")
 
 
 class RecordedInsights(ReviewBookmarks):
@@ -154,9 +155,14 @@ class RecordedInsights(ReviewBookmarks):
         videos = (
             [await self.video(tenant, video_id, principal)]
             if video_id
+            else await self.store.all_records(tenant, "video", active_only=True)
+            if hasattr(self.store, "all_records")
             else await self.store.list(tenant, "video", limit=5000)
         )
-        if hasattr(self.store, "list_analysis_metadata"):
+        per_recording = hasattr(self.store, "page")
+        if per_recording:
+            analyses = []
+        elif hasattr(self.store, "list_analysis_metadata"):
             analyses = await self.store.list_analysis_metadata(tenant, limit=ANALYSIS_SCAN)
         else:
             analyses = await self.store.list(tenant, "analysis", limit=ANALYSIS_SCAN)
@@ -165,6 +171,7 @@ class RecordedInsights(ReviewBookmarks):
             key=lambda row: (row.get("created_at", ""), row.get("analysis_id", "")), reverse=True
         )
         available = []
+        truncated = False
         for video in videos:
             if not review_video_available(video):
                 continue
@@ -175,6 +182,10 @@ class RecordedInsights(ReviewBookmarks):
                     raise
                 continue
             versions = []
+            if per_recording:
+                page = await self.retained_analyses(video["video_id"], principal, limit=500)
+                analyses = page["analyses"]
+                truncated = truncated or page["next_cursor"] is not None
             for analysis in analyses:
                 if (
                     analysis.get("video_id") != video.get("video_id")
@@ -196,9 +207,39 @@ class RecordedInsights(ReviewBookmarks):
                 versions.append(analysis)
             if versions:
                 available.append((video, versions))
-        return available[:VIDEO_SCAN], len(analyses) >= ANALYSIS_SCAN or len(videos) >= 5000 or len(
-            available
-        ) > VIDEO_SCAN
+        return available[:VIDEO_SCAN], truncated or (
+            not per_recording and len(analyses) >= ANALYSIS_SCAN
+        ) or len(available) > VIDEO_SCAN
+
+    async def retained_analyses(self, video_id, principal, *, cursor="", limit=50):
+        tenant = self.identity(principal)
+        video = await self.video(tenant, video_id, principal)
+        output = []
+        last_cursor = None
+        next_cursor = cursor
+        while True:
+            if hasattr(self.store, "page"):
+                rows = await self.store.list_analysis_metadata(
+                    tenant, limit=500, video_id=video_id, cursor=next_cursor
+                )
+            else:
+                rows = await self.store.list(tenant, "analysis", limit=5000)
+                rows = [row for row in rows if row.get("video_id") == video_id]
+                rows.sort(key=lambda row: (row["created_at"], row["record_id"]), reverse=True)
+            for row in rows:
+                try:
+                    self.scopes(principal, video, row)
+                except HTTPException as error:
+                    if error.status_code == 403:
+                        continue
+                    raise
+                if len(output) == limit:
+                    return {"analyses": output, "next_cursor": last_cursor}
+                output.append(row)
+                last_cursor = record_cursor(row)
+            if len(rows) < 500 or not hasattr(self.store, "page"):
+                return {"analyses": output, "next_cursor": None}
+            next_cursor = record_cursor(rows[-1])
 
     async def catalog(self, principal):
         available, truncated = await self.candidates(principal)
@@ -334,6 +375,10 @@ class RecordedInsights(ReviewBookmarks):
                     "summary": summary,
                     "model": deepcopy(analysis.get("model", {})),
                     "zones": deepcopy(analysis.get("zones", [])),
+                    "evidence_zone_ids": sorted(
+                        source_evidence_zones({"evidence": video})
+                        | source_evidence_zones({"evidence": analysis})
+                    ),
                     "rules": deepcopy(analysis.get("rules", [])),
                     "source": "recorded_file",
                     "privacy": video.get("privacy"),
@@ -468,6 +513,15 @@ def movement_csv(report):
 
 def install_recorded_insight_routes(app: FastAPI, store: Any):
     manager = RecordedInsights(store)
+
+    @app.get("/api/review/videos/{video_id}/analyses", tags=["recorded-insights"])
+    async def retained_analyses(
+        video_id: str,
+        request: Request,
+        cursor: str = "",
+        limit: int = Query(default=50, ge=1, le=500),
+    ):
+        return await manager.retained_analyses(video_id, actor(request), cursor=cursor, limit=limit)
 
     @app.get("/api/review/objects/catalog", tags=["recorded-insights"])
     async def catalog(request: Request):

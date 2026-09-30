@@ -242,12 +242,14 @@ async def generate_report(
     started = time.perf_counter()
     events: list[dict[str, Any]] = []
     try:
+        if not context.zone_id:
+            raise ValueError("workflow source zone is unknown; no source report can be generated")
         if not context.bearer_token:
             raise ValueError("no API credential configured for this report")
         client = await context.http()
         response = await client.get(
             f"{context.api_url}/api/events",
-            params={"limit": 20},
+            params={"limit": 20, "zone_id": context.zone_id},
             headers={"Authorization": f"Bearer {context.bearer_token}"},
             timeout=6.0,
         )
@@ -257,6 +259,8 @@ async def generate_report(
             raise ValueError("events API returned an invalid event list")
         if any(event.get("tenant_id") != context.tenant_id for event in events):
             raise ValueError("events API returned data outside the workflow tenant")
+        if any(event.get("zone_id") != context.zone_id for event in events):
+            raise ValueError("events API returned data outside the workflow source zone")
     except (httpx.HTTPError, ValueError) as exc:
         # An optional step, so this is recorded and the run continues. It is still reported: a report that
         # silently contained nothing would be worse than a missing one.
@@ -323,3 +327,19 @@ ACTIVITIES: dict[str, Any] = {
 }
 
 __all__ = ["ACTIVITIES", "ActivityContext", "idempotent"]
+
+# Explicit recovery contract for the shipped implementations: these only compute,
+# read through GET, record intent, or return unsupported. Enabling a real actuator
+# requires removing this flag until receiver-side idempotency is verified. Unknown
+# activities default to unsafe in DurableRunner, regardless of their names.
+for _activity in (
+    dispatch_drone,
+    recall_drone,
+    notify_security,
+    close_gate,
+    open_gate,
+    create_incident,
+    close_incident,
+    generate_report,
+):
+    _activity.recovery_safe = True

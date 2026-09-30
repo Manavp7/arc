@@ -211,7 +211,16 @@ async def test_an_external_client_works_over_streamable_http() -> None:
         else:
             pytest.fail("the HTTP server never opened its port")
 
-        async with streamablehttp_client(f"http://127.0.0.1:{port}/mcp") as (read, write, _):
+        from sio_core.authn import DevJwtAuth
+        from sio_core.config import Settings
+
+        settings = Settings()
+        token = DevJwtAuth(settings).issue(
+            subject="mcp-integration", tenant_id=settings.tenant_id, roles=("admin",)
+        )
+        async with streamablehttp_client(
+            f"http://127.0.0.1:{port}/mcp", headers={"Authorization": f"Bearer {token}"}
+        ) as (read, write, _):
             async with ClientSession(read, write) as session:
                 info = await session.initialize()
                 assert info.serverInfo.name == "sio"

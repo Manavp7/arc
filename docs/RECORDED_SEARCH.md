@@ -66,8 +66,9 @@ upload during indexing or search.
   Lifecycle locks prevent deletion/configuration racing active source processing.
 - CPU execution uses one ONNX thread and a five-minute processing budget between
   native calls. An in-flight native call finishes before shutdown releases its
-  resource lock. This is the existing single-process prototype architecture, not a
-  distributed worker or hard operating-system execution timeout.
+  resource lock. PostgreSQL session claims coordinate cooperating API workers that share the same
+  media filesystem. This is not a hard operating-system execution timeout or
+  automatic distribution of media between hosts.
 
 Cosine similarity is a ranking score, not a probability, detector confidence,
 identity or confirmation of an incident. CLIP uses a centre crop; activity near

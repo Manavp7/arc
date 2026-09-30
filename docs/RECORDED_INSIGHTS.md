@@ -26,7 +26,7 @@ Name the calculation and select **Save snapshot** after calculating the current 
 
 Select a saved snapshot to reopen it. **Download saved CSV** exports that snapshot's summary, every occupancy sample and every crossing interval, with its configuration and provenance. Unsaved changes disable the saved export and protect navigation until saved or discarded. CSV text fields are escaped against spreadsheet formula interpretation. These reports do not create incidents or send alerts.
 
-Creating previews or reports requires `review.write`, plus read/media access to the recording and every retained source zone. Reading or exporting reports rechecks both current source access and captured scope. The limits are 20 reports per analysis, 100 per recording and 1,000 per tenant. There is no report edit/delete route in this version. Reports protect their source recording from archive/purge, and coordinated backup validation checks their exact source references. This remains a single-API-process workflow.
+Creating previews or reports requires `review.write`, plus read/media access to the recording and every retained source zone. Reading or exporting reports rechecks both current source access and captured scope. The limits are 20 reports per analysis, 100 per recording and 1,000 per tenant. There is no report edit/delete route in this version. Reports protect their source recording from archive/purge, and coordinated backup validation checks their exact source references. Per-recording lifecycle claims coordinate source mutations across cooperating API processes. Report and bookmark quota admission use shared PostgreSQL claims.
 
 ## API
 

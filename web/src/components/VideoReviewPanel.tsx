@@ -6,6 +6,8 @@ import { reviewConfiguration } from "../lib/review-state";
 import { useProtectedMedia } from "../lib/review-media";
 import { detectionAt, formatVideoTime, normalizedPoint, polygonPoints, polygonProblem, trackTrails } from "../lib/review-geometry";
 import type { NormalizedPoint, ReviewRule, ReviewVideo, ReviewZone, RulePreview, VideoAnalysis, VideoEvent, VideoLibrary } from "../lib/review-types";
+import { uploadAccessZones } from "../lib/review-access";
+import { RetainedAnalyses } from "./RetainedAnalyses";
 import { RulePresetsPanel } from "./RulePresetsPanel";
 import { AnalysisControls } from "./AnalysisControls";
 import { FootageNavigation } from "./FootageNavigation";
@@ -19,7 +21,9 @@ import "./review.css";
 export interface VideoReviewPanelProps { navigationKey?: number; onLocationChange?: (id: string, atS: number, analysisId?: string) => void; initialVideoId?: string; initialAtS?: number; initialAnalysisId?: string; onOpenCase?: (id: string) => void; onDirtyChange?: (dirty: boolean) => void }
 const freshId = (prefix: string) => `${prefix}_${crypto.randomUUID().slice(0, 12)}`;
 export function VideoReviewPanel({ navigationKey, onLocationChange, initialVideoId, initialAtS = 0, initialAnalysisId, onOpenCase, onDirtyChange }: VideoReviewPanelProps) {
-  session.useSession();
+  const identity = session.useSession();
+  const accessZones = uploadAccessZones(identity);
+  const [accessZone,setAccessZone] = useState("");
   const [pinnedAnalysis, setPinnedAnalysis] = useState(initialAnalysisId);
   const historical = Boolean(pinnedAnalysis);
   const [library, setLibrary] = useState<VideoLibrary | null>(null);
@@ -141,6 +145,7 @@ export function VideoReviewPanel({ navigationKey, onLocationChange, initialVideo
     pendingSeek.current=bookmark.at_s; setAtS(bookmark.at_s); setPinnedAnalysis(bookmark.analysis_id);
   }
   async function upload(files: File[]) {
+    if (accessZones.length && !accessZones.includes(accessZone)) {setError("Choose a permitted access zone before uploading footage.");return;}
     if (files.length > 20) { setError("Choose up to 20 recordings per upload batch."); if (fileRef.current) fileRef.current.value = ""; return; }
     const controller = new AbortController(); uploadRef.current = controller;
     const originalSelection = selectedRef.current;
@@ -154,7 +159,7 @@ export function VideoReviewPanel({ navigationKey, onLocationChange, initialVideo
         try {
           await validateUpload(file, library?.capabilities.max_bytes ?? 104857600, library?.capabilities.max_duration_s ?? 180);
           if (controller.signal.aborted) break;
-          const record = await reviewApi.upload(file, controller.signal);
+          const record = await reviewApi.upload(file, controller.signal, accessZone || undefined);
           if (controller.signal.aborted) break;
           setLibrary(current => current ? { ...current, videos: [record, ...current.videos.filter(row => row.video_id !== record.video_id)] } : current);
           firstId ??= record.video_id; completed++; state("Ready");
@@ -200,8 +205,9 @@ export function VideoReviewPanel({ navigationKey, onLocationChange, initialVideo
   return <div className="review-shell">
     <aside className="review-library" aria-label="Recorded footage library">
       <div className="rv-kicker">RECORDED REVIEW</div><h2>Footage</h2><p className="rv-muted">A clip. A defined boundary.<br />An accountable finding.</p>
+      {canWrite && accessZones.length > 0 && <label className="rv-filter-label">Upload access zone<select value={accessZone} disabled={Boolean(busy)} onChange={event=>setAccessZone(event.target.value)}><option value="">Choose a permitted zone</option>{accessZones.map(zone=><option key={zone} value={zone}>{zone}</option>)}</select><small>Controls who may access these recordings. Image polygons are configured separately.</small></label>}
       <input ref={fileRef} className="rv-file-input" type="file" multiple accept="video/mp4,.mp4" aria-label="Choose MP4 footage" onChange={event => { const files = Array.from(event.target.files ?? []); if (files.length) void upload(files); }} />
-      <button className="rv-button rv-primary" disabled={!canWrite || library?.capabilities.upload === false || Boolean(busy) || dirty || drawing || bookmarkDirty || movementDirty || profileDirty} onClick={() => fileRef.current?.click()}>{busy === "upload" ? "Preparing footage…" : "＋ Upload MP4"}</button>
+      <button className="rv-button rv-primary" disabled={!canWrite || (accessZones.length > 0 && !accessZones.includes(accessZone)) || library?.capabilities.upload === false || Boolean(busy) || dirty || drawing || bookmarkDirty || movementDirty || profileDirty} onClick={() => fileRef.current?.click()}>{busy === "upload" ? "Preparing footage…" : "＋ Upload MP4"}</button>
       {busy === "upload" && <button className="rv-button" onClick={() => uploadRef.current?.abort()}>Cancel remaining uploads</button>}
       {batch.length > 0 && <div className="rv-small" role="status" aria-label="Upload batch progress">{batch.map((row, index) => <p key={`${index}-${row.name}`}><strong>{row.name}</strong><br />{row.state}</p>)}{!busy && <button className="rv-button" onClick={() => setBatch([])}>Dismiss upload results</button>}</div>}
       <p className="rv-small">Up to {Math.round((library?.capabilities.max_bytes ?? 104857600) / 1048576)} MB · {library?.capabilities.max_duration_s ?? 180}s<br />Protected playback only</p>
@@ -218,6 +224,7 @@ export function VideoReviewPanel({ navigationKey, onLocationChange, initialVideo
       {loading && <p className="rv-empty">Opening the saved recording…</p>}
       {!video && !loading && <div className="rv-blank"><span>01 / CHOOSE FOOTAGE</span><h2>See what crossed the line.</h2><p>Upload an MP4, mark an area in the image, and review entry or dwell events against the original timing.</p><p className="rv-small">Only a pixelated derivative is available in the console. Original footage has no public playback route.</p></div>}
       {video && <>
+        <RetainedAnalyses videoId={video.video_id} selectedId={analysis?.analysis_id} refreshKey={`${video.analysis_id}:${analysis?.status}`} disabled={workbenchDirty} onSelect={id=>{if(workbenchDirty)return;pendingSeek.current=atS;setPinnedAnalysis(id);}} />
         {historical && <div className="rv-notice rv-historical"><span>Historical analysis · {analysis?.analysis_id}. Zones, rules and findings below belong to this saved run. Configuration editing is disabled.</span><button className="rv-button" disabled={bookmarkDirty || movementDirty || Boolean(busy)} onClick={() => { setPinnedAnalysis(undefined); setReload(value => value + 1); }}>Return to latest</button></div>}
         {!historical && differentConfiguration && <p className="rv-notice">Findings and detection overlays show the last analysis run. The current configuration differs; save and run analysis to update findings.</p>}
         <div className="rv-video-layout"><section className="rv-player-section">
